@@ -3461,11 +3461,9 @@ static int adreno_probe(struct platform_device *pdev)
 			&adreno_ops, match);
 }
 
-static int adreno_remove(struct platform_device *pdev)
+static void adreno_remove(struct platform_device *pdev)
 {
 	component_master_del(&pdev->dev, &adreno_ops);
-
-	return 0;
 }
 
 #if IS_ENABLED(CONFIG_QCOM_KGSL_HIBERNATION)

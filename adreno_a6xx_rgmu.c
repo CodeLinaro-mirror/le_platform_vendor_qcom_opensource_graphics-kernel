@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023,2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/clk-provider.h>
@@ -1399,10 +1399,9 @@ static int a6xx_rgmu_probe_dev(struct platform_device *pdev)
 	return component_add(&pdev->dev, &a6xx_rgmu_component_ops);
 }
 
-static int a6xx_rgmu_remove_dev(struct platform_device *pdev)
+static void a6xx_rgmu_remove_dev(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &a6xx_rgmu_component_ops);
-	return 0;
 }
 
 static const struct of_device_id a6xx_rgmu_match_table[] = {

@@ -3827,10 +3827,9 @@ static int a6xx_gmu_probe_dev(struct platform_device *pdev)
 	return component_add(&pdev->dev, &a6xx_gmu_component_ops);
 }
 
-static int a6xx_gmu_remove_dev(struct platform_device *pdev)
+static void a6xx_gmu_remove_dev(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &a6xx_gmu_component_ops);
-	return 0;
 }
 
 static const struct of_device_id a6xx_gmu_match_table[] = {

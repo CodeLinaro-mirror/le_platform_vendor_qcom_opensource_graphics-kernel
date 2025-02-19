@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2008-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <uapi/linux/sched/types.h>
@@ -4686,7 +4686,7 @@ static unsigned long set_svm_area(struct file *file,
 	 * Do additoinal constraints checking on the address. Passing MAP_FIXED
 	 * ensures that the address we want gets checked
 	 */
-	ret = current->mm->get_unmapped_area(file, addr, len, 0,
+	ret = mm_get_unmapped_area(current->mm, file, addr, len, 0,
 		flags & MAP_FIXED);
 
 	/* If it passes, attempt to set the region in the SVM */
@@ -4774,7 +4774,7 @@ kgsl_get_unmapped_area(struct file *file, unsigned long addr,
 	struct kgsl_mem_entry *entry = NULL;
 
 	if (vma_offset == (unsigned long) KGSL_MEMSTORE_TOKEN_ADDRESS)
-		return get_unmapped_area(NULL, addr, len, pgoff, flags);
+		return mm_get_unmapped_area(current->mm, NULL, addr, len, pgoff, flags);
 
 	val = get_mmap_entry(private, &entry, pgoff, len);
 	if (val)
@@ -4787,7 +4787,7 @@ kgsl_get_unmapped_area(struct file *file, unsigned long addr,
 	}
 
 	if (!kgsl_memdesc_use_cpu_map(&entry->memdesc)) {
-		val = current->mm->get_unmapped_area(file, addr, len, 0, flags);
+		val = mm_get_unmapped_area(current->mm, file, addr, len, 0, flags);
 		if (IS_ERR_VALUE(val))
 			dev_err_ratelimited(device->dev,
 					       "get_unmapped_area: pid %d addr %lx pgoff %lx len %ld failed error %d\n",

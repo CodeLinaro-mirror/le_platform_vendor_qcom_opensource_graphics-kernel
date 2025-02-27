@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <asm/cacheflush.h>
@@ -621,6 +621,9 @@ kgsl_pool_shrink_count_objects(struct shrinker *shrinker,
 	return kgsl_pool_size_nonreserved();
 }
 
+#if (KERNEL_VERSION(6, 7, 0) <= LINUX_VERSION_CODE)
+struct shrinker *kgsl_pool_shrinker;
+#else
 /* Shrinker callback data*/
 static struct shrinker kgsl_pool_shrinker = {
 	.count_objects = kgsl_pool_shrink_count_objects,
@@ -628,6 +631,7 @@ static struct shrinker kgsl_pool_shrinker = {
 	.seeks = DEFAULT_SEEKS,
 	.batch = 0,
 };
+#endif
 
 int kgsl_pool_reserved_get(void *data, u64 *val)
 {
@@ -740,7 +744,18 @@ void kgsl_probe_page_pools(void)
 	of_node_put(node);
 
 	/* Initialize shrinker */
-#if (KERNEL_VERSION(6, 0, 0) <= LINUX_VERSION_CODE)
+#if (KERNEL_VERSION(6, 7, 0) <= LINUX_VERSION_CODE)
+	kgsl_pool_shrinker = shrinker_alloc(0, "kgsl_pool_shrinker");
+	if (!kgsl_pool_shrinker)
+		return;
+
+	kgsl_pool_shrinker->count_objects = kgsl_pool_shrink_count_objects;
+	kgsl_pool_shrinker->scan_objects = kgsl_pool_shrink_scan_objects;
+	kgsl_pool_shrinker->seeks = DEFAULT_SEEKS;
+	kgsl_pool_shrinker->batch = 0;
+
+	shrinker_register(kgsl_pool_shrinker);
+#elif (KERNEL_VERSION(6, 0, 0) <= LINUX_VERSION_CODE)
 	register_shrinker(&kgsl_pool_shrinker, "kgsl_pool_shrinker");
 #else
 	register_shrinker(&kgsl_pool_shrinker);
@@ -754,8 +769,12 @@ void kgsl_exit_page_pools(void)
 	/* Release all pages in pools, if any.*/
 	kgsl_pool_reduce(INT_MAX, true);
 
-	/* Unregister shrinker */
+#if (KERNEL_VERSION(6, 7, 0) <= LINUX_VERSION_CODE)
+	if (kgsl_pool_shrinker)
+		shrinker_free(kgsl_pool_shrinker);
+#else
 	unregister_shrinker(&kgsl_pool_shrinker);
+#endif
 
 	/* Destroy helper structures */
 	for (i = 0; i < kgsl_num_pools; i++)

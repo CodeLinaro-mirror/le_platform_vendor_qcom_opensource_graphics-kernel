@@ -2866,7 +2866,12 @@ static int a6xx_gmu_iommu_init(struct a6xx_gmu_device *gmu)
 {
 	int ret;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
+	gmu->domain = iommu_paging_domain_alloc(&gmu->pdev->dev);
+#else
 	gmu->domain = iommu_domain_alloc(&platform_bus_type);
+#endif
+
 	if (gmu->domain == NULL) {
 		dev_err(&gmu->pdev->dev, "Unable to allocate GMU IOMMU domain\n");
 		return -ENODEV;

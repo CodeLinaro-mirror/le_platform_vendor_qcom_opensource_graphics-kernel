@@ -2355,7 +2355,12 @@ static int kgsl_iommu_setup_context(struct kgsl_mmu *mmu,
 	dev_set_drvdata(&pdev->dev, &context->adreno_smmu);
 
 	/* Create a new context */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
+	context->domain = iommu_paging_domain_alloc(&context->pdev->dev);
+#else
 	context->domain = iommu_domain_alloc(&platform_bus_type);
+#endif
+
 	if (!context->domain) {
 		/*FIXME: Put back the pdev here? */
 		return -ENODEV;
@@ -2500,7 +2505,12 @@ static int iommu_probe_secure_context(struct kgsl_device *device,
 	context->pdev = pdev;
 	ratelimit_default_init(&context->ratelimit);
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
+	context->domain = iommu_paging_domain_alloc(&context->pdev->dev);
+#else
 	context->domain = iommu_domain_alloc(&platform_bus_type);
+#endif
+
 	if (!context->domain) {
 		ret = -ENODEV;
 		goto err_device_put;

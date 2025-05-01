@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/debugfs.h>
@@ -1843,6 +1843,9 @@ int gen7_probe_common(struct platform_device *pdev,
 
 	if (adreno_preemption_feature_set(adreno_dev)) {
 		const struct adreno_gen7_core *gen7_core = to_gen7_core(adreno_dev);
+
+		adreno_dev->total_ctxt_record_sz = gen7_core->ctxt_record_size ?
+			gen7_core->ctxt_record_size : GEN7_CP_CTXRECORD_SIZE_IN_BYTES;
 
 		adreno_dev->preempt.preempt_level = gen7_core->preempt_level;
 		adreno_dev->preempt.skipsaverestore = true;

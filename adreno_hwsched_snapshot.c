@@ -238,7 +238,7 @@ void adreno_hwsched_snapshot_context_queue(struct kgsl_device *device,
 	read_unlock(&device->context_lock);
 }
 
-void adreno_hwsched_snapshot_preemption_record(struct kgsl_device *device,
+static void snapshot_preemption_record(struct kgsl_device *device,
 	struct kgsl_snapshot *snapshot, struct kgsl_memdesc *md, u64 offset, u64 size)
 {
 	struct kgsl_snapshot_section_header *section_header =
@@ -278,4 +278,41 @@ void adreno_hwsched_snapshot_preemption_record(struct kgsl_device *device,
 	snapshot->ptr += section_header->size;
 	snapshot->remain -= section_header->size;
 	snapshot->size += section_header->size;
+}
+
+void adreno_hwsched_snapshot_preemption_records(struct kgsl_device *device,
+	struct kgsl_snapshot *snapshot, struct kgsl_memdesc *md)
+{
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	u64 offset = 0, ctxt_record_size = md->size;
+	u64 rb0_ctxt_record_size = PAGE_ALIGN(adreno_dev->total_ctxt_record_sz);
+	int i;
+
+	if (ADRENO_FEATURE(adreno_dev, ADRENO_DEFER_GMEM_ALLOC)) {
+		struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
+
+		for (i = 0; i < KGSL_PRIORITY_MAX_RB_LEVELS; i++)
+			snapshot_preemption_record(device, snapshot,
+				hwsched->preempt_rec[i], 0, hwsched->preempt_rec[i]->size);
+		return;
+	}
+
+	/* Check whether GMU has removed GMEM size from RB0 context record */
+	if (md->size == (rb0_ctxt_record_size * KGSL_PRIORITY_MAX_RB_LEVELS)) {
+		do_div(ctxt_record_size, KGSL_PRIORITY_MAX_RB_LEVELS);
+	} else {
+		rb0_ctxt_record_size -= PAGE_ALIGN(adreno_dev->gpucore->gmem_size);
+		ctxt_record_size -= rb0_ctxt_record_size;
+		do_div(ctxt_record_size, KGSL_PRIORITY_MAX_RB_LEVELS - 1);
+	}
+
+	snapshot_preemption_record(device, snapshot, md, offset, rb0_ctxt_record_size);
+	offset += rb0_ctxt_record_size;
+
+	/* All preemption records exist as a single mem alloc entry */
+	for (i = 1; i < KGSL_PRIORITY_MAX_RB_LEVELS; i++) {
+		snapshot_preemption_record(device, snapshot, md,
+			offset, ctxt_record_size);
+		offset += ctxt_record_size;
+	}
 }

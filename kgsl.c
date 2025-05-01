@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2008-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <uapi/linux/sched/types.h>
@@ -5358,6 +5358,8 @@ void kgsl_core_exit(void)
 
 int __init kgsl_core_init(void)
 {
+	static u64 dma_mask = (u64)DMA_BIT_MASK(64);
+	static struct device_dma_parameters dma_parms;
 	int result = 0;
 
 	KGSL_BOOT_MARKER("KGSL Init");
@@ -5407,6 +5409,13 @@ int __init kgsl_core_init(void)
 		pr_err("kgsl: driver_register failed\n");
 		goto err;
 	}
+
+	kgsl_driver.virtdev.dma_mask = &dma_mask;
+	kgsl_driver.virtdev.dma_parms = &dma_parms;
+
+	dma_set_max_seg_size(&kgsl_driver.virtdev, (u32)DMA_BIT_MASK(32));
+
+	set_dma_ops(&kgsl_driver.virtdev, NULL);
 
 	/* Make kobjects in the virtual device for storing statistics */
 

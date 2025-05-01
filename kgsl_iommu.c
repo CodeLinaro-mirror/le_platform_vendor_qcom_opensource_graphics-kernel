@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2011-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/bitfield.h>
@@ -788,23 +788,6 @@ static u32 KGSL_IOMMU_GET_CTX_REG(struct kgsl_iommu_context *ctx, u32 offset)
 static int kgsl_iommu_get_gpuaddr(struct kgsl_pagetable *pagetable,
 		struct kgsl_memdesc *memdesc);
 
-static void kgsl_iommu_map_secure_global(struct kgsl_mmu *mmu,
-		struct kgsl_memdesc *memdesc)
-{
-	if (IS_ERR_OR_NULL(mmu->securepagetable))
-		return;
-
-	if (!memdesc->gpuaddr) {
-		int ret = kgsl_iommu_get_gpuaddr(mmu->securepagetable,
-			memdesc);
-
-		if (WARN_ON(ret))
-			return;
-	}
-
-	kgsl_iommu_secure_map(mmu->securepagetable, memdesc);
-}
-
 #define KGSL_GLOBAL_MEM_PAGES (KGSL_IOMMU_GLOBAL_MEM_SIZE >> PAGE_SHIFT)
 
 static u64 global_get_offset(struct kgsl_device *device, u64 size,
@@ -848,29 +831,45 @@ static u64 global_get_offset(struct kgsl_device *device, u64 size,
 	return bit << PAGE_SHIFT;
 }
 
+static int kgsl_iommu_reserve_global_gpuaddr(struct kgsl_mmu *mmu,
+	struct kgsl_memdesc *memdesc, u32 padding)
+{
+	struct kgsl_device *device = KGSL_MMU_DEVICE(mmu);
+	u64 offset;
+
+	if (memdesc->gpuaddr)
+		return -EINVAL;
+
+	if (memdesc->flags & KGSL_MEMFLAGS_SECURE) {
+		int ret = kgsl_iommu_get_gpuaddr(mmu->securepagetable, memdesc);
+
+		WARN_ON(ret);
+
+		return ret;
+	}
+
+	offset = global_get_offset(device, memdesc->size + padding, memdesc->priv);
+
+	if (IS_ERR_VALUE(offset))
+		return -ENOSPC;
+
+	memdesc->gpuaddr = mmu->defaultpagetable->global_base + offset;
+
+	return 0;
+}
+
 static void kgsl_iommu_map_global(struct kgsl_mmu *mmu,
 		struct kgsl_memdesc *memdesc, u32 padding)
 {
-	struct kgsl_device *device = KGSL_MMU_DEVICE(mmu);
-
-	if (memdesc->flags & KGSL_MEMFLAGS_SECURE) {
-		kgsl_iommu_map_secure_global(mmu, memdesc);
-		return;
-	}
-
 	if (!memdesc->gpuaddr) {
-		u64 offset;
-
-		offset = global_get_offset(device, memdesc->size + padding,
-			memdesc->priv);
-
-		if (IS_ERR_VALUE(offset))
+		if (kgsl_iommu_reserve_global_gpuaddr(mmu, memdesc, padding))
 			return;
-
-		memdesc->gpuaddr = mmu->defaultpagetable->global_base + offset;
 	}
 
-	kgsl_iommu_default_map(mmu->defaultpagetable, memdesc);
+	if (memdesc->flags & KGSL_MEMFLAGS_SECURE)
+		kgsl_iommu_secure_map(mmu->securepagetable, memdesc);
+	else
+		kgsl_iommu_default_map(mmu->defaultpagetable, memdesc);
 }
 
 /* Print the mem entry for the pagefault debugging */
@@ -3033,6 +3032,7 @@ static const struct kgsl_mmu_ops kgsl_iommu_ops = {
 	.mmu_pagefault_resume = kgsl_iommu_pagefault_resume,
 	.mmu_getpagetable = kgsl_iommu_getpagetable,
 	.mmu_map_global = kgsl_iommu_map_global,
+	.mmu_reserve_global_gpuaddr = kgsl_iommu_reserve_global_gpuaddr,
 	.mmu_send_tlb_hint = kgsl_iommu_send_tlb_hint,
 	.mmu_sysfs_init = kgsl_iommu_sysfs_init,
 };

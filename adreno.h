@@ -178,7 +178,8 @@
 #define ADRENO_GMU_BASED_DCVS BIT(22)
 /* RT hint feature for RB0 workloads */
 #define ADRENO_RT_HINT BIT(23)
-
+/* Defer allocation of preemption record gmem memory when needed */
+#define ADRENO_DEFER_GMEM_ALLOC BIT(24)
 
 /*
  * Adreno GPU quirks - control bits for various workarounds
@@ -292,6 +293,7 @@ enum adreno_gpurev {
 	ADRENO_REV_GEN8_0_0 = ADRENO_GPUREV_VALUE(8, 0, 0),
 	ADRENO_REV_GEN8_0_1 = ADRENO_GPUREV_VALUE(8, 0, 1),
 	ADRENO_REV_GEN8_2_0 = ADRENO_GPUREV_VALUE(8, 2, 0),
+	ADRENO_REV_GEN8_2_1 = ADRENO_GPUREV_VALUE(8, 2, 1),
 	ADRENO_REV_GEN8_3_0 = ADRENO_GPUREV_VALUE(8, 3, 0),
 	ADRENO_REV_GEN8_4_0 = ADRENO_GPUREV_VALUE(8, 4, 0),
 	ADRENO_REV_GEN8_6_0 = ADRENO_GPUREV_VALUE(8, 6, 0),
@@ -557,7 +559,7 @@ struct adreno_dispatch_ops {
 	/* @queue_context: Queue a context to be dispatched */
 	void (*queue_context)(struct adreno_device *adreno_dev,
 			struct adreno_context *drawctxt);
-	void (*setup_context)(struct adreno_device *adreno_dev,
+	int (*setup_context)(struct adreno_device *adreno_dev,
 			struct adreno_context *drawctxt);
 	/* @create_hw_fence: Create a hardware fence */
 	void (*create_hw_fence)(struct adreno_device *adreno_dev, struct kgsl_sync_fence *kfence);
@@ -819,6 +821,8 @@ struct adreno_device {
 	u32 dcvs_tuning_penalty_lvl;
 	/** @dcvs_tuning_numbusy_lvl: Current DCVS tuning level for numbusy */
 	u32 dcvs_tuning_numbusy_lvl;
+	/** @total_ctxt_record_sz: Size of the total preemption record in bytes */
+	u64 total_ctxt_record_sz;
 };
 
 /* Time to wait for suspend recovery gate to complete */
@@ -1352,6 +1356,7 @@ ADRENO_TARGET(gen7_17_0, ADRENO_REV_GEN7_17_0)
 ADRENO_TARGET(gen8_0_0, ADRENO_REV_GEN8_0_0)
 ADRENO_TARGET(gen8_0_1, ADRENO_REV_GEN8_0_1)
 ADRENO_TARGET(gen8_2_0, ADRENO_REV_GEN8_2_0)
+ADRENO_TARGET(gen8_2_1, ADRENO_REV_GEN8_2_1)
 ADRENO_TARGET(gen8_3_0, ADRENO_REV_GEN8_3_0)
 ADRENO_TARGET(gen8_4_0, ADRENO_REV_GEN8_4_0)
 ADRENO_TARGET(gen8_6_0, ADRENO_REV_GEN8_6_0)
@@ -1378,6 +1383,11 @@ static inline int adreno_is_gen7_2_x_family(struct adreno_device *adreno_dev)
 	return adreno_is_gen7_2_0(adreno_dev) || adreno_is_gen7_2_1(adreno_dev) ||
 		adreno_is_gen7_6_0(adreno_dev) || adreno_is_gen7_9_x(adreno_dev) ||
 		adreno_is_gen7_14_0_family(adreno_dev) || adreno_is_gen7_11_0(adreno_dev);
+}
+
+static inline int adreno_is_gen8_2_x(struct adreno_device *adreno_dev)
+{
+	return adreno_is_gen8_2_0(adreno_dev) || adreno_is_gen8_2_1(adreno_dev);
 }
 
 static inline int adreno_is_gen8_0_x_family(struct adreno_device *adreno_dev)

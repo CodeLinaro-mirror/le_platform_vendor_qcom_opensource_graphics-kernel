@@ -2450,10 +2450,11 @@ static struct adreno_ringbuffer *dispatch_get_rb(struct adreno_device *adreno_de
 	return &adreno_dev->ringbuffers[level];
 }
 
-static void adreno_dispatcher_setup_context(struct adreno_device *adreno_dev,
+static int adreno_dispatcher_setup_context(struct adreno_device *adreno_dev,
 		struct adreno_context *drawctxt)
 {
 	drawctxt->rb = dispatch_get_rb(adreno_dev, drawctxt);
+	return 0;
 }
 
 static void change_preemption(struct adreno_device *adreno_dev, void *priv)

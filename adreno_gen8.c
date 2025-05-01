@@ -981,7 +981,7 @@ void gen8_get_gpu_slice_info(struct adreno_device *adreno_dev)
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct gen8_device *gen8_dev = container_of(adreno_dev, struct gen8_device, adreno_dev);
 
-	if (adreno_is_gen8_2_0(adreno_dev)) {
+	if (adreno_is_gen8_2_x(adreno_dev)) {
 		if (adreno_slice_mask_override != U32_MAX)
 			kgsl_regwrite(device, GEN8_GPU_CX_MISC_SLICE_ENABLE_TEST,
 					adreno_slice_mask_override);
@@ -1276,7 +1276,7 @@ static void gen8_patch_pwrup_reglist(struct adreno_device *adreno_dev)
 	if (adreno_is_gen8_3_0(adreno_dev) || adreno_is_gen8_8_0(adreno_dev)) {
 		reglist[items].regs = gen8_3_0_ifpc_pwrup_reglist;
 		reglist[items].count = ARRAY_SIZE(gen8_3_0_ifpc_pwrup_reglist);
-	} else if (adreno_is_gen8_2_0(adreno_dev)) {
+	} else if (adreno_is_gen8_2_x(adreno_dev)) {
 		reglist[items].regs = gen8_2_0_ifpc_pwrup_reglist;
 		reglist[items].count = ARRAY_SIZE(gen8_2_0_ifpc_pwrup_reglist);
 	} else {
@@ -1290,7 +1290,7 @@ static void gen8_patch_pwrup_reglist(struct adreno_device *adreno_dev)
 	if (adreno_is_gen8_3_0(adreno_dev) || adreno_is_gen8_8_0(adreno_dev)) {
 		reglist[items].regs = gen8_3_0_pwrup_reglist;
 		reglist[items].count = ARRAY_SIZE(gen8_3_0_pwrup_reglist);
-	} else if (adreno_is_gen8_2_0(adreno_dev)) {
+	} else if (adreno_is_gen8_2_x(adreno_dev)) {
 		reglist[items].regs = gen8_2_0_pwrup_reglist;
 		reglist[items].count = ARRAY_SIZE(gen8_2_0_pwrup_reglist);
 	} else {
@@ -1378,7 +1378,7 @@ static void gen8_patch_pwrup_reglist(struct adreno_device *adreno_dev)
 		const struct gen8_pwrup_extlist *ext_list;
 		u32 ext_len;
 
-		if (adreno_is_gen8_2_0(adreno_dev)) {
+		if (adreno_is_gen8_2_x(adreno_dev)) {
 			ext_list = gen8_2_0_pwrup_extlist;
 			ext_len = ARRAY_SIZE(gen8_2_0_pwrup_extlist);
 		} else {
@@ -1773,7 +1773,7 @@ int gen8_start(struct adreno_device *adreno_dev)
 	 * Enable hardware clock gating here to prevent any register access
 	 * issue due to internal clock gating.
 	 */
-	if (!adreno_is_gen8_2_0(adreno_dev))
+	if (!adreno_is_gen8_2_x(adreno_dev))
 		gen8_hwcg_set(adreno_dev, true);
 
 	/*
@@ -2060,7 +2060,7 @@ int gen8_rb_start(struct adreno_device *adreno_dev)
 	}
 
 	ret = gen8_post_start(adreno_dev);
-	if (!ret && adreno_is_gen8_2_0(adreno_dev))
+	if (!ret && adreno_is_gen8_2_x(adreno_dev))
 		gen8_hwcg_set(adreno_dev, true);
 
 	return ret;
@@ -2652,6 +2652,9 @@ int gen8_probe_common(struct platform_device *pdev,
 		return ret;
 
 	if (adreno_preemption_feature_set(adreno_dev)) {
+		adreno_dev->total_ctxt_record_sz = gen8_core->ctxt_record_size ?
+			gen8_core->ctxt_record_size : GEN8_CP_CTXRECORD_SIZE_IN_BYTES;
+
 		adreno_dev->preempt.preempt_level = gen8_core->preempt_level;
 		adreno_dev->preempt.skipsaverestore = true;
 		adreno_dev->preempt.usesgmem = true;

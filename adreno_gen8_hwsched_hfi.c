@@ -1188,6 +1188,8 @@ static irqreturn_t gen8_hwsched_hfi_handler(int irq, void *data)
 	struct gen8_hwsched_hfi *hfi = to_gen8_hwsched_hfi(adreno_dev);
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	u32 status = 0;
+	const struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
+	u64 ticks = gpudev->read_alwayson(adreno_dev);
 
 	/*
 	 * GEN8_GMUCX_GMU2HOST_INTR_INFO may have bits set not specified in hfi->irq_mask.
@@ -1216,6 +1218,9 @@ static irqreturn_t gen8_hwsched_hfi_handler(int irq, void *data)
 
 		dev_err_ratelimited(GMU_PDEV_DEV(device),
 				"GMU CM3 fault interrupt received\n");
+
+		KGSL_GMU_CORE_FORCE_PANIC(device->gmu_core.gf_panic,
+			GMU_PDEV(device), ticks, GMU_FAULT_CM3);
 
 		gen8_hwsched_fault(adreno_dev, ADRENO_GMU_FAULT);
 	}

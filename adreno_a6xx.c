@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/clk/qcom.h>
@@ -1969,9 +1969,16 @@ int a6xx_probe_common(struct platform_device *pdev,
 	adreno_dev->hwcg_enabled = true;
 	adreno_dev->uche_client_pf = 1;
 
-	adreno_dev->preempt.preempt_level = 1;
-	adreno_dev->preempt.skipsaverestore = true;
-	adreno_dev->preempt.usesgmem = true;
+	if (adreno_preemption_feature_set(adreno_dev)) {
+		const struct adreno_a6xx_core *a6xx_core = to_a6xx_core(adreno_dev);
+
+		adreno_dev->total_ctxt_record_sz = a6xx_core->ctxt_record_size ?
+			a6xx_core->ctxt_record_size : A6XX_CP_CTXRECORD_SIZE_IN_BYTES;
+
+		adreno_dev->preempt.preempt_level = 1;
+		adreno_dev->preempt.skipsaverestore = true;
+		adreno_dev->preempt.usesgmem = true;
+	}
 
 	ret = adreno_device_probe(pdev, adreno_dev);
 

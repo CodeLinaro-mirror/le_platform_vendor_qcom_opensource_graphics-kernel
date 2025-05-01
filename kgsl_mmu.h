@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2002,2007-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #ifndef __KGSL_MMU_H
 #define __KGSL_MMU_H
@@ -116,6 +116,8 @@ struct kgsl_mmu_ops {
 			unsigned long name);
 	void (*mmu_map_global)(struct kgsl_mmu *mmu,
 		struct kgsl_memdesc *memdesc, u32 padding);
+	int (*mmu_reserve_global_gpuaddr)(struct kgsl_mmu *mmu, struct kgsl_memdesc *memdesc,
+			u32 padding);
 	void (*mmu_send_tlb_hint)(struct kgsl_mmu *mmu, bool hint);
 	void (*mmu_sysfs_init)(struct kgsl_mmu *mmu);
 };
@@ -376,6 +378,18 @@ static inline void kgsl_mmu_send_tlb_hint(struct kgsl_mmu *mmu, bool hint)
 	if (MMU_OP_VALID(mmu, mmu_send_tlb_hint))
 		return mmu->mmu_ops->mmu_send_tlb_hint(mmu, hint);
 }
+
+/**
+ * kgsl_mmu_reserve_global_gpuaddr - Reserve VA in the global VA space
+ * @device: A KGSL GPU device handle
+ * @memdesc: Pointer to a GPU memory descriptor
+ *
+ * Reserve VA in the global pagetable without mapping anything to this VA
+ *
+ * Return: 0 on success and negative error on failure
+ */
+int kgsl_mmu_reserve_global_gpuaddr(struct kgsl_device *device,
+		struct kgsl_memdesc *memdesc);
 
 /**
  * kgsl_mmu_map_global - Map a memdesc as a global buffer

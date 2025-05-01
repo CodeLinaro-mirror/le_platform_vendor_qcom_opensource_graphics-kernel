@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2002,2007-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/debugfs.h>
@@ -509,8 +509,15 @@ adreno_drawctxt_create(struct kgsl_device_private *dev_priv,
 	INIT_LIST_HEAD(&drawctxt->hw_fence_list);
 	INIT_LIST_HEAD(&drawctxt->hw_fence_inflight_list);
 
-	if (adreno_dev->dispatch_ops && adreno_dev->dispatch_ops->setup_context)
-		adreno_dev->dispatch_ops->setup_context(adreno_dev, drawctxt);
+	if (adreno_dev->dispatch_ops && adreno_dev->dispatch_ops->setup_context) {
+		ret = adreno_dev->dispatch_ops->setup_context(adreno_dev, drawctxt);
+		if (ret) {
+			dev_err_ratelimited(device->dev,
+				"Context initialization failed ret:%d\n", ret);
+			kgsl_context_detach(&drawctxt->base);
+			return ERR_PTR(ret);
+		}
+	}
 
 	ret = drawctxt_preemption_init(&drawctxt->base);
 	if (ret) {

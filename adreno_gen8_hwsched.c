@@ -63,36 +63,6 @@ void gen8_hwsched_fault(struct adreno_device *adreno_dev, u32 fault)
 	adreno_scheduler_fault(adreno_dev, fault);
 }
 
-static void gen8_hwsched_snapshot_preemption_records(struct kgsl_device *device,
-	struct kgsl_snapshot *snapshot, struct kgsl_memdesc *md)
-{
-	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
-	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
-	u64 offset = 0, ctxt_record_size = md->size;
-	u64 rb0_ctxt_record_size = PAGE_ALIGN(gen8_core->ctxt_record_size);
-	int i;
-
-	/* Check whether GMU has removed GMEM size from RB0 context record */
-	if (md->size == (rb0_ctxt_record_size * KGSL_PRIORITY_MAX_RB_LEVELS)) {
-		do_div(ctxt_record_size, KGSL_PRIORITY_MAX_RB_LEVELS);
-	} else {
-		rb0_ctxt_record_size -= PAGE_ALIGN(adreno_dev->gpucore->gmem_size);
-		ctxt_record_size -= rb0_ctxt_record_size;
-		do_div(ctxt_record_size, KGSL_PRIORITY_MAX_RB_LEVELS - 1);
-	}
-
-	adreno_hwsched_snapshot_preemption_record(device, snapshot, md, offset,
-			rb0_ctxt_record_size);
-	offset += rb0_ctxt_record_size;
-
-	/* All preemption records exist as a single mem alloc entry */
-	for (i = 1; i < KGSL_PRIORITY_MAX_RB_LEVELS; i++) {
-		adreno_hwsched_snapshot_preemption_record(device, snapshot, md,
-			offset, ctxt_record_size);
-		offset += ctxt_record_size;
-	}
-}
-
 void gen8_hwsched_snapshot(struct adreno_device *adreno_dev,
 	struct kgsl_snapshot *snapshot)
 {
@@ -145,7 +115,7 @@ void gen8_hwsched_snapshot(struct adreno_device *adreno_dev,
 				entry->md);
 
 		if (entry->desc.mem_kind == HFI_MEMKIND_CSW_PRIV_NON_SECURE)
-			gen8_hwsched_snapshot_preemption_records(device, snapshot,
+			adreno_hwsched_snapshot_preemption_records(device, snapshot,
 				entry->md);
 
 		if (entry->desc.mem_kind == HFI_MEMKIND_PREEMPT_SCRATCH)
@@ -589,7 +559,7 @@ static int gen8_hwsched_gpu_boot(struct adreno_device *adreno_dev)
 		goto err;
 	}
 
-	if (adreno_is_gen8_2_0(adreno_dev))
+	if (adreno_is_gen8_2_x(adreno_dev))
 		gen8_hwcg_set(adreno_dev, true);
 
 	/*
@@ -1381,7 +1351,7 @@ static int process_inflight_hw_fences_after_reset(struct adreno_device *adreno_d
 	struct kgsl_context *context = NULL;
 	int id, ret = 0;
 	struct list_head hw_fence_list;
-	struct adreno_hw_fence_entry *entry, *tmp;
+	struct adreno_hw_fence_entry *entry;
 
 	/**
 	 * Since we need to wait for ack from GMU when sending each inflight fence back to GMU, we
@@ -1398,7 +1368,9 @@ static int process_inflight_hw_fences_after_reset(struct adreno_device *adreno_d
 	}
 	read_unlock(&device->context_lock);
 
-	list_for_each_entry_safe(entry, tmp, &hw_fence_list, reset_node) {
+	list_for_each_entry(entry, &hw_fence_list, reset_node) {
+		struct adreno_context *drawctxt = entry->drawctxt;
+		struct gmu_context_queue_header *hdr = drawctxt->gmu_context_queue.hostptr;
 
 		/*
 		 * This is part of the reset sequence and any error in this path will be handled by
@@ -1407,6 +1379,14 @@ static int process_inflight_hw_fences_after_reset(struct adreno_device *adreno_d
 		ret = gen8_send_hw_fence_hfi_wait_ack(adreno_dev, entry, 0);
 		if (ret)
 			break;
+
+		/*
+		 * If HW_FENCE_FLAG_SKIP_MEMSTORE is set, then GMU context queue header will not be
+		 * updated for this fence. Hence, update it here.
+		 */
+		if (((entry->cmd.flags & HW_FENCE_FLAG_SKIP_MEMSTORE) != 0) &&
+			(timestamp_cmp((u32)entry->cmd.ts, hdr->out_fence_ts) > 0))
+			hdr->out_fence_ts = (u32)entry->cmd.ts;
 	}
 
 	return ret;

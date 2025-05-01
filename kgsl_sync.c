@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2019, 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <dt-bindings/soc/qcom,ipcc.h>
@@ -34,6 +34,7 @@ static inline void add_hw_fence(struct kgsl_sync_fence *kfence)
 #ifdef CONFIG_QCOM_KGSL_SYNX
 
 #include <synx_api.h>
+#include <synx_interop.h>
 
 static struct synx_hw_fence_descriptor {
 	/** @handle: Handle for hardware fences */
@@ -191,7 +192,8 @@ bool kgsl_hw_fence_signaled(struct dma_fence *fence)
 
 bool kgsl_is_hw_fence(struct dma_fence *fence)
 {
-	return test_bit(SYNX_HW_FENCE_FLAG_ENABLED_BIT, &fence->flags);
+	return test_bit(SYNX_HW_FENCE_FLAG_ENABLED_BIT, &fence->flags) ||
+		test_bit(SYNX_NATIVE_FENCE_FLAG_ENABLED_BIT, &fence->flags);
 }
 
 #else

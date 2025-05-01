@@ -830,7 +830,7 @@ void kgsl_memdesc_init(struct kgsl_device *device,
 	 * cache operations at allocation time
 	 */
 	if (!(flags & KGSL_MEMFLAGS_IOCOHERENT))
-		memdesc->dev = &device->pdev->dev;
+		memdesc->dev = &kgsl_driver.virtdev;
 
 	align = max_t(unsigned int,
 		kgsl_memdesc_get_align(memdesc), ilog2(PAGE_SIZE));
@@ -1091,6 +1091,26 @@ static int kgsl_shmem_alloc_pages(struct kgsl_memdesc *memdesc)
 	return count;
 }
 
+#if (KERNEL_VERSION(6, 12, 18) <= LINUX_VERSION_CODE)
+static void kgsl_shmem_fill_page(void *ptr,
+	struct shmem_inode_info *inode, struct folio **folio, int order)
+{
+	struct kgsl_memdesc *memdesc = (struct kgsl_memdesc *)inode->android_vendor_data1;
+
+	if (IS_ERR_OR_NULL(memdesc) || order)
+		return;
+
+	if (list_empty(&memdesc->shmem_page_list)) {
+		int ret = kgsl_shmem_alloc_pages(memdesc);
+
+		if (ret <= 0)
+			return;
+	}
+
+	*folio = list_first_entry(&memdesc->shmem_page_list, struct folio, lru);
+	list_del(&(*folio)->lru);
+}
+#else
 static void kgsl_shmem_fill_page(void *ptr,
 	struct shmem_inode_info *inode, struct folio **folio)
 {
@@ -1109,6 +1129,7 @@ static void kgsl_shmem_fill_page(void *ptr,
 	*folio = list_first_entry(&memdesc->shmem_page_list, struct folio, lru);
 	list_del(&(*folio)->lru);
 }
+#endif
 
 void kgsl_register_shmem_callback(void)
 {
@@ -1914,11 +1935,14 @@ struct kgsl_memdesc *kgsl_allocate_global_fixed(struct kgsl_device *device,
 	return &gmd->memdesc;
 }
 
-struct kgsl_memdesc *kgsl_allocate_global(struct kgsl_device *device,
-		u64 size, u32 padding, u64 flags, u32 priv, const char *name)
+struct kgsl_memdesc *kgsl_alloc_map_gpu_global(struct kgsl_device *device,
+	u64 gpuaddr, u64 size, u32 padding, u64 flags, u32 priv, const char *name)
 {
 	int ret;
 	struct kgsl_global_memdesc *md;
+
+	if (WARN_ON(!mutex_is_locked(&device->mutex)))
+		return ERR_PTR(-EINVAL);
 
 	md = kzalloc(sizeof(*md), GFP_KERNEL);
 	if (!md)
@@ -1940,6 +1964,9 @@ struct kgsl_memdesc *kgsl_allocate_global(struct kgsl_device *device,
 		return ERR_PTR(ret);
 	}
 
+	if (gpuaddr)
+		md->memdesc.gpuaddr = gpuaddr;
+
 	md->name = name;
 
 	/*
@@ -1952,6 +1979,33 @@ struct kgsl_memdesc *kgsl_allocate_global(struct kgsl_device *device,
 	kgsl_trace_gpu_mem_total(device, md->memdesc.size);
 
 	return &md->memdesc;
+}
+
+int kgsl_get_global_gpuaddr(struct kgsl_device *device, struct kgsl_memdesc *memdesc,
+	u64 size, u64 flags, u32 priv)
+{
+	if (WARN_ON(!mutex_is_locked(&device->mutex)))
+		return -EINVAL;
+
+	if (!size || size > UINT_MAX)
+		return -EINVAL;
+
+	priv |= KGSL_MEMDESC_GLOBAL;
+
+	size = PAGE_ALIGN(size);
+
+	kgsl_memdesc_init(device, memdesc, flags);
+
+	memdesc->priv |= priv;
+	memdesc->size = size;
+
+	return kgsl_mmu_reserve_global_gpuaddr(device, memdesc);
+}
+
+struct kgsl_memdesc *kgsl_allocate_global(struct kgsl_device *device,
+		u64 size, u32 padding, u64 flags, u32 priv, const char *name)
+{
+	return kgsl_alloc_map_gpu_global(device, 0, size, padding, flags, priv, name);
 }
 
 void kgsl_free_globals(struct kgsl_device *device)

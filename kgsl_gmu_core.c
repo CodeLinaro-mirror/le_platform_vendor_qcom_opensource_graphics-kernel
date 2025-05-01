@@ -439,7 +439,37 @@ static int _map_gmu_static(struct kgsl_device *device, struct kgsl_memdesc *md,
 	return 0;
 }
 
-static int _map_gmu(struct kgsl_device *device, struct kgsl_memdesc *md,
+int gmu_core_reserve_gmuaddr(struct kgsl_device *device, struct kgsl_memdesc *md, u32 vma_id,
+	u32 align)
+{
+	struct gmu_core_device *gmu = &device->gmu_core;
+	struct gmu_vma_entry *vma = &gmu->vma[vma_id];
+	u32 addr, size = ALIGN(md->size, hfi_get_gmu_sz_alignment(align));
+
+	if (vma_is_dynamic(device, vma_id)) {
+		spin_lock(&vma->lock);
+		addr = find_unmapped_va(vma, size, hfi_get_gmu_va_alignment(align));
+		spin_unlock(&vma->lock);
+		if (addr == 0)
+			goto error;
+	} else {
+		addr = ALIGN(vma->next_va, hfi_get_gmu_va_alignment(align));
+		if ((addr + size) >= (vma->start + vma->size))
+			goto error;
+		vma->next_va = addr + size;
+	}
+
+	md->gmuaddr = addr;
+
+	return 0;
+
+error:
+	dev_err_ratelimited(GMU_PDEV_DEV(device),
+		"Insufficient VA space size: %x in vma:%u\n", size, vma_id);
+	return -ENOMEM;
+}
+
+int gmu_core_map_gmu(struct kgsl_device *device, struct kgsl_memdesc *md,
 	u32 addr, u32 vma_id, int attrs, u32 align)
 {
 	return vma_is_dynamic(device, vma_id) ?
@@ -477,7 +507,7 @@ int gmu_core_import_buffer(struct kgsl_device *device, struct hfi_mem_alloc_entr
 		attrs |= IOMMU_CACHE;
 	}
 
-	return _map_gmu(device, entry->md, 0, vma_id, attrs, desc->align);
+	return gmu_core_map_gmu(device, entry->md, 0, vma_id, attrs, desc->align);
 }
 
 struct kgsl_memdesc *gmu_core_reserve_kernel_block(struct kgsl_device *device,
@@ -499,7 +529,7 @@ struct kgsl_memdesc *gmu_core_reserve_kernel_block(struct kgsl_device *device,
 		return ERR_PTR(-ENOMEM);
 	}
 
-	ret = _map_gmu(device, md, addr, vma_id, attrs, align);
+	ret = gmu_core_map_gmu(device, md, addr, vma_id, attrs, align);
 	if (ret) {
 		kgsl_sharedmem_free(md);
 		memset(md, 0x0, sizeof(*md));
@@ -527,7 +557,7 @@ struct kgsl_memdesc *gmu_core_reserve_kernel_block_fixed(struct kgsl_device *dev
 	if (ret)
 		return ERR_PTR(ret);
 
-	ret = _map_gmu(device, md, addr, vma_id, attrs, align);
+	ret = gmu_core_map_gmu(device, md, addr, vma_id, attrs, align);
 
 	sg_free_table(md->sgt);
 	kfree(md->sgt);
@@ -554,7 +584,7 @@ int gmu_core_alloc_kernel_block(struct kgsl_device *device,
 	if (ret)
 		return ret;
 
-	ret = _map_gmu(device, md, 0, vma_id, attrs, 0);
+	ret = gmu_core_map_gmu(device, md, 0, vma_id, attrs, 0);
 	if (ret)
 		kgsl_sharedmem_free(md);
 

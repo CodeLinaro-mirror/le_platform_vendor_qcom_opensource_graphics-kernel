@@ -471,6 +471,9 @@ enum gmu_fault_panic_policy {
 	GMU_FAULT_WAIT_FOR_LOWEST_IDLE,
 	GMU_FAULT_WAIT_FOR_IDLE,
 	GMU_FAULT_HW_FENCE,
+	GMU_FAULT_WAIT_FOR_CX,
+	GMU_FAULT_CX_WAIT_TIMEOUT,
+	GMU_FAULT_CM3,
 	GMU_FAULT_MAX,
 };
 
@@ -630,6 +633,20 @@ struct gmu_mem_type_desc {
  */
 int gmu_core_map_memdesc(struct iommu_domain *domain, struct kgsl_memdesc *memdesc,
 		u64 gmuaddr, int attrs);
+
+/**
+ * gmu_core_map_gmu - Map a kgsl memdesc to GMU
+ * @device: Pointer to kgsl device
+ * @md: Pointer to the kgsl memdesc
+ * @addr: Address where to map this memdesc
+ * @vma_id: VMA id to which this memdesc needs to be mapped
+ * @attrs: mapping attributes
+ * @align: Alignment request for this memdesc
+
+ * Return: Zero on success or negative error on failure.
+ */
+int gmu_core_map_gmu(struct kgsl_device *device, struct kgsl_memdesc *md,
+		u32 addr, u32 vma_id, int attrs, u32 align);
 
 /**
  * gmu_core_find_memdesc - Find the GMU memory descriptor for a given address and size
@@ -822,4 +839,19 @@ bool gmu_core_capabilities_enabled(struct firmware_capabilities *caps, u32 field
  *
  */
 void gmu_core_mark_for_coldboot(struct kgsl_device *device);
+
+/**
+ * gmu_core_reserve_gmuaddr() - Reserve a gmuaddr in the GMU VA space
+ * @device: Pointer to the kgsl device
+ * @md: Pointer to the memdesc
+ * @vma_id: Target gmu vma where this buffer should be mapped
+ * @align: Alignment for the GMU VA and GMU mapping size
+ *
+ * This function reserves a gmu address based on the input parameters
+ *
+ * Return: 0 on success or negative error on failure
+ */
+int gmu_core_reserve_gmuaddr(struct kgsl_device *device, struct kgsl_memdesc *md,
+		u32 vma_id, u32 align);
+
 #endif /* __KGSL_GMU_CORE_H */

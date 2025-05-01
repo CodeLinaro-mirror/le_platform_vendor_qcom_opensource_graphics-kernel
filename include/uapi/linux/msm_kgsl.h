@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _UAPI_MSM_KGSL_H
@@ -361,6 +361,7 @@ enum kgsl_timestamp_type {
 #define KGSL_PROP_IS_AQE_ENABLED	0x30
 #define KGSL_PROP_GPU_SECURE_VA_SIZE	0x31
 #define KGSL_PROP_GPU_SECURE_VA_INUSE	0x32
+#define KGSL_PROP_DCVS_PROFILE		0x33
 
 /*
  * kgsl_capabilities_properties returns a list of supported properties.
@@ -2162,5 +2163,53 @@ struct kgsl_read_calibrated_timestamps {
 
 #define IOCTL_KGSL_READ_CALIBRATED_TIMESTAMPS \
 	_IOWR(KGSL_IOC_TYPE, 0x60, struct kgsl_read_calibrated_timestamps)
+
+/* Macro for unused field in kgsl_dcvs_attrs structure */
+#define KGSL_DCVS_ATTR_UNUSED 0xFFFFFFFF
+
+/**
+ * struct kgsl_dcvs_attrs - Descriptor for DCVS profile attributes
+ * @min_gpu_freq: Minimum GPU frequency in MHz
+ * Requested frequency is floor GPU frequency clamped to the supported range
+ * and rounded down to a supported frequency level
+ * @max_gpu_freq: Maximum GPU frequency in MHz
+ * Requested frequency is ceil GPU frequency clamped to the supported range
+ * and rounded down to a supported frequency level
+ * @target_fps: Target frame rate input to DCVS algorithm
+ * @penalty_up: Average gpu busy% threshold to step up one level
+ * @penalty_down: Average gpu busy% threshold to step down one level
+ * @first_step_down_count: Number of consecutive down recommendations before first step down
+ * @subsequent_step_down_count: Number of consecutive down recommendations for subsequent step down
+ * after first step down
+ */
+struct kgsl_dcvs_attrs {
+	__u32 min_gpu_freq;
+	__u32 max_gpu_freq;
+	__u32 target_fps;
+	__u32 penalty_up;
+	__u32 penalty_down;
+	__u32 first_step_down_count;
+	__u32 subsequent_step_down_count;
+	/* private: 64 bit compatibility */
+	__u32 padding;
+};
+
+/**
+ * struct kgsl_dcvs_profile - Argument for IOCTL_KGSL_SETPROPERTY
+ * @attrs: User pointer to kgsl_dcvs_attrs structure
+ * @attrs_size: Size of kgsl_dcvs_attrs structure in bytes
+ *
+ * A container to register/unregister the DCVS profile when IOCTL_KGSL_SETPROPERTY
+ * is called with type KGSL_PROP_DCVS_PROFILE.
+ *
+ * User is expected to initialize @struct kgsl_dcvs_attrs with set of property
+ * used by app profile and set the unused fields to KGSL_DCVS_ATTR_UNUSED.
+ */
+struct kgsl_dcvs_profile {
+	__u64 attrs;
+	__u32 attrs_size;
+	/* private: 64 bit compatibility */
+	__u32 padding;
+};
 
 #endif /* _UAPI_MSM_KGSL_H */

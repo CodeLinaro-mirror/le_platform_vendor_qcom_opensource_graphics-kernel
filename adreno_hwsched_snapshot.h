@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _ADRENO_HWSCHED_SNAPSHOT_H_
@@ -21,7 +21,7 @@ size_t adreno_hwsched_snapshot_aqe_buffer(struct kgsl_device *device, u8 *buf,
 void adreno_hwsched_snapshot_context_queue(struct kgsl_device *device,
 	struct kgsl_snapshot *snapshot);
 
-void adreno_hwsched_snapshot_preemption_record(struct kgsl_device *device,
-	struct kgsl_snapshot *snapshot, struct kgsl_memdesc *md, u64 offset, u64 size);
+void adreno_hwsched_snapshot_preemption_records(struct kgsl_device *device,
+	struct kgsl_snapshot *snapshot, struct kgsl_memdesc *md);
 
 #endif

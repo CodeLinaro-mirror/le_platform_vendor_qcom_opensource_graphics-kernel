@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2002,2007-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/component.h>
@@ -494,6 +494,17 @@ kgsl_mmu_unmap_range(struct kgsl_pagetable *pagetable,
 	}
 
 	return ret;
+}
+
+int kgsl_mmu_reserve_global_gpuaddr(struct kgsl_device *device,
+		struct kgsl_memdesc *memdesc)
+{
+	struct kgsl_mmu *mmu = &(device->mmu);
+
+	if (MMU_OP_VALID(mmu, mmu_reserve_global_gpuaddr))
+		return mmu->mmu_ops->mmu_reserve_global_gpuaddr(mmu, memdesc, 0);
+
+	return -EINVAL;
 }
 
 void kgsl_mmu_map_global(struct kgsl_device *device,

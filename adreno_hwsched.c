@@ -49,6 +49,135 @@ inline bool adreno_hwsched_context_queue_enabled(struct adreno_device *adreno_de
 	return test_bit(ADRENO_HWSCHED_CONTEXT_QUEUE, &adreno_dev->hwsched.flags);
 }
 
+static inline u32 get_gmu_vma_id(u32 flags)
+{
+	return (flags & HFI_MEMFLAG_GMU_CACHEABLE) ? GMU_CACHE : GMU_NONCACHED_KERNEL;
+}
+
+static void setup_gfx_flags_priv(u32 desc_flags, u64 *flags, u32 *priv)
+{
+	if (desc_flags & HFI_MEMFLAG_GFX_PRIV)
+		*priv |= KGSL_MEMDESC_PRIVILEGED;
+
+	if (!(desc_flags & HFI_MEMFLAG_GFX_WRITEABLE))
+		*flags |= KGSL_MEMFLAGS_GPUREADONLY;
+
+	if (desc_flags & HFI_MEMFLAG_GFX_SECURE)
+		*flags |= KGSL_MEMFLAGS_SECURE;
+}
+
+static int reserve_preempt_record_va(struct adreno_device *adreno_dev,
+	struct hfi_mem_alloc_entry *entry, u64 flags, u32 priv)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct hfi_mem_alloc_desc *desc = &entry->desc;
+	int ret = 0;
+
+	if (!entry->md->gpuaddr) {
+		ret = kgsl_get_global_gpuaddr(device, entry->md,
+			desc->size, flags, priv);
+		if (ret)
+			return ret;
+	}
+
+	if (!(entry->desc.flags & HFI_MEMFLAG_GMU_ACC))
+		return ret;
+
+	if (!entry->md->gmuaddr)
+		ret = gmu_core_reserve_gmuaddr(device, entry->md,
+			get_gmu_vma_id(desc->flags), desc->align);
+
+	return ret;
+}
+
+static int alloc_map_preempt_record(struct adreno_device *adreno_dev,
+	struct kgsl_memdesc **md, struct hfi_mem_alloc_entry *entry, u64 offset,
+	u64 flags, u32 priv)
+{
+	u64 ctxt_record_size = adreno_dev->total_ctxt_record_sz;
+	u32 md_size = ctxt_record_size - adreno_dev->gpucore->gmem_size;
+	struct hfi_mem_alloc_desc *desc = &entry->desc;
+
+	if (*md)
+		return 0;
+
+	if (offset >= (entry->md->size))
+		return -ENOSPC;
+
+	*md = kgsl_alloc_map_gpu_global(KGSL_DEVICE(adreno_dev),
+			entry->md->gpuaddr + offset, md_size, 0, flags, priv,
+			(entry->desc.mem_kind == HFI_MEMKIND_CSW_PRIV_SECURE) ?
+			"sec_preempt_record_non_gmem" : "preempt_record_non_gmem");
+	if (!*md)
+		return PTR_ERR(*md);
+
+	if (!(desc->flags & HFI_MEMFLAG_GMU_ACC))
+		return 0;
+
+	if ((*md)->gmuaddr)
+		return 0;
+
+	return gmu_core_map_gmu(KGSL_DEVICE(adreno_dev), *md,
+			entry->md->gmuaddr + offset,
+			get_gmu_vma_id(desc->flags),
+			gmu_core_get_attrs(desc->flags), desc->align);
+}
+
+static int alloc_map_non_gmem(struct adreno_device *adreno_dev,
+	struct hfi_mem_alloc_entry *entry, u64 flags, u32 priv)
+{
+	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
+	u64 ctxt_record_sz = adreno_dev->total_ctxt_record_sz, offset = 0;
+	bool no_rb0_gmem = false;
+	int i;
+
+	/* Check whether GMU has removed GMEM size from RB0 context record */
+	if (entry->desc.size == ((ctxt_record_sz * KGSL_PRIORITY_MAX_RB_LEVELS) -
+		adreno_dev->gpucore->gmem_size))
+		no_rb0_gmem = true;
+
+	for (i = 0; i < KGSL_PRIORITY_MAX_RB_LEVELS; i++) {
+		struct kgsl_memdesc **md = (entry->desc.mem_kind == HFI_MEMKIND_CSW_PRIV_SECURE) ?
+			&hwsched->secure_preempt_rec[i] : &hwsched->preempt_rec[i];
+		int ret = alloc_map_preempt_record(adreno_dev, md, entry, offset, flags, priv);
+
+		if (ret)
+			return ret;
+
+		offset += ctxt_record_sz;
+		if ((i == 0) && no_rb0_gmem)
+			offset -= adreno_dev->gpucore->gmem_size;
+	}
+
+	return 0;
+}
+
+static int process_preempt_record_mem_alloc(struct adreno_device *adreno_dev,
+	struct hfi_mem_alloc_entry *entry)
+{
+	u64 flags = 0;
+	u32 priv = 0;
+	int ret;
+
+	if (!entry->md) {
+		struct gmu_core_device *gmu = &KGSL_DEVICE(adreno_dev)->gmu_core;
+
+		if (gmu->global_entries == ARRAY_SIZE(gmu->gmu_globals))
+			return -ENOMEM;
+
+		entry->md = &gmu->gmu_globals[gmu->global_entries];
+		gmu->global_entries++;
+	}
+
+	setup_gfx_flags_priv(entry->desc.flags, &flags, &priv);
+
+	ret = reserve_preempt_record_va(adreno_dev, entry, flags, priv);
+	if (ret)
+		return ret;
+
+	return alloc_map_non_gmem(adreno_dev, entry, flags, priv);
+}
+
 static struct hfi_mem_alloc_entry *lookup_mem_alloc_table(
 	struct adreno_device *adreno_dev, struct hfi_mem_alloc_desc *desc)
 {
@@ -98,29 +227,20 @@ static struct hfi_mem_alloc_entry *get_mem_alloc_entry(
 
 	entry->desc.host_mem_handle = desc->gmu_mem_handle;
 
-	if (desc->flags & HFI_MEMFLAG_GFX_PRIV)
-		priv |= KGSL_MEMDESC_PRIVILEGED;
-
-	if (!(desc->flags & HFI_MEMFLAG_GFX_WRITEABLE))
-		flags |= KGSL_MEMFLAGS_GPUREADONLY;
-
-	if (desc->flags & HFI_MEMFLAG_GFX_SECURE)
-		flags |= KGSL_MEMFLAGS_SECURE;
+	setup_gfx_flags_priv(desc->flags, &flags, &priv);
 
 	if (!(desc->flags & HFI_MEMFLAG_GFX_ACC) &&
 		(desc->mem_kind != HFI_MEMKIND_HW_FENCE)) {
 		if (desc->mem_kind == HFI_MEMKIND_MMIO_IPC_CORE)
 			entry->md = gmu_core_reserve_kernel_block_fixed(device, 0,
 					desc->size,
-					(desc->flags & HFI_MEMFLAG_GMU_CACHEABLE) ?
-					GMU_CACHE : GMU_NONCACHED_KERNEL,
+					get_gmu_vma_id(desc->flags),
 					"qcom,ipc-core", gmu_core_get_attrs(desc->flags),
 					desc->align);
 		else
 			entry->md = gmu_core_reserve_kernel_block(device, 0,
 					desc->size,
-					(desc->flags & HFI_MEMFLAG_GMU_CACHEABLE) ?
-					GMU_CACHE : GMU_NONCACHED_KERNEL,
+					get_gmu_vma_id(desc->flags),
 					desc->align);
 
 		if (IS_ERR(entry->md)) {
@@ -146,6 +266,21 @@ static struct hfi_mem_alloc_entry *get_mem_alloc_entry(
 	case HFI_MEMKIND_MEMSTORE:
 		entry->md = device->memstore;
 		break;
+	case HFI_MEMKIND_CSW_PRIV_NON_SECURE:
+	case HFI_MEMKIND_CSW_PRIV_SECURE:
+		if (ADRENO_FEATURE(adreno_dev, ADRENO_DEFER_GMEM_ALLOC)) {
+			ret = process_preempt_record_mem_alloc(adreno_dev, entry);
+			if (ret)
+				return ERR_PTR(ret);
+
+			entry->desc.size = entry->md->size;
+			entry->desc.gpu_addr = entry->md->gpuaddr;
+			entry->desc.gmu_addr = entry->md->gmuaddr;
+
+			goto done;
+		}
+		/* Allocate global through legacy approach */
+		fallthrough;
 	default:
 		entry->md = kgsl_allocate_global(device, desc->size, 0, flags,
 			priv, memkind_string);
@@ -205,6 +340,95 @@ int adreno_hwsched_process_mem_alloc(struct adreno_device *adreno_dev,
 	mad->host_mem_handle = mad->gmu_mem_handle;
 
 	return 0;
+}
+
+static struct hfi_mem_alloc_entry *get_preempt_record_entry(struct adreno_device *adreno_dev,
+	unsigned long flags)
+{
+	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
+	u32 mem_kind = flags & KGSL_CONTEXT_SECURE ?
+		HFI_MEMKIND_CSW_PRIV_SECURE : HFI_MEMKIND_CSW_PRIV_NON_SECURE;
+	u32 i;
+
+	for (i = 0; i < hwsched->mem_alloc_entries; i++) {
+		struct hfi_mem_alloc_entry *entry = &hwsched->mem_alloc_table[i];
+
+		if (entry->desc.mem_kind == mem_kind)
+			return entry;
+	}
+
+	return NULL;
+}
+
+static int adreno_hwsched_alloc_preempt_record_gmem(struct adreno_device *adreno_dev,
+	struct adreno_context *drawctxt)
+{
+	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
+	struct kgsl_context *context = &drawctxt->base;
+	struct kgsl_device *device = context->device;
+	struct hfi_mem_alloc_entry *entry = NULL;
+	struct kgsl_memdesc *pr_md, **md = NULL;
+	u32 priv = 0, level = adreno_get_level(context);
+	u64 flags = 0;
+	int ret = 0;
+
+	if (context->flags & KGSL_CONTEXT_LPAC)
+		return 0;
+
+	if (!ADRENO_FEATURE(adreno_dev, ADRENO_PREEMPTION) ||
+		!ADRENO_FEATURE(adreno_dev, ADRENO_DEFER_GMEM_ALLOC))
+		return 0;
+
+	/* No need to allocate gmem for RB0 preemption record */
+	if (!level)
+		return 0;
+
+	md = context->flags & KGSL_CONTEXT_SECURE ?
+		&hwsched->secure_preempt_rec_gmem[level - 1] :
+		&hwsched->preempt_rec_gmem[level - 1];
+
+	/* Avoid device mutex if buffer is already allocated */
+	if (*md)
+		return 0;
+
+	mutex_lock(&device->mutex);
+
+	if (*md)
+		goto unlock;
+
+	entry = get_preempt_record_entry(adreno_dev, context->flags);
+	if (!entry) {
+		dev_err_ratelimited(GMU_PDEV_DEV(device),
+			"preempt record entry not found\n");
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	pr_md = context->flags & KGSL_CONTEXT_SECURE ?
+		hwsched->secure_preempt_rec[level] : hwsched->preempt_rec[level];
+
+	if ((pr_md->gpuaddr + pr_md->size + adreno_dev->gpucore->gmem_size) >
+		(entry->md->gpuaddr + entry->md->size)) {
+		ret = -ENOSPC;
+		goto unlock;
+	}
+
+	setup_gfx_flags_priv(entry->desc.flags, &flags, &priv);
+
+	/* gmem section only needs to be mapped to gpu */
+	*md = kgsl_alloc_map_gpu_global(device, pr_md->gpuaddr + pr_md->size,
+			adreno_dev->gpucore->gmem_size, 0, flags, priv,
+			(entry->desc.mem_kind == HFI_MEMKIND_CSW_PRIV_SECURE) ?
+			"sec_preempt_record_gmem" : "preempt_record_gmem");
+	if (!*md) {
+		dev_err_ratelimited(GMU_PDEV_DEV(device),
+			"Failed to allocate gmem preempt record for rb:%d\n", level);
+		ret = PTR_ERR(*md);
+		kfree(*md);
+	}
+unlock:
+	mutex_unlock(&device->mutex);
+	return ret;
 }
 
 static bool is_cmdobj(struct kgsl_drawobj *drawobj)
@@ -2016,7 +2240,8 @@ static void adreno_hwsched_snapshot(struct adreno_device *adreno_dev, int fault)
 			ctx_guilty = true;
 		}
 
-		ret = gpudev->soft_reset(adreno_dev, context, ctx_guilty);
+		if (gpudev->soft_reset)
+			ret = gpudev->soft_reset(adreno_dev, context, ctx_guilty);
 
 		if (ctx_guilty)
 			adreno_drawctxt_set_guilty(device, context);
@@ -2038,7 +2263,8 @@ static void adreno_hwsched_snapshot(struct adreno_device *adreno_dev, int fault)
 			ctx_guilty = true;
 		}
 
-		ret = gpudev->soft_reset(adreno_dev, context_lpac, ctx_guilty);
+		if (gpudev->soft_reset)
+			ret = gpudev->soft_reset(adreno_dev, context_lpac, ctx_guilty);
 
 		if (ctx_guilty)
 			adreno_drawctxt_set_guilty(device, context_lpac);
@@ -2049,13 +2275,13 @@ static void adreno_hwsched_snapshot(struct adreno_device *adreno_dev, int fault)
 		kgsl_drawobj_put(drawobj_lpac);
 	}
 done:
-	if (!drawobj && !drawobj_lpac)
+	if (gpudev->soft_reset && !drawobj && !drawobj_lpac)
 		ret = gpudev->soft_reset(adreno_dev, NULL, ctx_guilty);
 
 	memset(hwsched->ctxt_bad, 0x0, HFI_MAX_MSG_SIZE);
 	clear_bit(ADRENO_HWSCHED_GPU_SOFT_RESET, &adreno_dev->hwsched.flags);
 	adreno_dev->hwsched.reset_type = GMU_GPU_RESET_NONE;
-	if (ret)
+	if (ret && gpudev->reset)
 		gpudev->reset(adreno_dev);
 }
 
@@ -2172,11 +2398,18 @@ static void adreno_hwsched_create_hw_fence(struct adreno_device *adreno_dev,
 	hwsched_ops->create_hw_fence(adreno_dev, kfence);
 }
 
+static int adreno_hwsched_setup_context(struct adreno_device *adreno_dev,
+	struct adreno_context *drawctxt)
+{
+	return adreno_hwsched_alloc_preempt_record_gmem(adreno_dev, drawctxt);
+}
+
 static const struct adreno_dispatch_ops hwsched_ops = {
 	.close = adreno_hwsched_dispatcher_close,
 	.queue_cmds = adreno_hwsched_queue_cmds,
 	.queue_context = adreno_hwsched_queue_context,
 	.create_hw_fence = adreno_hwsched_create_hw_fence,
+	.setup_context = adreno_hwsched_setup_context,
 };
 
 static void hwsched_lsr_check(struct work_struct *work)
@@ -3067,7 +3300,18 @@ void adreno_hwsched_reset_hfi_mem(struct adreno_device *adreno_dev)
 
 		if (desc->flags & HFI_MEMFLAG_HOST_INIT) {
 			md = hwsched->mem_alloc_table[i].md;
-			memset(md->hostptr, 0x0, md->size);
+			if (md->hostptr)
+				memset(md->hostptr, 0x0, md->size);
 		}
+	}
+
+	if (!(adreno_is_preemption_enabled(adreno_dev) &&
+		ADRENO_FEATURE(adreno_dev, ADRENO_DEFER_GMEM_ALLOC)))
+		return;
+
+	/* No need to reset gmem portion of the preemption records */
+	for (i = 0; i < KGSL_PRIORITY_MAX_RB_LEVELS; i++) {
+		md = hwsched->preempt_rec[i];
+		memset(md->hostptr, 0x0, md->size);
 	}
 }

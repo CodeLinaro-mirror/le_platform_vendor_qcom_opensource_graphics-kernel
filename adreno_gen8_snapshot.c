@@ -228,9 +228,9 @@ static bool _gen8_do_crashdump(struct kgsl_device *device)
 			break;
 		if (ktime_compare(ktime_get(), timeout) > 0)
 			break;
-		/* Wait 1msec to avoid unnecessary looping */
+		/* Wait 50us to avoid unnecessary looping */
 		if (!device->snapshot_atomic)
-			usleep_range(100, 1000);
+			usleep_range(5, 50);
 	}
 
 	kgsl_regread(device, GEN8_CP_CRASH_DUMP_STATUS, &reg);
@@ -1845,7 +1845,7 @@ void gen8_crashdump_init(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	int ret;
-	u64 capturescript_regs_pages = (adreno_is_gen8_2_0(adreno_dev) ? 400 : 200);
+	u64 capturescript_regs_pages = (adreno_is_gen8_2_x(adreno_dev) ? 400 : 200);
 
 	ret = adreno_allocate_global(device, &gen8_capturescript,
 		50 * PAGE_SIZE, 0, KGSL_MEMFLAGS_GPUREADONLY,

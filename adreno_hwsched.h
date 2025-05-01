@@ -150,6 +150,23 @@ struct adreno_hwsched {
 	struct adreno_hwsched_hw_fence hw_fence;
 	/** @reset_type: GPU fault reset (hard/soft) type */
 	enum gpu_reset_type reset_type;
+	/** @preempt_rec: Memory descriptors for non-gmem part of preemption records */
+	struct kgsl_memdesc *preempt_rec[KGSL_PRIORITY_MAX_RB_LEVELS];
+	/**
+	 * @preempt_rec_gmem: Memory descriptors for gmem part of preemption
+	 * records. No gmem buffer needed for rb0 preemption record.
+	 */
+	struct kgsl_memdesc *preempt_rec_gmem[KGSL_PRIORITY_MAX_RB_LEVELS - 1];
+	/**
+	 * @secure_preempt_rec: Memory descriptors for non-gmem part of secure
+	 * preemption records
+	 */
+	struct kgsl_memdesc *secure_preempt_rec[KGSL_PRIORITY_MAX_RB_LEVELS];
+	/**
+	 * @secure_preempt_rec_gmem: Memory descriptors for gmem part of secure
+	 * preemption records. No gmem buffer needed for rb0 preemption record.
+	 */
+	struct kgsl_memdesc *secure_preempt_rec_gmem[KGSL_PRIORITY_MAX_RB_LEVELS - 1];
 };
 
 /*
@@ -427,4 +444,14 @@ void *adreno_hwsched_get_rb_hostptr(struct adreno_device *adreno_dev,
  * allocation table and resets the entries that have HFI_MEMFLAG_HOST_INIT set.
  */
 void adreno_hwsched_reset_hfi_mem(struct adreno_device *adreno_dev);
+
+/**
+ * adreno_hwsched_context_init - Function for context creation
+ * @drawctxt: Pointer to the adreno context
+ *
+ * Allocate resources at the time of context creation
+ *
+ * Return: Zero on success or negative error on failure
+ */
+int adreno_hwsched_context_init(struct adreno_context *drawctxt);
 #endif

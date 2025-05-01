@@ -1455,8 +1455,10 @@ int adreno_device_probe(struct platform_device *pdev,
 	if (ADRENO_FEATURE(adreno_dev, ADRENO_APRIV))
 		priv |= KGSL_MEMDESC_PRIVILEGED;
 
+	mutex_lock(&device->mutex);
 	device->memstore = kgsl_allocate_global(device,
 		KGSL_MEMSTORE_SIZE, 0, 0, priv, "memstore");
+	mutex_unlock(&device->mutex);
 
 	status = PTR_ERR_OR_ZERO(device->memstore);
 	if (status) {

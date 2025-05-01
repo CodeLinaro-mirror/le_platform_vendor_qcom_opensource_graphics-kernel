@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2002,2007-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #ifndef __KGSL_SHAREDMEM_H
 #define __KGSL_SHAREDMEM_H
@@ -268,6 +268,39 @@ int kgsl_allocate_user(struct kgsl_device *device, struct kgsl_memdesc *memdesc,
  */
 int kgsl_allocate_kernel(struct kgsl_device *device,
 		struct kgsl_memdesc *memdesc, u64 size, u64 flags, u32 priv);
+
+/**
+ * kgsl_get_global_gpuaddr - Get global gpu address based on input parameters
+ * @device: A GPU device handle
+ * @memdesc: Pointer to memory descriptor
+ * @size: Size of the allocation in bytes
+ * @flags: Control flags for the allocation
+ * @priv: Internal flags for the allocation
+ *
+ * Get a gpu address in the global VA range based on the input parameters
+ * without allocating and mapping any physical pages.
+ *
+ * Return: 0 on success and negative error on failure
+ */
+int kgsl_get_global_gpuaddr(struct kgsl_device *device, struct kgsl_memdesc *memdesc,
+	u64 size, u64 flags, u32 priv);
+
+/**
+ * kgsl_alloc_map_gpu_global - Allocate and map a global GPU memory object
+ * @device: A GPU device handle
+ * @gpuaddr: pre-allocated GPU VA for this memory object
+ * @size: Size of the allocation in bytes
+ * @padding: Amount of extra adding to add to the VA allocation
+ * @flags: Control flags for the allocation
+ * @priv: Internal flags for the allocation
+ * @name: Name of the allocation (for the debugfs file)
+ *
+ * Allocate a global GPU object that is mapped into the default pagetables only.
+ *
+ * Return: 0 on success or negative error on failure
+ */
+struct kgsl_memdesc *kgsl_alloc_map_gpu_global(struct kgsl_device *device,
+	u64 gpuaddr, u64 size, u32 padding, u64 flags, u32 priv, const char *name);
 
 /**
  * kgsl_allocate_global - Allocate a global GPU memory object

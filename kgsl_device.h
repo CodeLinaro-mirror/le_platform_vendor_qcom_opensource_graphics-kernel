@@ -6,6 +6,7 @@
 #ifndef __KGSL_DEVICE_H
 #define __KGSL_DEVICE_H
 
+#include <linux/rtmutex.h>
 #include <linux/sched/mm.h>
 #include <linux/sched/task.h>
 #include <trace/events/gpu_mem.h>
@@ -18,6 +19,26 @@
 #define KGSL_IOCTL_FUNC(_cmd, _func) \
 	[_IOC_NR((_cmd))] = \
 		{ .cmd = (_cmd), .func = (_func) }
+
+#if IS_ENABLED(CONFIG_QCOM_KGSL_RT_MUTEX)
+#define kgsl_mutex_init(mutex)		rt_mutex_init(mutex)
+#define kgsl_mutex_lock(mutex)		rt_mutex_lock(mutex)
+#define kgsl_mutex_unlock(mutex)	rt_mutex_unlock(mutex)
+#define kgsl_mutex_trylock(mutex)	rt_mutex_trylock(mutex)
+
+#if (KERNEL_VERSION(5, 10, 0) >= LINUX_VERSION_CODE)
+#define kgsl_mutex_is_locked(mutex)	rt_mutex_is_locked(mutex)
+#else
+#define kgsl_mutex_is_locked(mutex)	((mutex)->rtmutex.owner != NULL)
+#endif
+
+#else
+#define kgsl_mutex_init(mutex)		mutex_init(mutex)
+#define kgsl_mutex_lock(mutex)		mutex_lock(mutex)
+#define kgsl_mutex_unlock(mutex)		mutex_unlock(mutex)
+#define kgsl_mutex_trylock(mutex)	mutex_trylock(mutex)
+#define kgsl_mutex_is_locked(mutex)	mutex_is_locked(mutex)
+#endif
 
 /*
  * KGSL device state is initialized to INIT when platform_probe		*
@@ -81,7 +102,9 @@ enum gpu_pwrlevel_op {
 	GPU_PWRLEVEL_OP_MIN_PWRLEVEL,
 	GPU_PWRLEVEL_OP_MAX_PWRLEVEL,
 	GPU_PWRLEVEL_OP_GPUCLK,
-	GPU_PWRLEVEL_OP_PERF_HINT,
+	GPU_PWRLEVEL_OP_PERF_HINT,     /* Mutex grabbed in the ops function */
+	GPU_PWRLEVEL_OP_DCVS_ENABLE,
+	GPU_PWRLEVEL_OP_TUNING_ATTR,
 };
 
 struct kgsl_device;
@@ -183,6 +206,9 @@ struct kgsl_functable {
 		enum gpu_pwrlevel_op op);
 	/** @set_thermal_index: Target specific function to send thermal constraint to GMU */
 	void (*set_thermal_index)(struct kgsl_device *device);
+	/** @alloc_dcvs_profile_memory: Function ops for GMU based DCVS profile operations */
+	void (*alloc_dcvs_profile_memory)(struct kgsl_device *device,
+		struct kgsl_process_private *proc_priv);
 };
 
 struct kgsl_ioctl {
@@ -246,7 +272,11 @@ struct kgsl_device {
 	/** @skip_inline_submit: Track if user threads should make an inline submission or not */
 	bool skip_inline_submit;
 
+#if IS_ENABLED(CONFIG_QCOM_KGSL_RT_MUTEX)
+	struct rt_mutex mutex;
+#else
 	struct mutex mutex;
+#endif
 	uint32_t state;
 	uint32_t requested_state;
 
@@ -271,6 +301,7 @@ struct kgsl_device {
 	struct notifier_block panic_nb;
 	struct {
 		void *ptr;
+		dma_addr_t dma_handle;
 		u32 size;
 	} snapshot_memory_atomic;
 
@@ -315,6 +346,8 @@ struct kgsl_device {
 	rwlock_t event_groups_lock;
 	/** @speed_bin: Speed bin for the GPU device if applicable */
 	u32 speed_bin;
+	/** @debug_bus_bin: Debug bus bin for the GPU device if applicable */
+	u32 debug_bus_bin;
 	/** @soc_code: Identifier containing product and feature code */
 	u32 soc_code;
 	/** @gmu_fault: Set when a gmu or rgmu fault is encountered */
@@ -489,6 +522,20 @@ struct kgsl_context {
 		pid_nr((_c)->proc_priv->pid), ##args)
 
 /**
+ * struct kgsl_dcvs_profile_private - Private structure for a KGSL DCVS profile
+ * @gmu_registered: True if DCVS profile is registered with GMU
+ * @user_profile_registered: True if user DCVS IOCTL profile is received
+ * @md: Memory descriptor for the DCVS profile region
+ * @profile_mutex: Mutex lock to protect kgsl_dcvs_profile_private
+ */
+struct kgsl_dcvs_profile_private {
+	bool gmu_registered;
+	bool user_profile_registered;
+	struct kgsl_memdesc md;
+	struct mutex profile_mutex;
+};
+
+/**
  * struct kgsl_process_private -  Private structure for a KGSL process (across
  * all devices)
  * @priv: Internal flags, use KGSL_PROCESS_* values
@@ -573,6 +620,8 @@ struct kgsl_process_private {
 	u32 pf_count;
 	/** @pf_type_counts: Count of pagefaults of each type from this process */
 	u32 pf_type_counts[KGSL_IOMMU_PAGEFAULT_TYPES];
+	/** @profile: Container for the DCVS profile */
+	struct kgsl_dcvs_profile_private profile;
 };
 
 struct kgsl_device_private {

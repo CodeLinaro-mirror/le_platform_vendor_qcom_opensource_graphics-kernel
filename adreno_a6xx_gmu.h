@@ -18,7 +18,6 @@
  * @dump_mem: pointer to GMU debug dump memory
  * @gmu_log: gmu event log memory
  * @hfi: HFI controller
- * @clks: GPU subsystem clocks required for GMU functionality
  * @idle_level: Minimal GPU idle power level
  * @mailbox: Messages to AOP for ACD enable/disable go through this
  * @log_wptr_retention: Store the log wptr offset on slumber
@@ -33,14 +32,7 @@ struct a6xx_gmu_device {
 	/** @trace: gmu trace container */
 	struct kgsl_gmu_trace trace;
 	struct a6xx_hfi hfi;
-	struct clk_bulk_data *clks;
-	/** @num_clks: Number of entries in the @clks array */
-	int num_clks;
 	unsigned int idle_level;
-	/** @freqs: Array of GMU frequencies */
-	u32 freqs[GMU_MAX_PWRLEVELS];
-	/** @vlvls: Array of GMU voltage levels */
-	u32 vlvls[GMU_MAX_PWRLEVELS];
 	struct kgsl_mailbox mailbox;
 	bool preallocations;
 	unsigned int log_wptr_retention;
@@ -55,20 +47,11 @@ struct a6xx_gmu_device {
 	unsigned long flags;
 	/** @rscc_virt: Pointer where RSCC block is mapped */
 	void __iomem *rscc_virt;
-	/** @rdpm_cx_virt: Pointer where the RDPM CX block is mapped */
-	void __iomem *rdpm_cx_virt;
-	/** @rdpm_mx_virt: Pointer where the RDPM MX block is mapped */
-	void __iomem *rdpm_mx_virt;
 	/** @log_stream_enable: GMU log streaming enable. Disabled by default */
 	bool log_stream_enable;
 	/** @log_group_mask: Allows overriding default GMU log group mask */
 	u32 log_group_mask;
 	struct kobject log_kobj;
-	/*
-	 * @perf_ddr_bw: The lowest ddr bandwidth that puts CX at a corner at
-	 * which GMU can run at higher frequency.
-	 */
-	u32 perf_ddr_bw;
 	/** @num_oob_perfcntr: Number of active oob_perfcntr requests */
 	u32 num_oob_perfcntr;
 	/** @pdc_cfg_base: Base address of PDC cfg registers */
@@ -83,8 +66,6 @@ struct a6xx_gmu_device {
 	u32 stats_interval;
 	/** @stats_kobj: kernel object for GMU stats directory in sysfs */
 	struct kobject stats_kobj;
-	/** @cur_freq: Tracks current frequency for GMU */
-	u32 cur_freq;
 };
 
 /* Helper function to get to a6xx gmu device from adreno device */
@@ -367,15 +348,6 @@ void a6xx_load_rsc_ucode(struct adreno_device *adreno_dev);
 void a6xx_gmu_remove(struct kgsl_device *device);
 
 /**
- * a6xx_gmu_enable_clks - Enable gmu clocks
- * @adreno_dev: Pointer to the adreno device
- * @level: GMU frequency level
- *
- * Return: 0 on success or negative error on failure
- */
-int a6xx_gmu_enable_clks(struct adreno_device *adreno_dev, u32 level);
-
-/**
  * a6xx_gmu_handle_watchdog - Handle watchdog interrupt
  * @adreno_dev: Pointer to the adreno device
  */
@@ -395,14 +367,5 @@ void a6xx_gmu_send_nmi(struct kgsl_device *device, bool force,
  * @adreno_dev: Pointer to the adreno device
  */
 int a6xx_gmu_add_to_minidump(struct adreno_device *adreno_dev);
-
-/**
- * a6xx_gmu_clock_set_rate - Set the gmu clock rate
- * @adreno_dev: Handle to the adreno device
- * @req_freq: Requested freq to set gmu to
- *
- * Returns 0 on success or error on clock set rate failure
- */
-int a6xx_gmu_clock_set_rate(struct adreno_device *adreno_dev, u32 req_freq);
 
 #endif

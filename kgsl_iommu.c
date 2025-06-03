@@ -7,7 +7,6 @@
 #include <linux/bitfield.h>
 #include <linux/compat.h>
 #include <linux/io.h>
-#include <linux/iopoll.h>
 #include <linux/of_device.h>
 #include <linux/of_platform.h>
 #include <linux/scatterlist.h>
@@ -1185,7 +1184,7 @@ static bool kgsl_iommu_check_stall_on_fault(struct kgsl_iommu_context *ctx,
 	if (ctx->stalled_on_fault)
 		return false;
 
-	if (!mutex_trylock(&device->mutex))
+	if (!kgsl_mutex_trylock(&device->mutex))
 		return true;
 
 	/*
@@ -1197,7 +1196,7 @@ static bool kgsl_iommu_check_stall_on_fault(struct kgsl_iommu_context *ctx,
 	else
 		kgsl_pwrctrl_change_state(device, KGSL_STATE_AWARE);
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 	return true;
 }
 
@@ -2504,6 +2503,18 @@ static bool kgsl_iommu_addr_in_range(struct kgsl_pagetable *pagetable,
 	return false;
 }
 
+#if (KERNEL_VERSION(6, 13, 0) <= LINUX_VERSION_CODE)
+static struct iommu_domain *kgsl_iommu_domain_alloc(struct device *dev)
+{
+	return iommu_paging_domain_alloc(dev);
+}
+#else
+static struct iommu_domain *kgsl_iommu_domain_alloc(struct device *dev)
+{
+	return iommu_domain_alloc(&platform_bus_type);
+}
+#endif
+
 static int kgsl_iommu_setup_context(struct kgsl_mmu *mmu,
 		struct device_node *parent,
 		struct kgsl_iommu_context *context, const char *name,
@@ -2534,7 +2545,7 @@ static int kgsl_iommu_setup_context(struct kgsl_mmu *mmu,
 	dev_set_drvdata(&pdev->dev, &context->adreno_smmu);
 
 	/* Create a new context */
-	context->domain = iommu_domain_alloc(&platform_bus_type);
+	context->domain = kgsl_iommu_domain_alloc(&context->pdev->dev);
 	if (!context->domain) {
 		/*FIXME: Put back the pdev here? */
 		return -ENODEV;
@@ -2678,7 +2689,7 @@ static int iommu_probe_secure_context(struct kgsl_device *device,
 	context->pdev = pdev;
 	ratelimit_default_init(&context->ratelimit);
 
-	context->domain = iommu_domain_alloc(&platform_bus_type);
+	context->domain = kgsl_iommu_domain_alloc(&context->pdev->dev);
 	if (!context->domain) {
 		/* FIXME: put away the device */
 		return -ENODEV;

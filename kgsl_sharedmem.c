@@ -8,7 +8,6 @@
 #include <linux/of_platform.h>
 #include <linux/highmem.h>
 #include <linux/slab.h>
-#include <linux/random.h>
 #include <linux/shmem_fs.h>
 #include <linux/sched/signal.h>
 #include <linux/version.h>
@@ -1091,7 +1090,8 @@ static int kgsl_shmem_alloc_pages(struct kgsl_memdesc *memdesc)
 	return count;
 }
 
-#if (KERNEL_VERSION(6, 12, 18) <= LINUX_VERSION_CODE)
+#if ((KERNEL_VERSION(6, 12, 18) <= LINUX_VERSION_CODE) && \
+	(KERNEL_VERSION(6, 13, 0) > LINUX_VERSION_CODE))
 static void kgsl_shmem_fill_page(void *ptr,
 	struct shmem_inode_info *inode, struct folio **folio, int order)
 {
@@ -1212,6 +1212,11 @@ static void _kgsl_free_pages(struct kgsl_memdesc *memdesc)
 		if (memdesc->pages[i])
 			put_page(memdesc->pages[i]);
 
+	memdesc->page_count = 0;
+	kvfree(memdesc->pages);
+
+	memdesc->pages = NULL;
+
 	SHMEM_I(memdesc->shmem_filp->f_mapping->host)->android_vendor_data1 = 0;
 	fput(memdesc->shmem_filp);
 }
@@ -1252,6 +1257,11 @@ static void kgsl_free_page(struct page *p)
 static void _kgsl_free_pages(struct kgsl_memdesc *memdesc)
 {
 	kgsl_pool_free_pages(memdesc->pages, memdesc->page_count);
+
+	memdesc->page_count = 0;
+	kvfree(memdesc->pages);
+
+	memdesc->pages = NULL;
 }
 
 static u32 kgsl_get_page_order(struct page *page)
@@ -1406,10 +1416,6 @@ static void kgsl_free_pages(struct kgsl_memdesc *memdesc)
 
 	_kgsl_free_pages(memdesc);
 
-	memdesc->page_count = 0;
-	kvfree(memdesc->pages);
-
-	memdesc->pages = NULL;
 }
 
 static void kgsl_free_system_pages(struct kgsl_memdesc *memdesc)
@@ -1713,16 +1719,16 @@ static int kgsl_alloc_secure_pages(struct kgsl_device *device,
 
 	sgt = kzalloc(sizeof(*sgt), GFP_KERNEL);
 	if (!sgt) {
+		memdesc->pages = pages;
 		_kgsl_free_pages(memdesc);
-		kvfree(pages);
 		return -ENOMEM;
 	}
 
 	ret = sg_alloc_table_from_pages(sgt, pages, count, 0, size, GFP_KERNEL);
 	if (ret) {
 		kfree(sgt);
+		memdesc->pages = pages;
 		_kgsl_free_pages(memdesc);
-		kvfree(pages);
 		return ret;
 	}
 
@@ -1941,7 +1947,7 @@ struct kgsl_memdesc *kgsl_alloc_map_gpu_global(struct kgsl_device *device,
 	int ret;
 	struct kgsl_global_memdesc *md;
 
-	if (WARN_ON(!mutex_is_locked(&device->mutex)))
+	if (WARN_ON(!kgsl_mutex_is_locked(&device->mutex)))
 		return ERR_PTR(-EINVAL);
 
 	md = kzalloc(sizeof(*md), GFP_KERNEL);
@@ -1984,7 +1990,7 @@ struct kgsl_memdesc *kgsl_alloc_map_gpu_global(struct kgsl_device *device,
 int kgsl_get_global_gpuaddr(struct kgsl_device *device, struct kgsl_memdesc *memdesc,
 	u64 size, u64 flags, u32 priv)
 {
-	if (WARN_ON(!mutex_is_locked(&device->mutex)))
+	if (WARN_ON(!kgsl_mutex_is_locked(&device->mutex)))
 		return -EINVAL;
 
 	if (!size || size > UINT_MAX)

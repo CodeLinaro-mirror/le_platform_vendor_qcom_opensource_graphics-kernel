@@ -13,7 +13,6 @@
 #include "kgsl_bus.h"
 #include "kgsl_eventlog.h"
 #include "kgsl_gmu_core.h"
-#include "kgsl_timeline.h"
 
 #define DRAWQUEUE_NEXT(_i, _s) (((_i) + 1) % (_s))
 
@@ -466,7 +465,7 @@ static int sendcmd(struct adreno_device *adreno_dev,
 	int is_current_rt = rt_task(current);
 	int nice = task_nice(current);
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	/* Elevating thread’s priority to avoid context switch with holding device mutex */
 	if (!is_current_rt)
@@ -581,7 +580,7 @@ static int sendcmd(struct adreno_device *adreno_dev,
 	if (!is_current_rt)
 		sched_set_normal(current, nice);
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 
 	cmdobj->submit_ticks = time.ticks;
 
@@ -610,7 +609,7 @@ static int sendcmd(struct adreno_device *adreno_dev,
 err:
 	if (!is_current_rt)
 		sched_set_normal(current, nice);
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 	return ret;
 }
 
@@ -838,11 +837,11 @@ static void _dispatcher_update_timers(struct adreno_device *adreno_dev)
 	struct adreno_dispatcher *dispatcher = &adreno_dev->dispatcher;
 
 	/* Kick the idle timer */
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 	kgsl_pwrscale_update(device);
 	process_rt_bus_hint(device, false);
 	kgsl_start_idle_timer(device);
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 
 	/* Check to see if we need to update the command timer */
 	if (adreno_in_preempt_state(adreno_dev, ADRENO_PREEMPT_NONE)) {
@@ -894,7 +893,7 @@ static void adreno_dispatcher_issuecmds(struct adreno_device *adreno_dev)
 
 	mutex_unlock(&dispatcher->mutex);
 	_decrement_submit_now(device);
-
+	return;
 done:
 	adreno_scheduler_queue(adreno_dev);
 }
@@ -1461,10 +1460,10 @@ static void remove_invalidated_cmdobjs(struct kgsl_device *device,
 		if (kgsl_context_is_bad(drawobj->context)) {
 			replay[i] = NULL;
 
-			mutex_lock(&device->mutex);
+			kgsl_mutex_lock(&device->mutex);
 			kgsl_cancel_events_timestamp(device,
 				&drawobj->context->events, drawobj->timestamp);
-			mutex_unlock(&device->mutex);
+			kgsl_mutex_unlock(&device->mutex);
 
 			kgsl_drawobj_destroy(drawobj);
 		}
@@ -1924,14 +1923,14 @@ static int dispatcher_do_fault(struct adreno_device *adreno_dev)
 		return 1;
 	}
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	/*
 	 * In the very unlikely case that the power is off, do nothing - the
 	 * state will be reset on power up and everybody will be happy
 	 */
 	if (!kgsl_state_is_awake(device)) {
-		mutex_unlock(&device->mutex);
+		kgsl_mutex_unlock(&device->mutex);
 		mutex_unlock(&adreno_dev->fault_recovery_mutex);
 		return 0;
 	}
@@ -1955,7 +1954,7 @@ static int dispatcher_do_fault(struct adreno_device *adreno_dev)
 	 */
 	if (!(fault & ADRENO_IOMMU_STALL_ON_PAGE_FAULT) && gx_on) {
 		if (adreno_smmu_is_stalled(adreno_dev)) {
-			mutex_unlock(&device->mutex);
+			kgsl_mutex_unlock(&device->mutex);
 			mutex_unlock(&adreno_dev->fault_recovery_mutex);
 			dev_err(device->dev,
 				"SMMU is stalled without a pagefault\n");
@@ -2068,7 +2067,7 @@ static int dispatcher_do_fault(struct adreno_device *adreno_dev)
 	/* if any other fault got in until reset then ignore */
 	adreno_clear_gpu_fault(adreno_dev);
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 
 	mutex_unlock(&adreno_dev->fault_recovery_mutex);
 
@@ -2310,7 +2309,7 @@ static void _dispatcher_power_down(struct adreno_device *adreno_dev)
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct adreno_dispatcher *dispatcher = &adreno_dev->dispatcher;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	if (test_and_clear_bit(ADRENO_DISPATCHER_ACTIVE, &dispatcher->priv))
 		complete_all(&dispatcher->idle_gate);
@@ -2322,7 +2321,7 @@ static void _dispatcher_power_down(struct adreno_device *adreno_dev)
 		clear_bit(ADRENO_DISPATCHER_POWER, &dispatcher->priv);
 	}
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 }
 
 static void adreno_dispatcher_work(struct kthread_work *work)
@@ -2787,7 +2786,7 @@ int adreno_dispatcher_idle(struct adreno_device *adreno_dev)
 
 	adreno_get_gpu_halt(adreno_dev);
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 
 	/*
 	 * Flush the worker to make sure all executing
@@ -2814,7 +2813,7 @@ int adreno_dispatcher_idle(struct adreno_device *adreno_dev)
 			ret = -EDEADLK;
 	}
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 	adreno_put_gpu_halt(adreno_dev);
 	/*
 	 * requeue dispatcher work to resubmit pending commands

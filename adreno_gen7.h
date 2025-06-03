@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _ADRENO_GEN7_H_
@@ -481,24 +481,6 @@ void gen7_reset_preempt_records(struct adreno_device *adreno_dev);
  * Program AHB control registers to enable AHB timeout detection.
  */
 void gen7_enable_ahb_timeout_detection(struct adreno_device *adreno_dev);
-
-/**
- * gen7_rdpm_mx_freq_update - Update the mx frequency
- * @gmu: An Adreno GMU handle
- * @freq: Frequency in KHz
- *
- * This function communicates GPU mx frequency(in Mhz) changes to rdpm.
- */
-void gen7_rdpm_mx_freq_update(struct gen7_gmu_device *gmu, u32 freq);
-
-/**
- * gen7_rdpm_cx_freq_update - Update the cx frequency
- * @gmu: An Adreno GMU handle
- * @freq: Frequency in KHz
- *
- * This function communicates GPU cx frequency(in Mhz) changes to rdpm.
- */
-void gen7_rdpm_cx_freq_update(struct gen7_gmu_device *gmu, u32 freq);
 
 /**
  * gen7_scm_gpu_init_cx_regs - Program gpu regs for feature support

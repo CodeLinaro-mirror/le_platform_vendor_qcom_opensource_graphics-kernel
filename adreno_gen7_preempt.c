@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include "adreno.h"
@@ -171,12 +171,12 @@ static void _gen7_preemption_worker(struct work_struct *work)
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
 	/* Need to take the mutex to make sure that the power stays on */
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	if (adreno_in_preempt_state(adreno_dev, ADRENO_PREEMPT_FAULTED))
 		_gen7_preemption_fault(adreno_dev);
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 }
 
 /* Find the highest priority active ringbuffer */
@@ -506,14 +506,14 @@ void gen7_preemption_schedule(struct adreno_device *adreno_dev)
 	if (!adreno_is_preemption_enabled(adreno_dev))
 		return;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	if (adreno_in_preempt_state(adreno_dev, ADRENO_PREEMPT_COMPLETE))
 		_gen7_preemption_done(adreno_dev);
 
 	gen7_preemption_trigger(adreno_dev, false);
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 }
 
 u32 gen7_preemption_pre_ibsubmit(struct adreno_device *adreno_dev,

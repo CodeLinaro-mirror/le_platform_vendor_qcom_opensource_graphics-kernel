@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef __ADRENO_GEN8_HFI_H
@@ -183,6 +183,14 @@ int gen8_hfi_send_generic_req_v5(struct adreno_device *adreno_dev, void *cmd,
  * Return: 0 on success or negative error on failure
  */
 int gen8_hfi_send_bcl_feature_ctrl(struct adreno_device *adreno_dev);
+
+/**
+ * gen8_hfi_send_minbw_feature_ctrl - Send the minbw feature hfi packet
+ * @adreno_dev: Pointer to the adreno device
+ *
+ * Return: 0 on success or negative error on failure
+ */
+int gen8_hfi_send_minbw_feature_ctrl(struct adreno_device *adreno_dev);
 
 /**
  * gen8_hfi_send_clx_feature_ctrl - Send the clx feature hfi packet

@@ -255,6 +255,8 @@ struct gen8_cp_smmu_info {
 #define GEN8_CP_CTXRECORD_SIZE_IN_BYTES		(13536 * SZ_1K)
 /* Size of preemption record to be dumped in snapshot */
 #define GEN8_SNAPSHOT_CTXRECORD_SIZE_IN_BYTES	(128 * 1024)
+/* Size of AQE context record */
+#define GEN8_CP_AQE_CTXRECORD_SIZE_IN_BYTES	(16 * 1024)
 /* Size of the performance counter save/restore block (in bytes) */
 #define GEN8_CP_PERFCOUNTER_SAVE_RESTORE_SIZE	(4 * 1024)
 
@@ -548,24 +550,6 @@ to_gen8_gpudev(const struct adreno_gpudev *gpudev)
 void gen8_reset_preempt_records(struct adreno_device *adreno_dev);
 
 /**
- * gen8_rdpm_mx_freq_update - Update the mx frequency
- * @gmu: An Adreno GMU handle
- * @freq: Frequency in KHz
- *
- * This function communicates GPU mx frequency(in Mhz) changes to rdpm.
- */
-void gen8_rdpm_mx_freq_update(struct gen8_gmu_device *gmu, u32 freq);
-
-/**
- * gen8_rdpm_cx_freq_update - Update the cx frequency
- * @gmu: An Adreno GMU handle
- * @freq: Frequency in KHz
- *
- * This function communicates GPU cx frequency(in Mhz) changes to rdpm.
- */
-void gen8_rdpm_cx_freq_update(struct gen8_gmu_device *gmu, u32 freq);
-
-/**
  * gen8_scm_gpu_init_cx_regs - Program gpu regs for feature support
  * @adreno_dev: Handle to the adreno device
  *
@@ -655,6 +639,23 @@ void gen8_periph_regread(struct kgsl_device *device, u32 offsetwords,
 void gen8_host_aperture_set(struct adreno_device *adreno_dev, u32 pipe_id,
 		u32 slice_id, u32 use_slice_id);
 
+/**
+ * gen8_set_gmem_protect - Program the RB_GC_GMEM_PROTECT
+ * @adreno_dev: Handle to the adreno device
+ *
+ * This function programs RB_GC_GMEM_PROTECT register
+ */
+void gen8_set_gmem_protect(struct adreno_device *adreno_dev);
+
+/**
+ * gen8_patch_pwrup_reglist - Patch power-up register list
+ * @adreno_dev: Handle to the adreno device
+ *
+ * This function patches the power-up register list for Adreno Gen8 GPUs.
+ * It writes the offset and current value of each register into the a buffer.
+ */
+void gen8_patch_pwrup_reglist(struct adreno_device *adreno_dev);
+
 #if IS_ENABLED(CONFIG_QCOM_KGSL_CORESIGHT)
 void gen8_coresight_init(struct adreno_device *device);
 #else
@@ -712,5 +713,28 @@ static inline u32 gen8_get_num_slices(struct adreno_device *adreno_dev)
 }
 
 u32 gen8_get_gmem_size(struct adreno_device *adreno_dev);
+
+/**
+ * gen8_populate_ctxt_record_size - Populate the context record size for Gen8 devices
+ * @adreno_dev: Pointer to the adreno device structure
+ *
+ * This function populates the total context record size and AQE context record size
+ * for Gen8 devices.
+ */
+static inline void gen8_populate_ctxt_record_size(struct adreno_device *adreno_dev)
+{
+	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
+	int ret;
+
+	ret = adreno_populate_ctxt_record_size(adreno_dev);
+	if (ret) {
+		adreno_dev->total_ctxt_record_sz = gen8_core->ctxt_record_size ?
+			gen8_core->ctxt_record_size : GEN8_CP_CTXRECORD_SIZE_IN_BYTES;
+		adreno_dev->aqe_ctxt_record_sz = GEN8_CP_AQE_CTXRECORD_SIZE_IN_BYTES;
+	}
+
+	adreno_dev->total_ctxt_record_sz = PAGE_ALIGN(adreno_dev->total_ctxt_record_sz);
+	adreno_dev->aqe_ctxt_record_sz = PAGE_ALIGN(adreno_dev->aqe_ctxt_record_sz);
+}
 
 #endif

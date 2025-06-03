@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include "adreno.h"
@@ -171,12 +171,12 @@ static void _gen8_preemption_worker(struct work_struct *work)
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
 	/* Need to take the mutex to make sure that the power stays on */
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	if (adreno_in_preempt_state(adreno_dev, ADRENO_PREEMPT_FAULTED))
 		_gen8_preemption_fault(adreno_dev);
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 }
 
 /* Find the highest priority active ringbuffer */
@@ -508,14 +508,14 @@ void gen8_preemption_schedule(struct adreno_device *adreno_dev)
 	if (!adreno_is_preemption_enabled(adreno_dev))
 		return;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	if (adreno_in_preempt_state(adreno_dev, ADRENO_PREEMPT_COMPLETE))
 		_gen8_preemption_done(adreno_dev);
 
 	gen8_preemption_trigger(adreno_dev, false);
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 }
 
 u32 gen8_preemption_pre_ibsubmit(struct adreno_device *adreno_dev,
@@ -677,12 +677,8 @@ static int gen8_preemption_ringbuffer_init(struct adreno_device *adreno_dev,
 	struct adreno_ringbuffer *rb)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
-	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
-	u64 ctxt_record_size = GEN8_CP_CTXRECORD_SIZE_IN_BYTES;
+	u64 ctxt_record_size = adreno_dev->total_ctxt_record_sz;
 	int ret;
-
-	if (gen8_core->ctxt_record_size)
-		ctxt_record_size = gen8_core->ctxt_record_size;
 
 	/*
 	 * Since RB0 always runs to completion, there is no need to

@@ -687,6 +687,25 @@ err_clk_put:
 	clk_put(clk);
 }
 
+static size_t gen8_snapshot_slice_mask(struct kgsl_device *device, u8 *buf,
+		size_t remain, void *priv)
+{
+	struct kgsl_snapshot_debug *header = (struct kgsl_snapshot_debug *)buf;
+	u32 *data = (u32 *)(buf + sizeof(*header));
+
+	if (remain < DEBUG_SECTION_SZ(1)) {
+		SNAPSHOT_ERR_NOMEM(device, "SLICE MASK DEBUG");
+		return 0;
+	}
+
+	/* Dump the slice information */
+	header->type = SNAPSHOT_DEBUG_SLICE_MASK;
+	header->size = 1;
+	*data = gen8_get_slice_mask(ADRENO_DEVICE(device));
+
+	return DEBUG_SECTION_SZ(1);
+}
+
 static bool gen8_snapshot_shader(struct kgsl_device *device,
 				struct kgsl_snapshot *snapshot)
 {
@@ -695,7 +714,7 @@ static bool gen8_snapshot_shader(struct kgsl_device *device,
 	u32 offset = 0;
 	struct gen8_shader_block *shader_blocks = gen8_snapshot_block_list->shader_blocks;
 	size_t num_shader_blocks = gen8_snapshot_block_list->num_shader_blocks;
-	u32 i, sp, usptp, ctxt, slice;
+	u32 i, sp, ctxt, slice;
 	u32 slice_mask = gen8_get_slice_mask(ADRENO_DEVICE(device));
 
 	if (!CD_SCRIPT_CHECK(device))
@@ -706,21 +725,19 @@ static bool gen8_snapshot_shader(struct kgsl_device *device,
 
 		FOR_EACH_SLICE(slice, block->slice_region, slice_mask) {
 			for (sp = 0; sp < block->num_sps; sp++) {
-				for (usptp = 0; usptp < block->num_usptps; usptp++) {
-					for (ctxt = 0; ctxt < block->num_ctx; ctxt++) {
-						info.block = block;
-						info.sp_id = sp;
-						info.usptp = usptp;
-						info.slice_id = slice;
-						info.offset = offset;
-						info.context_id = ctxt;
-						offset += block->size << 2;
+				for (ctxt = 0; ctxt < block->num_ctx; ctxt++) {
+					info.block = block;
+					info.sp_id = sp;
+					info.usptp = block->usptp_id;
+					info.slice_id = slice;
+					info.offset = offset;
+					info.context_id = ctxt;
+					offset += block->size << 2;
 
-						/* Shader working/shadow memory */
-						kgsl_snapshot_add_section(device,
-							KGSL_SNAPSHOT_SECTION_SHADER_V3, snapshot,
-							gen8_legacy_snapshot_shader, &info);
-					}
+					/* Shader working/shadow memory */
+					kgsl_snapshot_add_section(device,
+						KGSL_SNAPSHOT_SECTION_SHADER_V3, snapshot,
+						gen8_legacy_snapshot_shader, &info);
 				}
 			}
 		}
@@ -737,20 +754,18 @@ crashdumper:
 
 		FOR_EACH_SLICE(slice, block->slice_region, slice_mask) {
 			for (sp = 0; sp < block->num_sps; sp++) {
-				for (usptp = 0; usptp < block->num_usptps; usptp++) {
-					for (ctxt = 0; ctxt < block->num_ctx; ctxt++) {
-						/* Program the aperture */
-						ptr += CD_WRITE(ptr, GEN8_SP_READ_SEL,
-							GEN8_SP_READ_SEL_VAL(ctxt, slice,
-							block->location, block->pipeid,
-							block->statetype, usptp, sp));
+				for (ctxt = 0; ctxt < block->num_ctx; ctxt++) {
+					/* Program the aperture */
+					ptr += CD_WRITE(ptr, GEN8_SP_READ_SEL,
+						GEN8_SP_READ_SEL_VAL(ctxt, slice,
+						block->location, block->pipeid,
+						block->statetype, block->usptp_id, sp));
 
-						/* Read all the data in one chunk */
-						ptr += CD_READ(ptr, GEN8_SP_AHB_READ_APERTURE,
-							block->size,
-							gen8_crashdump_registers->gpuaddr + offset);
-						offset += block->size << 2;
-					}
+					/* Read all the data in one chunk */
+					ptr += CD_READ(ptr, GEN8_SP_AHB_READ_APERTURE,
+						block->size,
+						gen8_crashdump_registers->gpuaddr + offset);
+					offset += block->size << 2;
 				}
 			}
 		}
@@ -764,21 +779,19 @@ crashdumper:
 		offset = 0;
 		FOR_EACH_SLICE(slice, block->slice_region, slice_mask) {
 			for (sp = 0; sp < block->num_sps; sp++) {
-				for (usptp = 0; usptp < block->num_usptps; usptp++) {
-					for (ctxt = 0; ctxt < block->num_ctx; ctxt++) {
-						info.block = block;
-						info.sp_id = sp;
-						info.usptp = usptp;
-						info.slice_id = slice;
-						info.offset = offset;
-						info.context_id = ctxt;
-						offset += block->size << 2;
+				for (ctxt = 0; ctxt < block->num_ctx; ctxt++) {
+					info.block = block;
+					info.sp_id = sp;
+					info.usptp = block->usptp_id;
+					info.slice_id = slice;
+					info.offset = offset;
+					info.context_id = ctxt;
+					offset += block->size << 2;
 
-						/* Shader working/shadow memory */
-						kgsl_snapshot_add_section(device,
-						KGSL_SNAPSHOT_SECTION_SHADER_V3, snapshot,
-						gen8_snapshot_shader_memory, &info);
-					}
+					/* Shader working/shadow memory */
+					kgsl_snapshot_add_section(device,
+					KGSL_SNAPSHOT_SECTION_SHADER_V3, snapshot,
+					gen8_snapshot_shader_memory, &info);
 				}
 			}
 		}
@@ -1205,6 +1218,57 @@ static bool gen8_snapshot_mvc_regs(struct kgsl_device *device,
 	return true;
 }
 
+static void gen8_debugbus_internal_read_setup(struct kgsl_device *device)
+{
+	/* Clear the DBGC logic/events */
+	kgsl_regwrite(device, GEN8_CX_DBGC_CFG_DBGBUS_CNTLM, 0x70000000);
+
+	/* Enable the internal buffer mode and program to tail mode */
+	kgsl_regwrite(device, GEN8_CX_DBGC_CFG_DBGBUS_OPL, 0x28000000);
+
+	/* Program the logic unit 0 to high when the side data is 1 */
+	kgsl_regwrite(device, GEN8_CX_DBGC_CFG_DBGBUS_BYTEL_0, 0x0000000c);
+	kgsl_regwrite(device, GEN8_CX_DBGC_CFG_DBGBUS_MASKL_0, 0x000000f0);
+
+	/* Enable the DBGC logic/events */
+	kgsl_regwrite(device, GEN8_CX_DBGC_CFG_DBGBUS_CNTLM, 0x07000000);
+}
+
+static void gen8_cx_gc_us_i_0_debugbus_read(struct kgsl_device *device,
+	u32 block_id, u32 index, u32 *val)
+{
+	u32 reg_val;
+
+	reg_val = FIELD_PREP(GENMASK(7, 0), index) |
+		FIELD_PREP(GENMASK(24, 16), block_id);
+
+	kgsl_regwrite(device, GEN8_CX_DBGC_CFG_DBGBUS_SEL_A, reg_val);
+	kgsl_regwrite(device, GEN8_CX_DBGC_CFG_DBGBUS_SEL_B, reg_val);
+	kgsl_regwrite(device, GEN8_CX_DBGC_CFG_DBGBUS_SEL_C, reg_val);
+	kgsl_regwrite(device, GEN8_CX_DBGC_CFG_DBGBUS_SEL_D, reg_val);
+
+	udelay(1);
+
+	/*
+	 * Select lower 32 bits of internal buffer data for internal mux[1:0]
+	 * DBGC_CFG_DBGBUS_IDX.internalIndex0 = 24 (0x18)
+	 * DBGC_CFG_DBGBUS_IDX.internalIndex1 = 25 (0x19)
+	 */
+	kgsl_regwrite(device, GEN8_CX_DBGC_CFG_DBGBUS_IDX, 0x00001918);
+	udelay(1);
+	kgsl_regread(device, GEN8_CX_DBGC_CFG_DBGBUS_TRACE_BUF3, val);
+	val++;
+
+	/*
+	 * Select upper 32 bits of internal buffer data for internal mux[1:0]
+	 * DBGC_CFG_DBGBUS_IDX.internalIndex0 = 26 (0x1a)
+	 * DBGC_CFG_DBGBUS_IDX.internalIndex1 = 27 (0x1b)
+	 */
+	kgsl_regwrite(device, GEN8_CX_DBGC_CFG_DBGBUS_IDX, 0x00001a1b);
+	udelay(1);
+	kgsl_regread(device, GEN8_CX_DBGC_CFG_DBGBUS_TRACE_BUF3, val);
+}
+
 /* gen8_dbgc_debug_bus_read() - Read data from trace bus */
 static void gen8_dbgc_debug_bus_read(struct kgsl_device *device,
 	u32 block_id, u32 index, u32 *val)
@@ -1324,6 +1388,9 @@ static void gen8_cx_debug_bus_read(struct kgsl_device *device,
 	kgsl_regread(device, GEN8_CX_DBGC_CFG_DBGBUS_TRACE_BUF1, val);
 }
 
+#define GEN8_DEBUGBUS_BLOCK_IDX_1 128
+#define GEN8_DEBUGBUS_BLOCK_IDX_2 192
+
 /*
  * gen8_snapshot_cx_dbgc_debugbus_block() - Capture debug data for a gpu
  * block from the CX DBGC block
@@ -1345,8 +1412,19 @@ static size_t gen8_snapshot_cx_dbgc_debugbus_block(struct kgsl_device *device,
 	header->id = *block;
 	header->count = GEN8_DEBUGBUS_BLOCK_SIZE * 2;
 
-	for (i = 0; i < GEN8_DEBUGBUS_BLOCK_SIZE; i++)
-		gen8_cx_debug_bus_read(device, *block, i, &data[i*2]);
+	/* This block requires an out of order access due to a HW limitation */
+	if (*block == DEBUGBUS_CX_GC_US_I_0) {
+		gen8_debugbus_internal_read_setup(device);
+		for (i = 0; i < GEN8_DEBUGBUS_BLOCK_IDX_1; i++)
+			gen8_cx_gc_us_i_0_debugbus_read(device, *block, i, &data[i * 2]);
+		for (i = GEN8_DEBUGBUS_BLOCK_IDX_2; i < GEN8_DEBUGBUS_BLOCK_SIZE; i++)
+			gen8_cx_gc_us_i_0_debugbus_read(device, *block, i, &data[i * 2]);
+		for (i = GEN8_DEBUGBUS_BLOCK_IDX_1; i < GEN8_DEBUGBUS_BLOCK_IDX_2; i++)
+			gen8_cx_gc_us_i_0_debugbus_read(device, *block, i, &data[i * 2]);
+	} else {
+		for (i = 0; i < GEN8_DEBUGBUS_BLOCK_SIZE; i++)
+			gen8_cx_debug_bus_read(device, *block, i, &data[i * 2]);
+	}
 
 	return GEN8_DEBUGBUS_SECTION_SIZE;
 }
@@ -1408,6 +1486,9 @@ static void gen8_snapshot_cx_debugbus(struct adreno_device *adreno_dev,
 	u32 i;
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
+	if (device->debug_bus_bin)
+		return;
+
 	kgsl_regwrite(device, GEN8_CX_DBGC_CFG_DBGBUS_CNTLT,
 			FIELD_PREP(GENMASK(31, 28), 0xf));
 
@@ -1463,6 +1544,9 @@ static void gen8_snapshot_debugbus(struct adreno_device *adreno_dev,
 {
 	u32 i;
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+
+	if (device->debug_bus_bin)
+		return;
 
 	kgsl_regwrite(device, GEN8_DBGC_CFG_DBGBUS_CNTLT,
 			FIELD_PREP(GENMASK(31, 28), 0xf));
@@ -1715,6 +1799,9 @@ void gen8_snapshot(struct adreno_device *adreno_dev,
 		if (!gen8_cx_misc_regs_snapshot(device, snapshot))
 			return;
 	}
+
+	kgsl_snapshot_add_section(device, KGSL_SNAPSHOT_SECTION_DEBUG,
+		snapshot, gen8_snapshot_slice_mask, NULL);
 
 	gen8_snapshot_cx_debugbus(adreno_dev, snapshot);
 

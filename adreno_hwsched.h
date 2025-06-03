@@ -93,12 +93,24 @@ struct adreno_hwsched_ops {
 	 */
 	void (*create_hw_fence)(struct adreno_device *adreno_dev,
 		struct kgsl_sync_fence *kfence);
+	/**
+	 * @set_dcvs_profile - Set dcvs profile for a process
+	 */
+	int (*set_dcvs_profile)(struct adreno_device *adreno_dev,
+		struct kgsl_process_private *proc_priv);
 };
 
 enum gpu_reset_type {
 	GMU_GPU_RESET_NONE,
 	GMU_GPU_SOFT_RESET,
 	GMU_GPU_HARD_RESET,
+};
+
+struct adreno_dcvs_tunable {
+	/** @value: Stores the requested value for the tunable **/
+	u32 value;
+	/** @update: True if this value needs to be sent to GMU at slumber exit **/
+	bool update;
 };
 
 /**
@@ -167,6 +179,12 @@ struct adreno_hwsched {
 	 * preemption records. No gmem buffer needed for rb0 preemption record.
 	 */
 	struct kgsl_memdesc *secure_preempt_rec_gmem[KGSL_PRIORITY_MAX_RB_LEVELS - 1];
+	/** @dcvs_param_update: True if dcvs params have to be sent to GMU at slumber exit */
+	bool dcvs_param_update;
+	/** @dcvs_kobj: Kobj for dcvs params **/
+	struct kobject dcvs_kobj;
+	/** @dcvs_tunables: Tuning parameters for GMU based DCVS **/
+	struct adreno_dcvs_tunable dcvs_tunables[GPU_TUNING_KEY_MAX];
 };
 
 /*
@@ -440,8 +458,9 @@ void *adreno_hwsched_get_rb_hostptr(struct adreno_device *adreno_dev,
  * adreno_hwsched_reset_hfi_mem - Reset HFI memory records
  * @adreno_dev: Pointer to the adreno device
  *
- * This function resets the HFI memory records. It iterates through the memory
- * allocation table and resets the entries that have HFI_MEMFLAG_HOST_INIT set.
+ * GMU expects hfi memory records to be clear during bootup. This function
+ * iterates through the memory allocation table and resets entries with
+ * HFI_MEMFLAG_HOST_INIT set.
  */
 void adreno_hwsched_reset_hfi_mem(struct adreno_device *adreno_dev);
 

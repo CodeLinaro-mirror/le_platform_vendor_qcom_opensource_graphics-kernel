@@ -1348,6 +1348,9 @@ static void gen7_snapshot_debugbus(struct adreno_device *adreno_dev,
 	int i;
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
+	if (device->debug_bus_bin)
+		return;
+
 	kgsl_regwrite(device, GEN7_DBGC_CFG_DBGBUS_CNTLT,
 			FIELD_PREP(GENMASK(31, 28), 0xf));
 

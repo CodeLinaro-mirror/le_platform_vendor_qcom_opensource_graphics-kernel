@@ -9,8 +9,6 @@
 #include <linux/of.h>
 #include <linux/of_fdt.h>
 #include <linux/of_device.h>
-#include <linux/regulator/consumer.h>
-#include <linux/soc/qcom/llcc-qcom.h>
 #include <soc/qcom/of_common.h>
 
 #include "adreno.h"
@@ -513,6 +511,7 @@ static const struct gen8_pwrup_extlist gen8_2_0_pwrup_extlist[] = {
 	{ GEN8_PC_CONTEXT_SWITCH_STABILIZE_CNTL_1, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_VIS_STREAM_CNTL, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_RB_CCU_CNTL, BIT(PIPE_BR) },
+	{ GEN8_RB_CCU_DBG_ECO_CNTL, BIT(PIPE_BR)},
 	{ GEN8_RB_CCU_NC_MODE_CNTL, BIT(PIPE_BR) },
 	{ GEN8_RB_CMP_NC_MODE_CNTL, BIT(PIPE_BR) },
 	{ GEN8_RB_RBP_CNTL, BIT(PIPE_BV) | BIT(PIPE_BR) },
@@ -565,6 +564,10 @@ static const struct gen8_pwrup_extlist gen8_3_0_pwrup_extlist[] = {
 
 struct gen8_nonctxt_overrides gen8_nc_overrides[] = {
 	{ GEN8_CP_RESERVED_REG_0, BIT(PIPE_NONE), 0, 0, 1, },
+	{ GEN8_CP_CHICKEN_DBG_PIPE, BIT(PIPE_BV) | BIT(PIPE_BR) | BIT(PIPE_LPAC) | BIT(PIPE_AQE0) |
+		BIT(PIPE_AQE1) | BIT(PIPE_DDE_BR) | BIT(PIPE_DDE_BV), 0, 0, 0, },
+	{ GEN8_GPU_CX_MISC_SMMU_INTR_MASK0, BIT(PIPE_NONE), 0, 0, 0, },
+	{ GEN8_GPU_CX_MISC_SMMU_INTR_MASK1, BIT(PIPE_NONE), 0, 0, 0, },
 	{ GEN8_UCHE_MODE_CNTL, BIT(PIPE_NONE), 0, 0, 0, },
 	{ GEN8_UCHE_CACHE_WAYS, BIT(PIPE_NONE), 0, 0, 0, },
 	{ GEN8_UCHE_CLIENT_PF, BIT(PIPE_NONE), 0, 0, 0, },
@@ -604,6 +607,7 @@ struct gen8_nonctxt_overrides gen8_nc_overrides[] = {
 	{ GEN8_SP_NC_MODE_CNTL, BIT(PIPE_NONE), 0, 0, 0, },
 	{ GEN8_SP_CHICKEN_BITS, BIT(PIPE_NONE), 0, 0, 1, },
 	{ GEN8_SP_NC_MODE_CNTL_2, BIT(PIPE_NONE), 0, 0, 1, },
+	{ GEN8_SP_SS_CHICKEN_BITS_0, BIT(PIPE_NONE), 0, 0, 1, },
 	{ GEN8_SP_CHICKEN_BITS_1, BIT(PIPE_NONE), 0, 0, 0, },
 	{ GEN8_SP_CHICKEN_BITS_2, BIT(PIPE_NONE), 0, 0, 0, },
 	{ GEN8_SP_CHICKEN_BITS_3, BIT(PIPE_NONE), 0, 0, 0, },
@@ -625,7 +629,7 @@ static int acd_calibrate_set(void *data, u64 val)
 	u32 debug_val = (u32) val;
 	int ret;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 	ret = adreno_active_count_get(adreno_dev);
 	if (ret)
 		goto err;
@@ -637,7 +641,7 @@ static int acd_calibrate_set(void *data, u64 val)
 
 	adreno_active_count_put(adreno_dev);
 err:
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 	return ret;
 }
 
@@ -1205,6 +1209,42 @@ static void gen8_nonctxt_regconfig(struct adreno_device *adreno_dev)
 	gen8_host_aperture_set(adreno_dev, 0, 0, 0);
 }
 
+void gen8_set_gmem_protect(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
+	const struct gen8_nonctxt_regs *regs = gen8_core->nonctxt_regs;
+	static const struct gen8_nonctxt_regs *gmem_protect;
+	unsigned long pipe;
+
+	/*
+	 * If gmem_protect is not yet initialized, find the
+	 * GEN8_RB_GC_GMEM_PROTECT register in the nonctxt_regs.
+	 */
+	if (!gmem_protect) {
+		u32 i;
+
+		for (i = 0; regs[i].offset; i++) {
+			if (regs[i].offset == GEN8_RB_GC_GMEM_PROTECT) {
+				gmem_protect = &regs[i];
+				break;
+			}
+		}
+		if (!gmem_protect) {
+			dev_err(device->dev, "RB_GC_GMEM_PROTECT is not defined\n");
+			return;
+		}
+	}
+
+	for_each_set_bit(pipe,
+		(const unsigned long *)&gmem_protect->pipelines, PIPE_DDE_BV + 1)
+		gen8_regwrite_aperture(device, gmem_protect->offset,
+			gmem_protect->val, pipe, 0, 0);
+
+	/* Clear the aperture register */
+	gen8_host_aperture_set(adreno_dev, 0, 0, 0);
+}
+
 #define RBBM_CLOCK_CNTL_ON 0x8aa8aa82
 
 void gen8_hwcg_set(struct adreno_device *adreno_dev, bool on)
@@ -1259,7 +1299,7 @@ void gen8_hwcg_set(struct adreno_device *adreno_dev, bool on)
 	}
 }
 
-static void gen8_patch_pwrup_reglist(struct adreno_device *adreno_dev)
+void gen8_patch_pwrup_reglist(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct gen8_device *gen8_dev = container_of(adreno_dev,
@@ -1776,17 +1816,6 @@ int gen8_start(struct adreno_device *adreno_dev)
 	if (!adreno_is_gen8_2_x(adreno_dev))
 		gen8_hwcg_set(adreno_dev, true);
 
-	/*
-	 * All registers must be written before this point so that we don't
-	 * miss any register programming when we patch the power up register
-	 * list.
-	 */
-	if (!adreno_dev->patch_reglist &&
-		(adreno_dev->pwrup_reglist->gpuaddr != 0)) {
-		gen8_patch_pwrup_reglist(adreno_dev);
-		adreno_dev->patch_reglist = true;
-	}
-
 	/* Ensure very last register write is finished before we return from this function */
 	mb();
 	device->regmap.use_relaxed = true;
@@ -1795,36 +1824,6 @@ int gen8_start(struct adreno_device *adreno_dev)
 		sched_set_normal(current, nice);
 
 	return 0;
-}
-
-/* Offsets into the MX/CX mapped register regions */
-#define GEN8_RDPM_MX_OFFSET 0xf00
-#define GEN8_RDPM_CX_OFFSET 0xf14
-
-void gen8_rdpm_mx_freq_update(struct gen8_gmu_device *gmu, u32 freq)
-{
-	if (gmu->rdpm_mx_virt) {
-		writel_relaxed(freq/1000, (gmu->rdpm_mx_virt + GEN8_RDPM_MX_OFFSET));
-
-		/*
-		 * ensure previous writes post before this one,
-		 * i.e. act like normal writel()
-		 */
-		wmb();
-	}
-}
-
-void gen8_rdpm_cx_freq_update(struct gen8_gmu_device *gmu, u32 freq)
-{
-	if (gmu->rdpm_cx_virt) {
-		writel_relaxed(freq/1000, (gmu->rdpm_cx_virt + GEN8_RDPM_CX_OFFSET));
-
-		/*
-		 * ensure previous writes post before this one,
-		 * i.e. act like normal writel()
-		 */
-		wmb();
-	}
 }
 
 int gen8_scm_gpu_init_cx_regs(struct adreno_device *adreno_dev)
@@ -2057,6 +2056,24 @@ int gen8_rb_start(struct adreno_device *adreno_dev)
 				return ret;
 			}
 		}
+	}
+
+	/*
+	 * When the GPU is in secure mode, any writes to the RB_GC_GMEM_PROTECT
+	 * register are ignored. At this point, the GPU should be in unsecure
+	 * mode, so program the RB_GC_GMEM_PROTECT register.
+	 */
+	gen8_set_gmem_protect(adreno_dev);
+
+	/*
+	 * All registers must be written before this point so that we don't
+	 * miss any register programming when we patch the power up register
+	 * list.
+	 */
+	if (!adreno_dev->patch_reglist &&
+		(adreno_dev->pwrup_reglist->gpuaddr != 0)) {
+		gen8_patch_pwrup_reglist(adreno_dev);
+		adreno_dev->patch_reglist = true;
 	}
 
 	ret = gen8_post_start(adreno_dev);
@@ -2320,16 +2337,16 @@ static const char *gen8_fault_block_uche(struct kgsl_device *device,
 	 * to turn off CX gdsc will fail during the reset. So to avoid blocking
 	 * here, try to lock device mutex and return if it fails.
 	 */
-	if (!mutex_trylock(&device->mutex))
+	if (!kgsl_mutex_trylock(&device->mutex))
 		goto regread_fail;
 
 	if (!kgsl_state_is_awake(device)) {
-		mutex_unlock(&device->mutex);
+		kgsl_mutex_unlock(&device->mutex);
 		goto regread_fail;
 	}
 
 	kgsl_regread(device, GEN8_UCHE_CLIENT_PF, &uche_client_id);
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 
 	/* Ignore the value if the gpu is in IFPC */
 	if (uche_client_id == SCOOBYDOO) {
@@ -2668,8 +2685,8 @@ int gen8_probe_common(struct platform_device *pdev,
 
 	/* Dump additional AQE 16KB data on top of default 128KB(64(BR)+64(BV)) */
 	device->snapshot_ctxt_record_size = ADRENO_FEATURE(adreno_dev, ADRENO_AQE) ?
-			(GEN8_SNAPSHOT_CTXRECORD_SIZE_IN_BYTES + SZ_16K) :
-			GEN8_SNAPSHOT_CTXRECORD_SIZE_IN_BYTES;
+		(GEN8_SNAPSHOT_CTXRECORD_SIZE_IN_BYTES + GEN8_CP_AQE_CTXRECORD_SIZE_IN_BYTES) :
+		GEN8_SNAPSHOT_CTXRECORD_SIZE_IN_BYTES;
 
 	return 0;
 }
@@ -3274,7 +3291,7 @@ done:
  */
 u32 gen8_get_gmem_size(struct adreno_device *adreno_dev)
 {
-	if (adreno_is_gen8_2_0(adreno_dev))
+	if (adreno_is_gen8_2_x(adreno_dev))
 		return (adreno_dev->gpucore->gmem_size / GEN8_2_0_NUM_PHYSICAL_SLICES) *
 			gen8_get_num_slices(adreno_dev);
 

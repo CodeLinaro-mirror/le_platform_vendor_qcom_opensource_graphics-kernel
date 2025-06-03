@@ -609,6 +609,21 @@ int gen8_hfi_send_iff_pclx_feature_ctrl(struct adreno_device *adreno_dev)
 	return gen8_hfi_send_generic_req(adreno_dev, tbl_cmd, hdr_size);
 }
 
+int gen8_hfi_send_minbw_feature_ctrl(struct adreno_device *adreno_dev)
+{
+	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
+
+	if (!adreno_dev->minbw_enabled)
+		return 0;
+
+	/* minbw can be enabled only if IFPC is enabled */
+	if (gmu->idle_level == GPU_HW_ACTIVE)
+		return 0;
+
+	return gen8_hfi_send_feature_ctrl(adreno_dev, HFI_FEATURE_MINBW, 1,
+			adreno_dev->minbw_data);
+}
+
 int gen8_hfi_send_clx_feature_ctrl(struct adreno_device *adreno_dev)
 {
 	int ret = 0;
@@ -687,7 +702,7 @@ int gen8_hfi_send_ifpc_feature_ctrl(struct adreno_device *adreno_dev)
 {
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
 
-	if (gmu->idle_level == GPU_HW_IFPC)
+	if ((gmu->idle_level == GPU_HW_MINBW) || (gmu->idle_level == GPU_HW_IFPC))
 		return gen8_hfi_send_feature_ctrl(adreno_dev,
 				HFI_FEATURE_IFPC, 1, adreno_dev->ifpc_hyst);
 	return 0;
@@ -785,6 +800,10 @@ int gen8_hfi_start(struct adreno_device *adreno_dev)
 		goto err;
 
 	result = gen8_hfi_send_bcl_feature_ctrl(adreno_dev);
+	if (result)
+		goto err;
+
+	result = gen8_hfi_send_minbw_feature_ctrl(adreno_dev);
 	if (result)
 		goto err;
 

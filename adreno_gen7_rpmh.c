@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
-
-#include <linux/types.h>
-#include <soc/qcom/cmd-db.h>
-#include <soc/qcom/tcs.h>
 
 #include "adreno.h"
 #include "adreno_gen7.h"
@@ -26,12 +22,13 @@
 static int setup_cx_arc_votes(struct gen7_gmu_device *gmu,
 	struct rpmh_arc_vals *pri_rail, struct rpmh_arc_vals *sec_rail)
 {
+	struct kgsl_device *device = KGSL_DEVICE(gen7_gmu_to_adreno(gmu));
 	/* Hardcoded values of GMU CX voltage levels */
-	u16 gmu_cx_vlvl[MAX_CX_LEVELS];
-	u32 cx_votes[MAX_CX_LEVELS];
+	u16 gmu_cx_vlvl[MAX_CX_LEVELS_LEGACY];
+	u32 cx_votes[MAX_CX_LEVELS_LEGACY];
 	struct gen7_dcvs_table *table = &gmu->dcvs_table;
-	u32 *freqs = gmu->freqs;
-	u32 *vlvls = gmu->vlvls;
+	u32 *freqs = device->gmu_core.freqs;
+	u32 *vlvls = device->gmu_core.vlvls;
 	int ret, i;
 
 	gmu_cx_vlvl[0] = 0;

@@ -4,7 +4,6 @@
  * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
-#include <asm/cacheflush.h>
 #include <linux/debugfs.h>
 #include <linux/highmem.h>
 #include <linux/of.h>

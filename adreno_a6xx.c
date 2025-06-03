@@ -10,8 +10,6 @@
 #include <linux/of.h>
 #include <linux/of_fdt.h>
 #include <linux/of_device.h>
-#include <linux/regulator/consumer.h>
-#include <linux/soc/qcom/llcc-qcom.h>
 #include <soc/qcom/of_common.h>
 
 #include "adreno.h"
@@ -96,7 +94,7 @@ static u32 a6xx_ifpc_pwrup_reglist[] = {
 	A6XX_CP_AHB_CNTL,
 };
 
-/* Applicable to a620, a621, a635, a650 and a660 */
+/* Applicable to a620, a621, a622, a635, a650 and a660 */
 static u32 a650_ifpc_pwrup_reglist[] = {
 	A6XX_CP_PROTECT_REG+32,
 	A6XX_CP_PROTECT_REG+33,
@@ -116,7 +114,7 @@ static u32 a650_ifpc_pwrup_reglist[] = {
 	A6XX_CP_PROTECT_REG+47,
 };
 
-/* Applicable to a620, a621, a635, a650 and a660 */
+/* Applicable to a620, a621, a622, a635, a650 and a660 */
 static u32 a650_pwrup_reglist[] = {
 	A6XX_TPL1_BICUBIC_WEIGHTS_TABLE_0,
 	A6XX_TPL1_BICUBIC_WEIGHTS_TABLE_1,
@@ -513,6 +511,7 @@ static void a6xx_patch_pwrup_reglist(struct adreno_device *adreno_dev)
 
 static void a6xx_llc_configure_gpu_scid(struct adreno_device *adreno_dev);
 static void a6xx_llc_configure_gpuhtw_scid(struct adreno_device *adreno_dev);
+static void a6xx_llc_configure_gpumv_scid(struct adreno_device *adreno_dev);
 static void a6xx_llc_enable_overrides(struct adreno_device *adreno_dev);
 
 static void a6xx_set_secvid(struct kgsl_device *device)
@@ -814,6 +813,7 @@ void a6xx_start(struct adreno_device *adreno_dev)
 	/* Configure LLCC */
 	a6xx_llc_configure_gpu_scid(adreno_dev);
 	a6xx_llc_configure_gpuhtw_scid(adreno_dev);
+	a6xx_llc_configure_gpumv_scid(adreno_dev);
 
 	a6xx_llc_enable_overrides(adreno_dev);
 
@@ -865,40 +865,6 @@ void a6xx_start(struct adreno_device *adreno_dev)
 	 */
 	a6xx_deassert_gbif_halt(adreno_dev);
 
-}
-
-/* Offsets into the MX/CX mapped register regions */
-#define RDPM_MX_OFFSET 0xf00
-#define RDPM_CX_OFFSET 0xf18
-
-void a6xx_rdpm_mx_freq_update(struct a6xx_gmu_device *gmu,
-		u32 freq)
-{
-	if (gmu->rdpm_mx_virt) {
-		writel_relaxed(freq/1000,
-			(gmu->rdpm_mx_virt + RDPM_MX_OFFSET));
-
-		/*
-		 * ensure previous writes post before this one,
-		 * i.e. act like normal writel()
-		 */
-		wmb();
-	}
-}
-
-void a6xx_rdpm_cx_freq_update(struct a6xx_gmu_device *gmu,
-		u32 freq)
-{
-	if (gmu->rdpm_cx_virt) {
-		writel_relaxed(freq/1000,
-			(gmu->rdpm_cx_virt + RDPM_CX_OFFSET));
-
-		/*
-		 * ensure previous writes post before this one,
-		 * i.e. act like normal writel()
-		 */
-		wmb();
-	}
 }
 
 /* This is the start point for non GMU/RGMU targets */
@@ -1657,6 +1623,29 @@ static void a6xx_llc_configure_gpuhtw_scid(struct adreno_device *adreno_dev)
 }
 
 /*
+ * a6xx_llc_configure_gpumv_scid() - Program the sub-cache ID for CCU block
+ * @adreno_dev: The adreno device pointer
+ */
+static void a6xx_llc_configure_gpumv_scid(struct adreno_device *adreno_dev)
+{
+	u32 gpumv_scid = 0;
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct kgsl_mmu *mmu = &device->mmu;
+
+	if (IS_ERR_OR_NULL(adreno_dev->gpumv_llc_slice) ||
+		!adreno_dev->gpumv_llc_slice_enable ||
+		mmu->subtype != KGSL_IOMMU_SMMU_V500)
+		return;
+
+	if (llcc_slice_activate(adreno_dev->gpumv_llc_slice))
+		return;
+
+	gpumv_scid = llcc_get_slice_id(adreno_dev->gpumv_llc_slice);
+	kgsl_regrmw(device, A6XX_GBIF_SCACHE_CNTL1,
+		A6XX_GPUMV_LLC_SCID_MASK, FIELD_PREP(GENMASK(19, 15), gpumv_scid));
+}
+
+/*
  * a6xx_llc_enable_overrides() - Override the page attributes
  * @adreno_dev: The adreno device pointer
  */
@@ -1709,16 +1698,16 @@ static const char *a6xx_fault_block_uche(struct kgsl_device *device,
 	 * to turn off CX gdsc will fail during the reset. So to avoid blocking
 	 * here, try to lock device mutex and return if it fails.
 	 */
-	if (!mutex_trylock(&device->mutex))
+	if (!kgsl_mutex_trylock(&device->mutex))
 		return "UCHE: unknown";
 
 	if (!kgsl_state_is_awake(device)) {
-		mutex_unlock(&device->mutex);
+		kgsl_mutex_unlock(&device->mutex);
 		return "UCHE: unknown";
 	}
 
 	kgsl_regread(device, A6XX_UCHE_CLIENT_PF, &uche_client_id);
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 
 	/* Ignore the value if the gpu is in IFPC */
 	if (uche_client_id == SCOOBYDOO)

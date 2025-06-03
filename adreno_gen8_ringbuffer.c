@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include "adreno.h"
@@ -244,7 +244,6 @@ int gen8_ringbuffer_init(struct adreno_device *adreno_dev)
 	}
 
 	timer_setup(&adreno_dev->preempt.timer, adreno_preemption_timer, 0);
-	gen8_preemption_init(adreno_dev);
 	return 0;
 }
 

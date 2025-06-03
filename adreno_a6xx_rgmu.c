@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/clk-provider.h>
@@ -11,7 +11,6 @@
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_platform.h>
-#include <linux/regulator/consumer.h>
 
 #include "adreno.h"
 #include "adreno_a6xx.h"
@@ -799,7 +798,7 @@ static void rgmu_idle_check(struct work_struct *work)
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	int ret;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	if (test_bit(GMU_DISABLE_SLUMBER, &device->gmu_core.flags))
 		goto done;
@@ -828,7 +827,7 @@ static void rgmu_idle_check(struct work_struct *work)
 	}
 
 done:
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 }
 
 static void rgmu_idle_timer(struct timer_list *t)
@@ -1091,7 +1090,7 @@ static int a6xx_rgmu_active_count_get(struct adreno_device *adreno_dev)
 	struct a6xx_rgmu_device *rgmu = to_a6xx_rgmu(adreno_dev);
 	int ret = 0;
 
-	if (WARN_ON(!mutex_is_locked(&device->mutex)))
+	if (WARN_ON(!kgsl_mutex_is_locked(&device->mutex)))
 		return -EINVAL;
 
 	if (test_bit(RGMU_PRIV_PM_SUSPEND, &rgmu->flags))

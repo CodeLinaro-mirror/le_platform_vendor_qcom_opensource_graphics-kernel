@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 /*
@@ -789,7 +789,7 @@ int kgsl_drawobj_sync_add_sync(struct kgsl_device *device,
 	struct kgsl_drawobj *drawobj = DRAWOBJ(syncobj);
 
 	if (sync->type != KGSL_CMD_SYNCPOINT_TYPE_FENCE)
-		syncobj->flags |= KGSL_SYNCOBJ_SW;
+		set_bit(KGSL_SYNCOBJ_SW, &syncobj->flags);
 
 	if (sync->type == KGSL_CMD_SYNCPOINT_TYPE_TIMESTAMP)
 		return drawobj_add_sync_timestamp_from_user(device,

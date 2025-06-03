@@ -5,7 +5,6 @@
  */
 
 #include <linux/iommu.h>
-#include <soc/qcom/msm_performance.h>
 
 #include "adreno.h"
 #include "adreno_gen7.h"
@@ -762,7 +761,7 @@ static void gen7_process_syncobj_query_work(struct kthread_work *work)
 	bool missing = true;
 
 	mutex_lock(&hwsched->mutex);
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	list_for_each_entry(obj, &hwsched->cmd_list, node) {
 		struct kgsl_drawobj *drawobj = obj->drawobj;
@@ -796,7 +795,7 @@ static void gen7_process_syncobj_query_work(struct kthread_work *work)
 		}
 	}
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 	mutex_unlock(&hwsched->mutex);
 
 	kgsl_context_put(context);
@@ -1027,7 +1026,7 @@ static void gen7_defer_hw_fence_work(struct kthread_work *work)
 	 * recovery
 	 */
 	mutex_lock(&adreno_dev->hwsched.mutex);
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	spin_lock(&hwf->lock);
 	drawctxt = hwf->defer_drawctxt;
@@ -1054,7 +1053,7 @@ static void gen7_defer_hw_fence_work(struct kthread_work *work)
 	_disable_hw_fence_throttle(adreno_dev, false);
 
 unlock:
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 	mutex_unlock(&adreno_dev->hwsched.mutex);
 }
 
@@ -1632,12 +1631,6 @@ void gen7_hwsched_hfi_stop(struct adreno_device *adreno_dev)
 	kgsl_pwrctrl_axi(KGSL_DEVICE(adreno_dev), false);
 
 	clear_bit(GMU_PRIV_HFI_STARTED, &gmu->flags);
-
-	/*
-	 * Reset the hfi host access memory records, As GMU expects hfi memory
-	 * records to be clear in bootup.
-	 */
-	adreno_hwsched_reset_hfi_mem(adreno_dev);
 }
 
 static void gen7_hwsched_enable_async_hfi(struct adreno_device *adreno_dev)
@@ -2784,7 +2777,9 @@ static int _submit_hw_fence(struct adreno_device *adreno_dev,
 
 			if (ret) {
 				adreno_hwsched_syncobj_kfence_put(syncobj);
-				syncobj->flags &= ~KGSL_SYNCOBJ_HW;
+				clear_bit(KGSL_SYNCOBJ_HW, &syncobj->flags);
+				drawobj->timestamp = 0;
+				clear_bit(KGSL_SYNCOBJ_HW_TS, &syncobj->flags);
 				return ret;
 			}
 
@@ -2806,7 +2801,8 @@ static int _submit_hw_fence(struct adreno_device *adreno_dev,
 	 * Attach a timestamp to this SYNCOBJ to keep track whether GMU has deemed it signaled
 	 * or not.
 	 */
-	drawobj->timestamp = ++drawctxt->syncobj_timestamp;
+	if (!test_and_set_bit(KGSL_SYNCOBJ_HW_TS, &syncobj->flags))
+		drawobj->timestamp = ++drawctxt->syncobj_timestamp;
 	cmd->timestamp = drawobj->timestamp;
 
 	seqnum = atomic_inc_return(&adreno_dev->hwsched.submission_seqnum);
@@ -2959,7 +2955,7 @@ int gen7_send_hw_fence_hfi_wait_ack(struct adreno_device *adreno_dev,
 	int ret = 0;
 
 	/* Device mutex is necessary to ensure only one hardware fence ack is being waited for */
-	if (WARN_ON(!mutex_is_locked(&device->mutex)))
+	if (WARN_ON(!kgsl_mutex_is_locked(&device->mutex)))
 		return -EINVAL;
 
 	spin_lock(&hwf->lock);
@@ -3644,7 +3640,7 @@ void gen7_hwsched_context_detach(struct adreno_context *drawctxt)
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	int ret = 0;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	ret = send_context_unregister_hfi(adreno_dev, context,
 		drawctxt->internal_timestamp);
@@ -3662,7 +3658,7 @@ void gen7_hwsched_context_detach(struct adreno_context *drawctxt)
 	context->gmu_registered = false;
 
 out:
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 }
 
 u32 gen7_hwsched_preempt_count_get(struct adreno_device *adreno_dev)

@@ -174,11 +174,11 @@ int adreno_perfcounter_read_group(struct adreno_device *adreno_dev,
 		goto done;
 	}
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	ret = adreno_perfcntr_active_oob_get(adreno_dev);
 	if (ret) {
-		mutex_unlock(&device->mutex);
+		kgsl_mutex_unlock(&device->mutex);
 		goto done;
 	}
 
@@ -214,7 +214,7 @@ int adreno_perfcounter_read_group(struct adreno_device *adreno_dev,
 
 	adreno_perfcntr_active_oob_put(adreno_dev);
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 
 	/* write the data */
 	if (ret == 0)
@@ -326,12 +326,12 @@ int adreno_perfcounter_query_group(struct adreno_device *adreno_dev,
 	if (buf == NULL)
 		return -ENOMEM;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	for (i = 0; i < t; i++)
 		buf[i] = group->regs[i].countable;
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 
 	if (copy_to_user(countables, buf, sizeof(unsigned int) * t))
 		ret = -EFAULT;

@@ -65,7 +65,7 @@ static int _ft_pagefault_policy_store(struct adreno_device *adreno_dev,
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	int ret = 0;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 	val &= KGSL_FT_PAGEFAULT_MASK;
 
 	if (device->state == KGSL_STATE_ACTIVE)
@@ -75,7 +75,7 @@ static int _ft_pagefault_policy_store(struct adreno_device *adreno_dev,
 	if (ret == 0)
 		device->mmu.pfpolicy = val;
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 
 	return 0;
 }
@@ -204,6 +204,11 @@ static int __dcvs_tuning_scm_entry(struct adreno_device *adreno_dev, u32 param, 
 static int _dcvs_tuning_mingap_store(struct adreno_device *adreno_dev,
 		unsigned int val)
 {
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+
+	if (!device->host_based_dcvs)
+		return -EOPNOTSUPP;
+
 	if (val > DCVS_TUNING_MAX)
 		return -EINVAL;
 
@@ -212,12 +217,22 @@ static int _dcvs_tuning_mingap_store(struct adreno_device *adreno_dev,
 
 static u32 _dcvs_tuning_mingap_show(struct adreno_device *adreno_dev)
 {
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+
+	if (!device->host_based_dcvs)
+		return 0;
+
 	return adreno_dev->dcvs_tuning_mingap_lvl;
 }
 
 static int _dcvs_tuning_penalty_store(struct adreno_device *adreno_dev,
 		unsigned int val)
 {
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+
+	if (!device->host_based_dcvs)
+		return -EOPNOTSUPP;
+
 	if (val > DCVS_TUNING_MAX)
 		return -EINVAL;
 
@@ -226,12 +241,22 @@ static int _dcvs_tuning_penalty_store(struct adreno_device *adreno_dev,
 
 static u32 _dcvs_tuning_penalty_show(struct adreno_device *adreno_dev)
 {
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+
+	if (!device->host_based_dcvs)
+		return 0;
+
 	return adreno_dev->dcvs_tuning_penalty_lvl;
 }
 
 static int _dcvs_tuning_numbusy_store(struct adreno_device *adreno_dev,
 		unsigned int val)
 {
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+
+	if (!device->host_based_dcvs)
+		return -EOPNOTSUPP;
+
 	if (val > DCVS_TUNING_MAX)
 		return -EINVAL;
 
@@ -240,7 +265,25 @@ static int _dcvs_tuning_numbusy_store(struct adreno_device *adreno_dev,
 
 static u32 _dcvs_tuning_numbusy_show(struct adreno_device *adreno_dev)
 {
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+
+	if (!device->host_based_dcvs)
+		return 0;
+
 	return adreno_dev->dcvs_tuning_numbusy_lvl;
+}
+
+static unsigned int _dcvs_mode_show(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	u32 mode;
+
+	if (device->host_based_dcvs)
+		mode = 0;
+	else
+		mode = 1;
+
+	return mode;
 }
 
 static int _gpu_llc_slice_enable_store(struct adreno_device *adreno_dev,
@@ -271,6 +314,19 @@ static int _gpuhtw_llc_slice_enable_store(struct adreno_device *adreno_dev,
 static bool _gpuhtw_llc_slice_enable_show(struct adreno_device *adreno_dev)
 {
 	return adreno_dev->gpuhtw_llc_slice_enable;
+}
+
+static int _gpumv_llc_slice_enable_store(struct adreno_device *adreno_dev,
+		bool val)
+{
+	if (!IS_ERR_OR_NULL(adreno_dev->gpumv_llc_slice))
+		adreno_dev->gpumv_llc_slice_enable = val;
+	return 0;
+}
+
+static bool _gpumv_llc_slice_enable_show(struct adreno_device *adreno_dev)
+{
+	return adreno_dev->gpumv_llc_slice_enable;
 }
 
 static bool _ft_hang_intr_status_show(struct adreno_device *adreno_dev)
@@ -573,6 +629,20 @@ ssize_t adreno_sysfs_show_bool(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%d\n", _attr->show(adreno_dev));
 }
 
+static int _dcvs_profile_enabled_store(struct adreno_device *adreno_dev, bool val)
+{
+	if (!ADRENO_FEATURE(adreno_dev, ADRENO_DCVS_PROFILE) ||
+			adreno_dev->dcvs_profile_enabled == val)
+		return 0;
+
+	return adreno_power_cycle_bool(adreno_dev, &adreno_dev->dcvs_profile_enabled, val);
+}
+
+static bool _dcvs_profile_enabled_show(struct adreno_device *adreno_dev)
+{
+	return adreno_dev->dcvs_profile_enabled;
+}
+
 static ADRENO_SYSFS_U32(ft_policy);
 static ADRENO_SYSFS_U32(ft_pagefault_policy);
 static ADRENO_SYSFS_U32(rt_bus_hint);
@@ -580,6 +650,7 @@ static ADRENO_SYSFS_U32(rt_pwrlevel_hint);
 static ADRENO_SYSFS_RO_BOOL(ft_hang_intr_status);
 static ADRENO_SYSFS_BOOL(gpu_llc_slice_enable);
 static ADRENO_SYSFS_BOOL(gpuhtw_llc_slice_enable);
+static ADRENO_SYSFS_BOOL(gpumv_llc_slice_enable);
 
 static DEVICE_INT_ATTR(wake_nice, 0644, adreno_wake_nice);
 static DEVICE_INT_ATTR(wake_timeout, 0644, adreno_wake_timeout);
@@ -599,6 +670,7 @@ static ADRENO_SYSFS_BOOL(lpac);
 static ADRENO_SYSFS_BOOL(dms);
 static ADRENO_SYSFS_BOOL(touch_wake);
 static ADRENO_SYSFS_BOOL(gmu_ab);
+static ADRENO_SYSFS_BOOL(dcvs_profile_enabled);
 
 static DEVICE_ATTR_RO(gpu_model);
 static DEVICE_ATTR_RO(gpufaults);
@@ -607,6 +679,7 @@ static DEVICE_ATTR_RO(gpufault_procs);
 static ADRENO_SYSFS_U32(dcvs_tuning_mingap);
 static ADRENO_SYSFS_U32(dcvs_tuning_penalty);
 static ADRENO_SYSFS_U32(dcvs_tuning_numbusy);
+static ADRENO_SYSFS_RO_U32(dcvs_mode);
 
 static const struct attribute *_attr_list[] = {
 	&adreno_attr_ft_policy.attr.attr,
@@ -622,6 +695,7 @@ static const struct attribute *_attr_list[] = {
 	&adreno_attr_throttling.attr.attr,
 	&adreno_attr_gpu_llc_slice_enable.attr.attr,
 	&adreno_attr_gpuhtw_llc_slice_enable.attr.attr,
+	&adreno_attr_gpumv_llc_slice_enable.attr.attr,
 	&adreno_attr_ifpc.attr.attr,
 	&adreno_attr_ifpc_count.attr.attr,
 	&adreno_attr_acd.attr.attr,
@@ -639,6 +713,8 @@ static const struct attribute *_attr_list[] = {
 	&adreno_attr_dcvs_tuning_mingap.attr.attr,
 	&adreno_attr_dcvs_tuning_penalty.attr.attr,
 	&adreno_attr_dcvs_tuning_numbusy.attr.attr,
+	&adreno_attr_dcvs_mode.attr.attr,
+	&adreno_attr_dcvs_profile_enabled.attr.attr,
 	NULL,
 };
 
@@ -654,6 +730,7 @@ static GPU_SYSFS_ATTR(gpu_model, 0444, _gpu_model_show, NULL);
 int adreno_sysfs_init(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct device *gmu_dev = GMU_PDEV_DEV(device);
 	int ret;
 
 	ret = sysfs_create_files(&device->dev->kobj, _attr_list);
@@ -665,6 +742,9 @@ int adreno_sysfs_init(struct adreno_device *adreno_dev)
 		ret = sysfs_create_file(&device->gpu_sysfs_kobj,
 			&gpu_sysfs_attr_gpu_model.attr);
 	}
+
+	/* Add a soft link for gmu device */
+	WARN_ON(sysfs_create_link(&device->dev->kobj, &gmu_dev->kobj, "gmu"));
 
 	return ret;
 }

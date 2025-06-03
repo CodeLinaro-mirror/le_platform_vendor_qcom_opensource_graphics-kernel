@@ -378,12 +378,21 @@ static const struct adreno_coresight gen8_coresight_cx = {
 	.groups = gen8_coresight_groups_cx,
 };
 
+#if (KERNEL_VERSION(6, 14, 0) > LINUX_VERSION_CODE)
 static int name_match(struct device *dev, void *data)
 {
 	char *child_name = data;
 
 	return strcmp(child_name, dev_name(dev)) == 0;
 }
+#else
+static int name_match(struct device *dev, const void *data)
+{
+	const char *child_name = data;
+
+	return strcmp(child_name, dev_name(dev)) == 0;
+}
+#endif
 
 void gen8_coresight_init(struct adreno_device *adreno_dev)
 {

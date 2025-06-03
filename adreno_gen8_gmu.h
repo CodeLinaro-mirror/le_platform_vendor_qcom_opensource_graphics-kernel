@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef __ADRENO_GEN8_GMU_H
@@ -26,7 +26,6 @@ struct gen8_dcvs_table {
  * @fw_image: GMU FW image
  * @gmu_log: gmu event log memory
  * @hfi: HFI controller
- * @clks: GPU subsystem clocks required for GMU functionality
  * @idle_level: Minimal GPU idle power level
  * @log_wptr_retention: Store the log wptr offset on slumber
  */
@@ -43,15 +42,7 @@ struct gen8_gmu_device {
 	/** @gpu_boot_scratch: Memory to store the bootup HFI messages */
 	struct kgsl_memdesc *gpu_boot_scratch;
 	struct gen8_hfi hfi;
-	/** @pwrlevels: Array of GMU power levels */
-	struct clk_bulk_data *clks;
-	/** @num_clks: Number of entries in the @clks array */
-	int num_clks;
 	u32 idle_level;
-	/** @freqs: Array of GMU frequencies */
-	u32 freqs[GMU_MAX_PWRLEVELS];
-	/** @vlvls: Array of GMU voltage levels */
-	u32 vlvls[GMU_MAX_PWRLEVELS];
 	/** @qmp: aoss_qmp handle */
 	struct qmp *qmp;
 	u32 log_wptr_retention;
@@ -71,15 +62,6 @@ struct gen8_gmu_device {
 	/** @log_group_mask: Allows overriding default GMU log group mask */
 	u32 log_group_mask;
 	struct kobject log_kobj;
-	/*
-	 * @perf_ddr_bw: The lowest ddr bandwidth that puts CX at a corner at
-	 * which GMU can run at higher frequency.
-	 */
-	u32 perf_ddr_bw;
-	/** @rdpm_cx_virt: Pointer where the RDPM CX block is mapped */
-	void __iomem *rdpm_cx_virt;
-	/** @rdpm_mx_virt: Pointer where the RDPM MX block is mapped */
-	void __iomem *rdpm_mx_virt;
 	/** @num_oob_perfcntr: Number of active oob_perfcntr requests */
 	u32 num_oob_perfcntr;
 	/** @acd_debug_val: DVM value to calibrate ACD for a level */
@@ -98,8 +80,6 @@ struct gen8_gmu_device {
 	u32 switch_to_unsec_hdr;
 	/** @dcvs_table: Table for gpu dcvs levels */
 	struct gen8_dcvs_table dcvs_table;
-	/** @cur_freq: Tracks scaled frequency for GMU */
-	u32 cur_freq;
 	/** @dcvs_cmdbuf: Pointer to the table to pass DCVS data to GMU */
 	u32 *dcvs_cmdbuf;
 	/** @gmu_scaling_cmdbuf: Pointer to the table to pass GMU power levels */
@@ -357,15 +337,6 @@ int gen8_halt_gbif(struct adreno_device *adreno_dev);
 void gen8_gmu_remove(struct kgsl_device *device);
 
 /**
- * gen8_gmu_enable_clks - Enable gmu clocks
- * @adreno_dev: Pointer to the adreno device
- * @level: GMU frequency level
- *
- * Return: 0 on success or negative error on failure
- */
-int gen8_gmu_enable_clks(struct adreno_device *adreno_dev, u32 level);
-
-/**
  * gen8_gmu_handle_watchdog - Handle watchdog interrupt
  * @adreno_dev: Pointer to the adreno device
  */
@@ -385,15 +356,6 @@ void gen8_gmu_send_nmi(struct kgsl_device *device, bool force,
  * @adreno_dev: Pointer to the adreno device
  */
 int gen8_gmu_add_to_minidump(struct adreno_device *adreno_dev);
-
-/**
- * gen8_gmu_clock_set_rate - Set the gmu clock rate
- * @adreno_dev: Handle to the adreno device
- * @req_freq: Requested freq to set gmu to
- *
- * Returns 0 on success or error on clock set rate failure
- */
-int gen8_gmu_clock_set_rate(struct adreno_device *adreno_dev, u32 req_freq);
 
 /**
  * gen8_gmu_rpmh_pwr_state_is_active - Check the state of GPU HW

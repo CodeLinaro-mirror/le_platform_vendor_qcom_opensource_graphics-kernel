@@ -9,8 +9,6 @@
 #include <linux/of.h>
 #include <linux/of_fdt.h>
 #include <linux/of_device.h>
-#include <linux/regulator/consumer.h>
-#include <linux/soc/qcom/llcc-qcom.h>
 #include <soc/qcom/of_common.h>
 
 #include "adreno.h"
@@ -212,7 +210,7 @@ static int acd_calibrate_set(void *data, u64 val)
 	u32 debug_val = (u32) val;
 	int ret;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 	ret = adreno_active_count_get(adreno_dev);
 	if (ret)
 		goto err;
@@ -223,7 +221,7 @@ static int acd_calibrate_set(void *data, u64 val)
 
 	adreno_active_count_put(adreno_dev);
 err:
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 	return ret;
 }
 
@@ -1048,36 +1046,6 @@ int gen7_start(struct adreno_device *adreno_dev)
 	return 0;
 }
 
-/* Offsets into the MX/CX mapped register regions */
-#define GEN7_RDPM_MX_OFFSET 0xf00
-#define GEN7_RDPM_CX_OFFSET 0xf14
-
-void gen7_rdpm_mx_freq_update(struct gen7_gmu_device *gmu, u32 freq)
-{
-	if (gmu->rdpm_mx_virt) {
-		writel_relaxed(freq/1000, (gmu->rdpm_mx_virt + GEN7_RDPM_MX_OFFSET));
-
-		/*
-		 * ensure previous writes post before this one,
-		 * i.e. act like normal writel()
-		 */
-		wmb();
-	}
-}
-
-void gen7_rdpm_cx_freq_update(struct gen7_gmu_device *gmu, u32 freq)
-{
-	if (gmu->rdpm_cx_virt) {
-		writel_relaxed(freq/1000, (gmu->rdpm_cx_virt + GEN7_RDPM_CX_OFFSET));
-
-		/*
-		 * ensure previous writes post before this one,
-		 * i.e. act like normal writel()
-		 */
-		wmb();
-	}
-}
-
 int gen7_scm_gpu_init_cx_regs(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
@@ -1526,16 +1494,16 @@ static const char *gen7_fault_block_uche(struct kgsl_device *device,
 	 * to turn off CX gdsc will fail during the reset. So to avoid blocking
 	 * here, try to lock device mutex and return if it fails.
 	 */
-	if (!mutex_trylock(&device->mutex))
+	if (!kgsl_mutex_trylock(&device->mutex))
 		goto regread_fail;
 
 	if (!kgsl_state_is_awake(device)) {
-		mutex_unlock(&device->mutex);
+		kgsl_mutex_unlock(&device->mutex);
 		goto regread_fail;
 	}
 
 	kgsl_regread(device, GEN7_UCHE_CLIENT_PF, &uche_client_id);
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 
 	/* Ignore the value if the gpu is in IFPC */
 	if (uche_client_id == SCOOBYDOO) {

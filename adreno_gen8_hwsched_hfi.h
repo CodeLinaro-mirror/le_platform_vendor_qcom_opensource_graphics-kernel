@@ -272,12 +272,13 @@ void gen8_hwsched_context_destroy(struct adreno_device *adreno_dev,
  * gen8_hwsched_hfi_get_value - Send GET_VALUE packet to GMU to get the value of a property
  * @adreno_dev: Pointer to adreno device
  * @prop: property to get from GMU
+ * @subtype: subtype to get from GMU
  *
  * This functions sends GET_VALUE HFI packet to query value of a property
  *
  * Return: On success, return the value in the GMU response. On failure, return 0
  */
-u32 gen8_hwsched_hfi_get_value(struct adreno_device *adreno_dev, u32 prop);
+u32 gen8_hwsched_hfi_get_value(struct adreno_device *adreno_dev, u32 prop, u32 subtype);
 
 /**
  * gen8_hwsched_hfi_set_value - Send SET_VALUE packet to GMU to set the value of a property
@@ -382,4 +383,17 @@ int gen8_hwsched_boot_gpu(struct adreno_device *adreno_dev);
  */
 int gen8_hwsched_set_gmu_based_dcvs_value(struct adreno_device *adreno_dev, u32 type,
 		u32 subtype, u32 val, bool default_vote);
+
+/**
+ * gen8_hwsched_set_dcvs_profile - Set profile for GMU based DCVS
+ * @adreno_dev: Pointer to the adreno device
+ * @proc_priv: Pointer to process private
+ *
+ * This function sends PROFILE_REGISTER hfi to set DCVS profile to GMU,
+ * and wait for the ack
+ *
+ * Return: Zero on success or negative error on failure
+ */
+int gen8_hwsched_set_dcvs_profile(struct adreno_device *adreno_dev,
+	struct kgsl_process_private *proc_priv);
 #endif

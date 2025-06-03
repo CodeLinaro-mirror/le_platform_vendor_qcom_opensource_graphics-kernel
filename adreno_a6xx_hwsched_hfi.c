@@ -5,7 +5,6 @@
  */
 
 #include <linux/iommu.h>
-#include <soc/qcom/msm_performance.h>
 
 #include "adreno.h"
 #include "adreno_a6xx.h"
@@ -817,12 +816,6 @@ void a6xx_hwsched_hfi_stop(struct adreno_device *adreno_dev)
 	kgsl_pwrctrl_axi(KGSL_DEVICE(adreno_dev), false);
 
 	clear_bit(GMU_PRIV_HFI_STARTED, &gmu->flags);
-
-	/*
-	 * Reset the hfi host access memory records, As GMU expects hfi memory
-	 * records to be clear in bootup.
-	 */
-	adreno_hwsched_reset_hfi_mem(adreno_dev);
 }
 
 static void enable_async_hfi(struct adreno_device *adreno_dev)
@@ -1728,7 +1721,7 @@ void a6xx_hwsched_context_detach(struct adreno_context *drawctxt)
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	int ret = 0;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	ret = send_context_unregister_hfi(adreno_dev, context,
 		drawctxt->internal_timestamp);
@@ -1746,7 +1739,7 @@ void a6xx_hwsched_context_detach(struct adreno_context *drawctxt)
 	context->gmu_registered = false;
 
 out:
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 }
 
 u32 a6xx_hwsched_preempt_count_get(struct adreno_device *adreno_dev)

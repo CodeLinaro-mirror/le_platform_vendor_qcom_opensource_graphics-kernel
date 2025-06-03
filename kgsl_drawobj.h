@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef __KGSL_DRAWOBJ_H
@@ -90,9 +90,11 @@ struct kgsl_drawobj_cmd {
 };
 
 /* This sync object cannot be sent to hardware */
-#define KGSL_SYNCOBJ_SW BIT(0)
+#define KGSL_SYNCOBJ_SW 0
 /* This sync object can be sent to hardware */
-#define KGSL_SYNCOBJ_HW BIT(1)
+#define KGSL_SYNCOBJ_HW 1
+/* This hw sync object has been assigned a timestamp */
+#define KGSL_SYNCOBJ_HW_TS 2
 
 struct kgsl_drawobj_sync_hw_fence {
 	/** @fence: Pointer to hardware fence */
@@ -122,7 +124,7 @@ struct kgsl_drawobj_sync {
 	struct timer_list timer;
 	unsigned long timeout_jiffies;
 	/** @flags: sync object internal flags */
-	u32 flags;
+	unsigned long flags;
 	/** @num_hw_fence: number of hw fences in this syncobj */
 	u32 num_hw_fence;
 	/**

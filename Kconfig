@@ -108,3 +108,12 @@ config QCOM_KGSL_SYNX
 	  synx API for HW fence feature. This allows hardware fence inter-op
 	  between HW fence clients and SYNX clients. If not enabled, then
 	  kgsl will use msm_hw_fence APIs for hardware fence feature.
+
+config QCOM_KGSL_RT_MUTEX
+	bool "Use RT-mutex in KGSL"
+	depends on RT_MUTEXES
+	help
+	  Say 'Y' to use RT-mutex instead of mutex in KGSL driver. If
+	  enabled, KGSL will use RT-mutex instead of mutex to prevent
+	  priority inversion. RT-mutexes extend the semantics of simple
+	  mutexes by the priority inheritance protocol.

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2013-2015,2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 #ifndef __ADRENO_SNAPSHOT_H
 #define __ADRENO_SNAPSHOT_H
@@ -11,6 +11,8 @@
 
 /* Number of dwords to dump in snapshot for CP SQE */
 #define SQE_FW_SNAPSHOT_DWORDS 5
+/* Number of dwords to dump in snapshot for CP AQE */
+#define AQE_FW_SNAPSHOT_DWORDS 6
 
 #define CP_CRASH_DUMPER_TIMEOUT 500
 

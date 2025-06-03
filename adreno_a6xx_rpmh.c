@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022, 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
-
-#include <linux/types.h>
-#include <soc/qcom/cmd-db.h>
-#include <soc/qcom/tcs.h>
 
 #include "adreno.h"
 #include "adreno_a6xx.h"
@@ -33,8 +29,8 @@ static int setup_cx_arc_votes(struct adreno_device *adreno_dev,
 	/* Hardcoded values of GMU CX voltage levels */
 	struct a6xx_gmu_device *gmu = to_a6xx_gmu(adreno_dev);
 	struct a6xx_hfi *hfi = &gmu->hfi;
-	u16 gmu_cx_vlvl[MAX_CX_LEVELS];
-	u32 cx_votes[MAX_CX_LEVELS];
+	u16 gmu_cx_vlvl[MAX_CX_LEVELS_LEGACY];
+	u32 cx_votes[MAX_CX_LEVELS_LEGACY];
 	struct hfi_dcvstable_cmd *table = &hfi->dcvs_table;
 	int ret, i;
 
@@ -128,6 +124,7 @@ static int setup_gx_arc_votes(struct adreno_device *adreno_dev,
 static int build_dcvs_table(struct adreno_device *adreno_dev)
 {
 	struct a6xx_gmu_device *gmu = to_a6xx_gmu(adreno_dev);
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct a6xx_hfi *hfi = &gmu->hfi;
 	struct rpmh_arc_vals gx_arc, cx_arc, mx_arc;
 	int ret;
@@ -149,7 +146,7 @@ static int build_dcvs_table(struct adreno_device *adreno_dev)
 		return ret;
 
 	ret = setup_cx_arc_votes(adreno_dev, &cx_arc, &mx_arc,
-					gmu->freqs, gmu->vlvls);
+					device->gmu_core.freqs, device->gmu_core.vlvls);
 	if (ret)
 		return ret;
 

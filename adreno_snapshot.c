@@ -1115,17 +1115,17 @@ static size_t adreno_snapshot_aqe(struct kgsl_device *device, u8 *buf,
 	if (!ADRENO_FEATURE(adreno_dev, ADRENO_AQE))
 		return 0;
 
-	if (remain < DEBUG_SECTION_SZ(1)) {
+	if (remain < DEBUG_SECTION_SZ(AQE_FW_SNAPSHOT_DWORDS)) {
 		SNAPSHOT_ERR_NOMEM(device, "AQE VERSION DEBUG");
 		return 0;
 	}
 
-	/* Dump the AQE firmware version */
+	/* Dump the AQE firmware version and few dwords */
 	header->type = SNAPSHOT_DEBUG_AQE_VERSION;
-	header->size = 1;
-	*data = fw->version;
+	header->size = AQE_FW_SNAPSHOT_DWORDS;
+	memcpy(data, fw->memdesc->hostptr, AQE_FW_SNAPSHOT_DWORDS * sizeof(u32));
 
-	return DEBUG_SECTION_SZ(1);
+	return DEBUG_SECTION_SZ(AQE_FW_SNAPSHOT_DWORDS);
 }
 
 static void adreno_snapshot_firmware(struct kgsl_device *device,

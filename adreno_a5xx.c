@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/clk/qcom.h>
@@ -1221,7 +1221,7 @@ static void a5xx_gpmu_reset(struct work_struct *work)
 	if (device->state != KGSL_STATE_AWARE && device->state != KGSL_STATE_ACTIVE)
 		return;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	if (a5xx_regulator_enable(adreno_dev))
 		goto out;
@@ -1237,7 +1237,7 @@ static void a5xx_gpmu_reset(struct work_struct *work)
 	a5xx_gpmu_init(adreno_dev);
 
 out:
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 }
 
 static void _setup_throttling_counters(struct adreno_device *adreno_dev)
@@ -2079,7 +2079,7 @@ static void a5xx_irq_storm_worker(struct work_struct *work)
 	struct kgsl_device *device = &adreno_dev->dev;
 	unsigned int status;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	/* Wait for the storm to clear up */
 	do {
@@ -2094,7 +2094,7 @@ static void a5xx_irq_storm_worker(struct work_struct *work)
 	clear_bit(ADRENO_DEVICE_CACHE_FLUSH_TS_SUSPENDED, &adreno_dev->priv);
 
 	dev_warn(device->dev, "Re-enabled A5XX_INT_CP_CACHE_FLUSH_TS\n");
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 
 	/* Reschedule just to make sure everything retires */
 	adreno_scheduler_queue(adreno_dev);

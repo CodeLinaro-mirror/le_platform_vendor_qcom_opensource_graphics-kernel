@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/delay.h>
@@ -685,7 +685,7 @@ int gen7_hfi_send_gpu_perf_table(struct adreno_device *adreno_dev)
 			return gen7_hfi_send_generic_req(adreno_dev, cmd,
 					MSG_HDR_GET_SIZE(cmd->hdr) << 2);
 
-		if (tbl->gpu_level_num > MAX_GX_LEVELS || tbl->gmu_level_num > MAX_CX_LEVELS)
+		if (tbl->gpu_level_num > MAX_GX_LEVELS || tbl->gmu_level_num > MAX_CX_LEVELS_LEGACY)
 			return -EINVAL;
 
 		/* CMD starts with struct hfi_table_cmd data */
@@ -713,7 +713,8 @@ int gen7_hfi_send_gpu_perf_table(struct adreno_device *adreno_dev)
 		if (cmd->hdr)
 			return gen7_hfi_send_generic_req(adreno_dev, cmd, sizeof(*cmd));
 
-		if (tbl->gpu_level_num > MAX_GX_LEVELS_LEGACY || tbl->gmu_level_num > MAX_CX_LEVELS)
+		if (tbl->gpu_level_num > MAX_GX_LEVELS_LEGACY ||
+			tbl->gmu_level_num > MAX_CX_LEVELS_LEGACY)
 			return -EINVAL;
 
 		ret = CMD_MSG_HDR(*cmd, H2F_MSG_PERF_TBL);

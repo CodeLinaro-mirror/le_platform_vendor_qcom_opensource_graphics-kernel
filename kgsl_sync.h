@@ -133,8 +133,6 @@ void kgsl_hw_fence_trigger_cpu(struct kgsl_device *device, struct kgsl_sync_fenc
 
 bool kgsl_hw_fence_signaled(struct dma_fence *fence);
 
-bool kgsl_is_hw_fence(struct dma_fence *fence);
-
 void kgsl_get_fence_name(struct dma_fence *f, char *name, u32 max_size);
 
 int kgsl_hw_fence_soccp_vote(bool pwr_on);
@@ -273,11 +271,6 @@ void kgsl_hw_fence_trigger_cpu(struct kgsl_device *device, struct kgsl_sync_fenc
 }
 
 bool kgsl_hw_fence_signaled(struct dma_fence *fence)
-{
-	return false;
-}
-
-bool kgsl_is_hw_fence(struct dma_fence *fence)
 {
 	return false;
 }

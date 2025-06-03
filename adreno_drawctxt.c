@@ -542,7 +542,7 @@ static void wait_for_timestamp_rb(struct kgsl_device *device,
 	 * internal_timestamp is set in adreno_ringbuffer_addcmds,
 	 * which holds the device mutex.
 	 */
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 
 	/*
 	 * Wait for the last global timestamp to pass before continuing.
@@ -571,7 +571,7 @@ static void wait_for_timestamp_rb(struct kgsl_device *device,
 
 		adreno_set_gpu_fault(adreno_dev,
 				ADRENO_CTX_DETATCH_TIMEOUT_FAULT);
-		mutex_unlock(&device->mutex);
+		kgsl_mutex_unlock(&device->mutex);
 
 		/* Schedule dispatcher to kick in recovery */
 		adreno_scheduler_queue(adreno_dev);
@@ -593,7 +593,7 @@ static void wait_for_timestamp_rb(struct kgsl_device *device,
 
 	adreno_profile_process_results(adreno_dev);
 
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 }
 
 void adreno_drawctxt_detach(struct kgsl_context *context)

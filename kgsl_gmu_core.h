@@ -22,7 +22,8 @@
 
 #define MAX_GX_LEVELS		32
 #define MAX_GX_LEVELS_LEGACY	16
-#define MAX_CX_LEVELS		4
+#define MAX_CX_LEVELS		16
+#define MAX_CX_LEVELS_LEGACY	4
 #define MAX_BW_LEVELS		16
 #define MAX_CNOC_LEVELS		2
 #define MAX_CNOC_CMDS		6
@@ -72,6 +73,7 @@ enum gmu_core_flags {
 	GMU_DISABLE_SLUMBER,
 	GMU_THERMAL_MITIGATION,
 	GMU_FORCE_COLDBOOT,
+	GMU_SOCCP_VOTE_ON,
 };
 
 /*
@@ -91,6 +93,7 @@ enum oob_request {
 
 #define GPU_HW_ACTIVE	0x00
 #define GPU_HW_IFPC	0x03
+#define GPU_HW_MINBW	0x06
 #define GPU_HW_SLUMBER	0x0f
 
 /*
@@ -112,10 +115,6 @@ enum oob_request {
 
 #define FENCE_STATUS_WRITEDROPPED0_MASK 0x1
 #define FENCE_STATUS_WRITEDROPPED1_MASK 0x2
-
-#define GMU_MAX_PWRLEVELS	2
-#define GMU_FREQ_MIN   200000000
-#define GMU_FREQ_MAX   500000000
 
 #define HFI_VERSION(major, minor, step) \
 	(FIELD_PREP(GENMASK(31, 28), major) | \
@@ -223,6 +222,14 @@ enum gmu_vrb_idx {
 	VRB_PREEMPT_COUNT_L1A = 7,
 	/* Contains the number of L1B GPU preemptions */
 	VRB_PREEMPT_COUNT_L1B = 8,
+	/* Contains the GMU VA for power limits trace buffer */
+	VRB_PWR_LIMITS_TRACE_BUF = 9,
+	/* Contains the total size of context record in KB */
+	VRB_CTXRECORD_TOTAL_SZ = 10,
+	/* Contains the size of AQE context record in KB */
+	VRB_CTXRECORD_AQE_SZ = 11,
+	/* Contains the size of GMEM inside context record in KB */
+	VRB_CTXRECORD_GMEM_SZ = 12,
 };
 
 /* For GMU Trace */
@@ -447,8 +454,6 @@ enum {
 	GMU_PRIV_WARMBOOT_GMU_INIT_DONE,
 	/* Indicates if GPU BOOT HFI messages are recorded successfully */
 	GMU_PRIV_WARMBOOT_GPU_BOOT_DONE,
-	/* Indicates if soccp was voted on for hardware fences */
-	GMU_PRIV_SOCCP_VOTE_ON,
 };
 
 struct device_node;
@@ -498,6 +503,7 @@ struct gmu_dev_ops {
 	void (*force_first_boot)(struct kgsl_device *device);
 	void (*send_nmi)(struct kgsl_device *device, bool force,
 		enum gmu_fault_panic_policy gf_policy);
+	void (*minbw_idle_level_set)(struct kgsl_device *device, u32 val);
 };
 
 struct firmware_capabilities {
@@ -541,6 +547,33 @@ struct gmu_core_device {
 	} ver;
 	/** @warmboot_enabled: True if warmboot is enabled */
 	bool warmboot_enabled;
+	/** @rdpm_cx_virt: Pointer where the RDPM CX block is mapped */
+	void __iomem *rdpm_cx_virt;
+	/** @rdpm_mx_virt: Pointer where the RDPM MX block is mapped */
+	void __iomem *rdpm_mx_virt;
+	/** @rdpm_cx_offset: Offset of RDPM CX register */
+	u32 rdpm_cx_offset;
+	/** @rdpm_mx_offset: Offset of RDPM MX register */
+	u32 rdpm_mx_offset;
+	/** @clks: GPU subsystem clocks required for GMU functionality */
+	struct clk_bulk_data *clks;
+	/** @num_clks: Number of entries in the @clks array */
+	int num_clks;
+	/** @freqs: Array of GMU frequencies */
+	u32 freqs[MAX_CX_LEVELS];
+	/** @num_freqs: Number of entries in the @freqs array */
+	int num_freqs;
+	/** @vlvls: Array of GMU voltage levels */
+	u32 vlvls[MAX_CX_LEVELS];
+	/*
+	 * @perf_ddr_bw: The lowest ddr bandwidth that puts CX at a corner at
+	 * which GMU can run at higher frequency.
+	 */
+	u32 perf_ddr_bw[MAX_CX_LEVELS];
+	/** @cur_level: Tracks current frequency level for GMU */
+	u32 cur_level;
+	/** @gpu_pwrscale_enable: Flag to toggle GMU based DCVS pwrscale */
+	bool gpu_pwrscale_enable;
 };
 
 extern struct platform_driver a6xx_gmu_driver;
@@ -816,13 +849,12 @@ void gmu_core_reset_trace_header(struct kgsl_gmu_trace *trace);
 
 /**
  * gmu_core_soccp_vote - vote for soccp power
- * @dev: Pointer to gmu pdev device
- * @flags: Pointer to gmu flags
+ * @device: Pointer to kgsl device
  * @pwr_on: Boolean to indicate vote on or off
 
  * Return: Negative error on failure and zero on success.
  */
-int gmu_core_soccp_vote(struct device *dev, unsigned long *flags, bool pwr_on);
+int gmu_core_soccp_vote(struct kgsl_device *device, bool pwr_on);
 
 /**
  * gmu_core_capabilities_enabled - Check specific capabilities are enabled or not
@@ -854,4 +886,66 @@ void gmu_core_mark_for_coldboot(struct kgsl_device *device);
 int gmu_core_reserve_gmuaddr(struct kgsl_device *device, struct kgsl_memdesc *md,
 		u32 vma_id, u32 align);
 
+/**
+ * gmu_core_rdpm_probe - Probe GMU RDPM resources
+ * @device: Pointer to KGSL device
+ */
+void gmu_core_rdpm_probe(struct kgsl_device *device);
+
+/**
+ * gmu_core_rdpm_mx_freq_update - Update the mx frequency
+ * @device: Pointer to KGSL device
+ * @freq: Frequency in KHz
+ *
+ * This function communicates GPU mx frequency(in Mhz) changes to rdpm.
+ */
+void gmu_core_rdpm_mx_freq_update(struct kgsl_device *device, u32 freq);
+
+/**
+ * gmu_core_rdpm_cx_freq_update - Update the cx frequency
+ * @device: Pointer to KGSL device
+ * @freq: Frequency in KHz
+ *
+ * This function communicates GPU cx frequency(in Mhz) changes to rdpm.
+ */
+void gmu_core_rdpm_cx_freq_update(struct kgsl_device *device, u32 freq);
+
+/**
+ * gmu_core_clk_probe - Probe gmu clocks
+ * @device: Pointer to KGSL device
+ *
+ * Return: 0 on success or negative error on failure
+ */
+int gmu_core_clk_probe(struct kgsl_device *device);
+
+/**
+ * gmu_core_clock_set_rate - Set the gmu clock rate
+ * @device: Pointer to KGSL device
+ * @gmu_level: Requested gmu power level
+ *
+ * Returns 0 on success or error on clock set rate failure
+ */
+int gmu_core_clock_set_rate(struct kgsl_device *device, u32 gmu_level);
+
+/**
+ * gmu_core_enable_clks - Enable gmu clocks
+ * @device: Pointer to KGSL device
+ * @level: GMU frequency level
+ *
+ * Return: 0 on success or negative error on failure
+ */
+int gmu_core_enable_clks(struct kgsl_device *device, u32 level);
+
+/**
+ * gmu_core_disable_clks - Disable gmu clocks
+ * @device: Pointer to KGSL device
+ */
+void gmu_core_disable_clks(struct kgsl_device *device);
+
+/**
+ * gmu_core_scale_gmu_frequency - Scale GMU frequency based on DDR bus level
+ * @device: Pointer to KGSL device
+ * @buslevel: DDR bus level to determine the required GMU frequency
+ */
+void gmu_core_scale_gmu_frequency(struct kgsl_device *device, int buslevel);
 #endif /* __KGSL_GMU_CORE_H */

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/of.h>
@@ -42,8 +42,12 @@ static inline u64 snapshot_phy_addr(struct kgsl_device *device)
 
 static inline u64 atomic_snapshot_phy_addr(struct kgsl_device *device)
 {
-	return device->snapshot_memory_atomic.ptr == device->snapshot_memory.ptr ?
-		snapshot_phy_addr(device) : __pa(device->snapshot_memory_atomic.ptr);
+	if (device->snapshot_memory_atomic.ptr == device->snapshot_memory.ptr)
+		return snapshot_phy_addr(device);
+
+	return device->snapshot_memory_atomic.dma_handle ?
+		device->snapshot_memory_atomic.dma_handle :
+		__pa(device->snapshot_memory_atomic.ptr);
 }
 
 static void obj_itr_init(struct snapshot_obj_itr *itr, u8 *buf,
@@ -552,6 +556,9 @@ static void kgsl_device_snapshot_atomic(struct kgsl_device *device)
 		return;
 	}
 
+	if (device->snapshot_memory_atomic.ptr)
+		goto snapshot;
+
 	device->snapshot_memory_atomic.size = device->snapshot_memory.size;
 	if (!device->snapshot_faultcount) {
 		/* Use non-atomic snapshot memory if it is unused */
@@ -579,6 +586,7 @@ static void kgsl_device_snapshot_atomic(struct kgsl_device *device)
 		}
 	}
 
+snapshot:
 	/* Allocate memory for the snapshot instance */
 	snapshot = kzalloc(sizeof(*snapshot), GFP_ATOMIC);
 	if (snapshot == NULL)
@@ -590,6 +598,10 @@ static void kgsl_device_snapshot_atomic(struct kgsl_device *device)
 
 	snapshot->start = device->snapshot_memory_atomic.ptr;
 	snapshot->ptr = device->snapshot_memory_atomic.ptr;
+
+	/* Ensure size is read after reading address */
+	smp_rmb();
+
 	snapshot->remain = device->snapshot_memory_atomic.size;
 
 	/*
@@ -782,7 +794,7 @@ static int snapshot_release(struct kgsl_device *device,
 	bool snapshot_free = false;
 	int ret = 0;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 	snapshot->sysfs_read--;
 
 	/*
@@ -794,7 +806,7 @@ static int snapshot_release(struct kgsl_device *device,
 		if (!snapshot->sysfs_read)
 			snapshot_free = true;
 	}
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 	if (snapshot_free)
 		kgsl_free_snapshot(snapshot);
 	return ret;
@@ -811,7 +823,7 @@ static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
 	struct snapshot_obj_itr itr;
 	int ret = 0;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 	snapshot = device->snapshot;
 	if (snapshot != NULL) {
 		/*
@@ -828,7 +840,7 @@ static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
 		if (!ret)
 			snapshot->sysfs_read++;
 	}
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 
 	if (ret)
 		return ret;
@@ -879,13 +891,13 @@ static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
 	if (itr.write == 0) {
 		bool snapshot_free = false;
 
-		mutex_lock(&device->mutex);
+		kgsl_mutex_lock(&device->mutex);
 		if (--snapshot->sysfs_read == 0) {
 			if (device->snapshot == snapshot)
 				device->snapshot = NULL;
 			snapshot_free = true;
 		}
-		mutex_unlock(&device->mutex);
+		kgsl_mutex_unlock(&device->mutex);
 
 		if (snapshot_free)
 			kgsl_free_snapshot(snapshot);
@@ -985,9 +997,9 @@ static ssize_t timestamp_show(struct kgsl_device *device, char *buf)
 {
 	unsigned long timestamp;
 
-	mutex_lock(&device->mutex);
+	kgsl_mutex_lock(&device->mutex);
 	timestamp = device->snapshot ? device->snapshot->timestamp : 0;
-	mutex_unlock(&device->mutex);
+	kgsl_mutex_unlock(&device->mutex);
 	return scnprintf(buf, PAGE_SIZE, "%lu\n", timestamp);
 }
 
@@ -1169,6 +1181,11 @@ void kgsl_device_snapshot_close(struct kgsl_device *device)
 	if (device->snapshot_memory.dma_handle)
 		dma_free_coherent(&device->pdev->dev, device->snapshot_memory.size,
 			device->snapshot_memory.ptr, device->snapshot_memory.dma_handle);
+
+	if (device->snapshot_memory_atomic.dma_handle)
+		dma_free_coherent(&device->pdev->dev, device->snapshot_memory_atomic.size,
+			device->snapshot_memory_atomic.ptr,
+			device->snapshot_memory_atomic.dma_handle);
 }
 
 /**

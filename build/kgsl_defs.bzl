@@ -123,10 +123,18 @@ def external_deps(target, variant):
 def define_target_variant_module(target, variant):
     tv = "{}_{}".format(target, variant)
     rule_name = "{}_msm_kgsl".format(tv)
-    kernel_build = select({
-        "//build/kernel/kleaf:socrepo_true": "//soc-repo:{}_base_kernel".format(tv),
-        "//build/kernel/kleaf:socrepo_false": "//msm-kernel:{}".format(tv),
-    })
+
+    if target in [ "neo-la" ]:
+        kernel_build = select({
+            "//build/kernel/kleaf:microxr_kernel_build_true": "//:target_kernel_build",
+            "//build/kernel/kleaf:socrepo_true": "//soc-repo:{}_base_kernel".format(tv),
+            "//conditions:default": "//msm-kernel:{}".format(tv),
+        })
+    else:
+        kernel_build = select({
+            "//build/kernel/kleaf:socrepo_true": "//soc-repo:{}_base_kernel".format(tv),
+            "//build/kernel/kleaf:socrepo_false": "//msm-kernel:{}".format(tv),
+        })
 
     ext_deps = external_deps(target, variant)
 

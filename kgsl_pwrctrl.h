@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2010-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __KGSL_PWRCTRL_H
 #define __KGSL_PWRCTRL_H
@@ -207,6 +207,8 @@ struct kgsl_pwrctrl {
 	struct kthread_work cooling_work;
 	/** @update_dcvs_table: Set when the dcvs table needs an update for GMU */
 	bool update_dcvs_table;
+	/** @mutex: Mutex to protect pwrctrl entities */
+	struct mutex mutex;
 };
 
 int kgsl_pwrctrl_init(struct kgsl_device *device);

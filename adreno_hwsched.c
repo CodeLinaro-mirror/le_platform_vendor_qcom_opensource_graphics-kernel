@@ -2152,7 +2152,7 @@ static void adreno_hwsched_snapshot_legacy(struct adreno_device *adreno_dev, int
 	kgsl_drawobj_put(drawobj);
 }
 
-static void adreno_hwsched_snapshot(struct adreno_device *adreno_dev, int fault)
+static int adreno_hwsched_snapshot_and_soft_reset(struct adreno_device *adreno_dev, int fault)
 {
 	struct kgsl_drawobj *drawobj = NULL;
 	struct kgsl_drawobj *drawobj_lpac = NULL;
@@ -2220,7 +2220,10 @@ static void adreno_hwsched_snapshot(struct adreno_device *adreno_dev, int fault)
 			kgsl_device_snapshot(device, NULL, NULL, false);
 
 		adreno_gpufault_stats(adreno_dev, NULL, NULL, fault);
-		return;
+
+		/* Faulting command not found, Hence force hard reset */
+		adreno_dev->hwsched.reset_type = GMU_GPU_HARD_RESET;
+		goto done;
 	}
 
 	if (obj)
@@ -2289,10 +2292,9 @@ done:
 		ret = gpudev->soft_reset(adreno_dev, NULL, ctx_guilty);
 
 	memset(hwsched->ctxt_bad, 0x0, HFI_MAX_MSG_SIZE);
-	clear_bit(ADRENO_HWSCHED_GPU_SOFT_RESET, &adreno_dev->hwsched.flags);
 	adreno_dev->hwsched.reset_type = GMU_GPU_RESET_NONE;
-	if (ret && gpudev->reset)
-		gpudev->reset(adreno_dev);
+
+	return ret;
 }
 
 static bool adreno_hwsched_do_fault(struct adreno_device *adreno_dev)
@@ -2334,14 +2336,16 @@ static bool adreno_hwsched_do_fault(struct adreno_device *adreno_dev)
 		if ((fault & ADRENO_IOMMU_STALL_ON_PAGE_FAULT) && adreno_gx_is_on(adreno_dev))
 			adreno_writereg(adreno_dev, ADRENO_REG_CP_ME_CNTL, 0);
 
-		if (test_bit(ADRENO_HWSCHED_CTX_BAD_LEGACY, &hwsched->flags))
+		if (test_bit(ADRENO_HWSCHED_CTX_BAD_LEGACY, &hwsched->flags)) {
 			adreno_hwsched_snapshot_legacy(adreno_dev, fault);
-		else
-			adreno_hwsched_snapshot(adreno_dev, fault);
+			memset(hwsched->ctxt_bad, 0x0, HFI_MAX_MSG_SIZE);
+			adreno_gpudev_reset(adreno_dev);
+		} else {
+			int ret = adreno_hwsched_snapshot_and_soft_reset(adreno_dev, fault);
 
-		memset(hwsched->ctxt_bad, 0x0, HFI_MAX_MSG_SIZE);
-
-		adreno_gpudev_reset(adreno_dev);
+			if (ret)
+				adreno_gpudev_reset(adreno_dev);
+		}
 	}
 
 	adreno_scheduler_queue(adreno_dev);

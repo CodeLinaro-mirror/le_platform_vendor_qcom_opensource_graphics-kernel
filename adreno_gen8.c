@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/debugfs.h>
@@ -300,6 +300,7 @@ static const u32 gen8_2_0_ifpc_pwrup_reglist[] = {
 	GEN8_SP_CHICKEN_BITS,
 	GEN8_SP_CHICKEN_BITS_2,
 	GEN8_SP_CHICKEN_BITS_3,
+	GEN8_SP_CHICKEN_BITS_4,
 	GEN8_SP_PERFCTR_SHADER_MASK,
 	GEN8_TPL1_DBG_ECO_CNTL,
 	GEN8_TPL1_DBG_ECO_CNTL1,
@@ -611,7 +612,7 @@ struct gen8_nonctxt_overrides gen8_nc_overrides[] = {
 	{ GEN8_SP_CHICKEN_BITS_1, BIT(PIPE_NONE), 0, 0, 0, },
 	{ GEN8_SP_CHICKEN_BITS_2, BIT(PIPE_NONE), 0, 0, 0, },
 	{ GEN8_SP_CHICKEN_BITS_3, BIT(PIPE_NONE), 0, 0, 0, },
-	{ GEN8_SP_CHICKEN_BITS_4, BIT(PIPE_NONE), 0, 0, 1, },
+	{ GEN8_SP_CHICKEN_BITS_4, BIT(PIPE_NONE), 0, 0, 0, },
 	{ GEN8_SP_DISPATCH_CNTL, BIT(PIPE_NONE), 0, 0, 1, },
 	{ GEN8_SP_HLSQ_DBG_ECO_CNTL, BIT(PIPE_NONE), 0, 0, 1, },
 	{ GEN8_SP_DBG_CNTL, BIT(PIPE_NONE), 0, 0, 1, },

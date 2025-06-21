@@ -1755,8 +1755,9 @@ static int gen8_hfi_send_hw_fence_feature_ctrl(struct adreno_device *adreno_dev)
 
 static int gen8_hfi_send_soft_reset_feature_ctrl(struct adreno_device *adreno_dev)
 {
-	if (!gmu_core_capabilities_enabled(&KGSL_DEVICE(adreno_dev)->gmu_core.common_caps,
-					   FAC_SOFT_RESET))
+	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
+
+	if (!test_bit(ADRENO_HWSCHED_GPU_SOFT_RESET, &hwsched->flags))
 		return 0;
 
 	return gen8_hfi_send_feature_ctrl(adreno_dev, HFI_FEATURE_SOFT_RESET, 1, 0);
@@ -4069,13 +4070,13 @@ int gen8_hwsched_soft_reset(struct adreno_device *adreno_dev,
 	struct hfi_context_bad_cmd *in = (struct hfi_context_bad_cmd *)adreno_dev->hwsched.ctxt_bad;
 	int ret;
 
+	if (!test_bit(ADRENO_HWSCHED_GPU_SOFT_RESET, &adreno_dev->hwsched.flags))
+		return -EOPNOTSUPP;
+
 	if (adreno_dev->hwsched.reset_type != GMU_GPU_SOFT_RESET)
 		return -EINVAL;
 
 	if (!test_bit(GMU_PRIV_GPU_STARTED, &gmu->flags))
-		return 0;
-
-	if (test_bit(ADRENO_HWSCHED_GPU_SOFT_RESET, &adreno_dev->hwsched.flags))
 		return 0;
 
 	gen8_disable_gpu_irq(adreno_dev);
@@ -4164,8 +4165,6 @@ int gen8_hwsched_soft_reset(struct adreno_device *adreno_dev,
 		device->snapshot->recovered = true;
 
 	device->reset_counter++;
-	set_bit(ADRENO_HWSCHED_GPU_SOFT_RESET, &adreno_dev->hwsched.flags);
-
 done:
 	if (ret)
 		dev_err(device->dev, "GPU soft reset failed: %d\n", ret);

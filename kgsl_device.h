@@ -1,11 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2002,2007-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __KGSL_DEVICE_H
 #define __KGSL_DEVICE_H
 
+#include <linux/spinlock.h> /* Included before rtmutex.h to avoid a compile error */
 #include <linux/rtmutex.h>
 #include <linux/sched/mm.h>
 #include <linux/sched/task.h>
@@ -209,6 +210,8 @@ struct kgsl_functable {
 	/** @alloc_dcvs_profile_memory: Function ops for GMU based DCVS profile operations */
 	void (*alloc_dcvs_profile_memory)(struct kgsl_device *device,
 		struct kgsl_process_private *proc_priv);
+	/** @is_reset_recovery: Check if the ADRENO device under goes reset recovery */
+	bool (*is_reset_recovery)(struct kgsl_device *device);
 };
 
 struct kgsl_ioctl {

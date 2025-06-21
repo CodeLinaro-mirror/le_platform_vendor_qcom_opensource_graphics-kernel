@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2002,2007-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define ANY_ID (~0)
@@ -2879,7 +2879,8 @@ static const struct gen8_nonctxt_regs gen8_0_0_nonctxt_regs[] = {
 	{ GEN8_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080,  BIT(PIPE_NONE) },
 	{ GEN8_TPL1_DBG_ECO_CNTL, 0x10000000, BIT(PIPE_NONE) },
 	/* Enable cubemap small miplevel optimization settings */
-	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x00000724, BIT(PIPE_NONE) },
+	/* BIT(26): Disable final clamp for bicubic filtering */
+	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x04000724, BIT(PIPE_NONE) },
 	/* Disable tag bank id hashing */
 	{ GEN8_UCHE_MODE_CNTL, 0x00080000, BIT(PIPE_NONE) },
 	{ GEN8_UCHE_CCHE_MODE_CNTL, 0x00001000, BIT(PIPE_NONE) },
@@ -3229,6 +3230,8 @@ static const struct gen8_nonctxt_regs gen8_2_0_nonctxt_regs[] = {
 	/* Disable PS out of order retire */
 	{ GEN8_SP_CHICKEN_BITS_2, 0xc21800, BIT(PIPE_NONE) },
 	{ GEN8_SP_CHICKEN_BITS_3, 0x00300000, BIT(PIPE_NONE) },
+	/* Disable SP2TP info attribute */
+	{ GEN8_SP_CHICKEN_BITS_4, 0x00000002, BIT(PIPE_NONE) },
 	{ GEN8_SP_PERFCTR_SHADER_MASK, 0x0000003f, BIT(PIPE_NONE) },
 	/* Ignore HLSQ shared constant feedback from SP */
 	{ GEN8_SP_HLSQ_DBG_ECO_CNTL_1, BIT(17), BIT(PIPE_NONE) },
@@ -3237,7 +3240,8 @@ static const struct gen8_nonctxt_regs gen8_2_0_nonctxt_regs[] = {
 	{ GEN8_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080, BIT(PIPE_NONE) },
 	{ GEN8_SP_READ_SEL, 0x0001ff00, BIT(PIPE_NONE) },
 	{ GEN8_TPL1_DBG_ECO_CNTL, 0x10000000, BIT(PIPE_NONE) },
-	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x00000720, BIT(PIPE_NONE) },
+	/* BIT(26): Disable final clamp for bicubic filtering */
+	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x04000720, BIT(PIPE_NONE) },
 	{ GEN8_UCHE_MODE_CNTL, 0x80080000, BIT(PIPE_NONE) },
 	{ GEN8_UCHE_CCHE_MODE_CNTL, 0x00001000, BIT(PIPE_NONE) },
 	{ GEN8_UCHE_CCHE_CACHE_WAYS, 0x00000800, BIT(PIPE_NONE) },
@@ -3401,7 +3405,8 @@ static const struct gen8_nonctxt_regs gen8_4_0_nonctxt_regs[] = {
 	{ GEN8_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080,  BIT(PIPE_NONE) },
 	{ GEN8_TPL1_DBG_ECO_CNTL, 0x10000000, BIT(PIPE_NONE) },
 	/* Enable cubemap small miplevel optimization settings */
-	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x00000724, BIT(PIPE_NONE) },
+	/* BIT(26): Disable final clamp for bicubic filtering */
+	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x04000724, BIT(PIPE_NONE) },
 	/* Disable tag bank id hashing */
 	{ GEN8_UCHE_MODE_CNTL, 0x00080000, BIT(PIPE_NONE) },
 	{ GEN8_UCHE_CCHE_MODE_CNTL, 0x00001000, BIT(PIPE_NONE) },
@@ -3512,7 +3517,8 @@ static const struct gen8_nonctxt_regs gen8_3_0_nonctxt_regs[] = {
 	{ GEN8_SP_PERFCTR_SHADER_MASK, 0x0000003f, BIT(PIPE_NONE) },
 	{ GEN8_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080, BIT(PIPE_NONE) },
 	{ GEN8_TPL1_DBG_ECO_CNTL, 0x10000000, BIT(PIPE_NONE) },
-	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x00000724, BIT(PIPE_NONE) },
+	/* BIT(26): Disable final clamp for bicubic filtering */
+	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x04000724, BIT(PIPE_NONE) },
 	{ GEN8_UCHE_MODE_CNTL, 0x00020000, BIT(PIPE_NONE) },
 	{ GEN8_UCHE_CCHE_MODE_CNTL, 0x00001000, BIT(PIPE_NONE) },
 	{ GEN8_UCHE_CCHE_CACHE_WAYS, 0x00000800, BIT(PIPE_NONE) },
@@ -3603,7 +3609,8 @@ static const struct gen8_nonctxt_regs gen8_6_0_nonctxt_regs[] = {
 	{ GEN8_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080,  BIT(PIPE_NONE) },
 	{ GEN8_TPL1_DBG_ECO_CNTL, 0x10000000, BIT(PIPE_NONE) },
 	/* Enable cubemap small miplevel optimization settings */
-	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x00000724, BIT(PIPE_NONE) },
+	/* BIT(26): Disable final clamp for bicubic filtering */
+	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x04000724, BIT(PIPE_NONE) },
 	/* Disable tag bank id hashing */
 	{ GEN8_UCHE_MODE_CNTL, 0x00080000, BIT(PIPE_NONE) },
 	{ GEN8_UCHE_CCHE_MODE_CNTL, 0x00001000, BIT(PIPE_NONE) },

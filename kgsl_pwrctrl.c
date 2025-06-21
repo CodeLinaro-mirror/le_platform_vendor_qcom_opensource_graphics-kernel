@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2010-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/clk/qcom.h>
@@ -19,6 +19,7 @@
 
 #include "kgsl_device.h"
 #include "kgsl_bus.h"
+#include "kgsl_eventlog.h"
 #include "kgsl_power_trace.h"
 #include "kgsl_pwrscale.h"
 #include "kgsl_sysfs.h"
@@ -614,12 +615,17 @@ static ssize_t gpubusy_show(struct device *dev,
 	int ret;
 	struct kgsl_device *device = dev_get_drvdata(dev);
 	struct kgsl_clk_stats *stats = &device->pwrctrl.clk_stats;
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 
 	ret = scnprintf(buf, PAGE_SIZE, "%7d %7d\n",
 			stats->busy_old, stats->total_old);
-	if (!test_bit(KGSL_PWRFLAGS_AXI_ON, &device->pwrctrl.power_flags)) {
+
+	/* Reset the stats if GPU is OFF */
+	if ((atomic_read(&device->active_cnt) == 0)) {
+		mutex_lock(&pwr->mutex);
 		stats->busy_old = 0;
 		stats->total_old = 0;
+		mutex_unlock(&pwr->mutex);
 	}
 	return ret;
 }
@@ -876,6 +882,7 @@ static ssize_t _gpu_busy_show(struct kgsl_device *device,
 {
 	int ret;
 	struct kgsl_clk_stats *stats = &device->pwrctrl.clk_stats;
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	unsigned int busy_percent = 0;
 
 	if (stats->total_old != 0)
@@ -884,9 +891,11 @@ static ssize_t _gpu_busy_show(struct kgsl_device *device,
 	ret = scnprintf(buf, PAGE_SIZE, "%d %%\n", busy_percent);
 
 	/* Reset the stats if GPU is OFF */
-	if (!test_bit(KGSL_PWRFLAGS_AXI_ON, &device->pwrctrl.power_flags)) {
+	if ((atomic_read(&device->active_cnt) == 0)) {
+		mutex_lock(&pwr->mutex);
 		stats->busy_old = 0;
 		stats->total_old = 0;
+		mutex_unlock(&pwr->mutex);
 	}
 	return ret;
 }
@@ -1217,6 +1226,7 @@ int kgsl_pwrctrl_init_sysfs(struct kgsl_device *device)
 void kgsl_pwrctrl_busy_time(struct kgsl_device *device, u64 time, u64 busy, u64 ticks)
 {
 	struct kgsl_clk_stats *stats = &device->pwrctrl.clk_stats;
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 
 	stats->total += time;
 	stats->busy += busy;
@@ -1224,11 +1234,13 @@ void kgsl_pwrctrl_busy_time(struct kgsl_device *device, u64 time, u64 busy, u64 
 	if (stats->total < UPDATE_BUSY_VAL)
 		return;
 
+	mutex_lock(&pwr->mutex);
 	/* Update the output regularly and reset the counters. */
 	stats->total_old = stats->total;
 	stats->busy_old = stats->busy;
 	stats->total = 0;
 	stats->busy = 0;
+	mutex_unlock(&pwr->mutex);
 
 	trace_kgsl_gpubusy(device, stats->busy_old, stats->total_old, ticks);
 }
@@ -1392,18 +1404,27 @@ int kgsl_pwrctrl_enable_cx_gdsc(struct kgsl_device *device)
 	if (!pwr->cx_regulator && !pwr->gmu_cx_pd)
 		return 0;
 
-	ret = wait_for_completion_timeout(&pwr->cx_gdsc_gate, msecs_to_jiffies(5000));
-	if (!ret) {
-		/* Dump the cx regulator consumer list */
-		if (pwr->cx_regulator) {
-			dev_err(device->dev, "GPU CX wait timeout. Dumping CX votes:\n");
-			qcom_clk_dump(NULL, pwr->cx_regulator, false);
-		} else {
-			dev_err(device->dev, "GPU CX wait timeout\n");
+	/*
+	 * Wait for CX GDSC collapse during hang recovery to prevent
+	 * boot up from stale state.
+	 */
+	if (device->ftbl->is_reset_recovery(device)) {
+		ret = wait_for_completion_timeout(&pwr->cx_gdsc_gate, msecs_to_jiffies(5000));
+		if (!ret) {
+			/* Dump the cx regulator consumer list */
+			if (pwr->cx_regulator) {
+				dev_err(device->dev, "GPU CX wait timeout. Dumping CX votes:\n");
+				qcom_clk_dump(NULL, pwr->cx_regulator, false);
+			} else {
+				dev_err(device->dev, "GPU CX wait timeout\n");
+			}
+			KGSL_GMU_CORE_FORCE_PANIC(device->gmu_core.gf_panic,
+				GMU_PDEV(device), 0ULL, GMU_FAULT_CX_WAIT_TIMEOUT);
 		}
-		KGSL_GMU_CORE_FORCE_PANIC(device->gmu_core.gf_panic,
-			GMU_PDEV(device), 0ULL, GMU_FAULT_CX_WAIT_TIMEOUT);
 	}
+
+	if (!completion_done(&pwr->cx_gdsc_gate))
+		log_kgsl_cx_wait_timeout_event(HLOS_CX_WAIT_TIMEOUT);
 
 	if (pwr->cx_regulator)
 		ret = regulator_enable(pwr->cx_regulator);
@@ -1609,6 +1630,7 @@ static int kgsl_cx_gdsc_event(struct notifier_block *nb,
 		if (kgsl_regmap_read_poll_timeout(&device->regmap, pwr->cx_cfg_gdsc_offset,
 			val, (val & BIT(15)), 100, 100 * 1000)) {
 			dev_err(device->dev, "GPU CX GDSC power down timed out\n");
+			log_kgsl_cx_wait_timeout_event(NONHLOS_CX_WAIT_TIMEOUT);
 			KGSL_GMU_CORE_FORCE_PANIC(device->gmu_core.gf_panic,
 				GMU_PDEV(device), 0ULL, GMU_FAULT_WAIT_FOR_CX);
 		}
@@ -1968,6 +1990,8 @@ int kgsl_pwrctrl_init(struct kgsl_device *device)
 		dev_err(device->dev, "No power levels are defined\n");
 		return -EINVAL;
 	}
+
+	mutex_init(&pwr->mutex);
 
 	init_waitqueue_head(&device->active_cnt_wq);
 

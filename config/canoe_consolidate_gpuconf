@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
 
 CONFIG_QCOM_KGSL=m
 CONFIG_QCOM_KGSL_IDLE_TIMEOUT=80
@@ -10,3 +10,4 @@ CONFIG_QCOM_ADRENO_DEFAULT_GOVERNOR="msm-adreno-tz"
 CONFIG_QCOM_KGSL_USE_SHMEM=y
 CONFIG_QCOM_KGSL_PROCESS_RECLAIM=y
 CONFIG_QCOM_KGSL_SYNX=y
+CONFIG_QCOM_KGSL_RT_MUTEX=y

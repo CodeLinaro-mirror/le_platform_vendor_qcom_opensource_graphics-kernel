@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #if !defined(_ADRENO_TRACE_H) || defined(TRACE_HEADER_MULTI_READ)
@@ -1008,6 +1008,67 @@ TRACE_EVENT(adreno_dcvs_tuning,
 	),
 	TP_printk("param=%u mingap=%u penalty=%u numbusy=%u",
 		__entry->param, __entry->mingap, __entry->penalty, __entry->numbusy)
+);
+
+TRACE_EVENT(adreno_gpu_vote_params,
+	TP_PROTO(u32 cur_pwrlevel,
+		u32 prev_pwrlevel,
+		u32 avg_busy,
+		u32 flag,
+		u32 penalty,
+		u32 step_down_count,
+		u32 pwrlevel_cap,
+		u32 num_samples,
+		u32 target_fps,
+		u32 mod_percent,
+		u64 ticks
+	),
+	TP_ARGS(cur_pwrlevel, prev_pwrlevel, avg_busy, flag, penalty, step_down_count,
+		pwrlevel_cap, num_samples, target_fps, mod_percent, ticks
+	),
+	TP_STRUCT__entry(
+		__field(u32, cur_pwrlevel)
+		__field(u32, prev_pwrlevel)
+		__field(u32, avg_busy)
+		__field(u32, flag)
+		__field(u32, penalty)
+		__field(u32, step_down_count)
+		__field(u32, pwrlevel_cap)
+		__field(u32, num_samples)
+		__field(u32, target_fps)
+		__field(u32, mod_percent)
+		__field(u64, ticks)
+	),
+	TP_fast_assign(
+		__entry->cur_pwrlevel = cur_pwrlevel;
+		__entry->prev_pwrlevel = prev_pwrlevel;
+		__entry->avg_busy = avg_busy;
+		__entry->flag = flag;
+		__entry->penalty = penalty;
+		__entry->step_down_count = step_down_count;
+		__entry->pwrlevel_cap = pwrlevel_cap;
+		__entry->num_samples = num_samples;
+		__entry->target_fps = target_fps;
+		__entry->mod_percent = mod_percent;
+		__entry->ticks = ticks;
+	),
+	TP_printk("cur_pwrlevel=%u prev_pwrlevel=%u avg_busy=%u penalty_up=%lu penalty_down=%lu first_step_down_count=%lu subsequent_step_down_count=%lu min_pwrlevel=%lu max_pwrlevel=%lu target_fps=%u num_samples_up=%lu num_samples_down=%lu mod_percent=%u flags=0x%08x ticks=%llu",
+		__entry->cur_pwrlevel,
+		__entry->prev_pwrlevel,
+		__entry->avg_busy,
+		FIELD_GET(GENMASK(15, 0), __entry->penalty),
+		FIELD_GET(GENMASK(31, 16), __entry->penalty),
+		FIELD_GET(GENMASK(15, 0), __entry->step_down_count),
+		FIELD_GET(GENMASK(31, 16), __entry->step_down_count),
+		FIELD_GET(GENMASK(15, 0), __entry->pwrlevel_cap),
+		FIELD_GET(GENMASK(31, 16), __entry->pwrlevel_cap),
+		__entry->target_fps,
+		FIELD_GET(GENMASK(15, 0), __entry->num_samples),
+		FIELD_GET(GENMASK(31, 16), __entry->num_samples),
+		__entry->mod_percent,
+		__entry->flag,
+		__entry->ticks
+	)
 );
 
 #endif /* _ADRENO_TRACE_H */

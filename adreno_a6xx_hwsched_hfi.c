@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/iommu.h>
@@ -15,6 +15,7 @@
 #include "adreno_trace.h"
 #include "kgsl_device.h"
 #include "kgsl_eventlog.h"
+#include "kgsl_gmu_core.h"
 #include "kgsl_pwrctrl.h"
 #include "kgsl_trace.h"
 #include "kgsl_util.h"
@@ -1196,7 +1197,6 @@ static int hfi_f2h_main(void *arg)
 {
 	struct adreno_device *adreno_dev = arg;
 	struct a6xx_hwsched_hfi *hfi = to_a6xx_hwsched_hfi(adreno_dev);
-	struct a6xx_gmu_device *gmu = to_a6xx_gmu(adreno_dev);
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
 	while (!kthread_should_stop()) {
@@ -1205,7 +1205,7 @@ static int hfi_f2h_main(void *arg)
 			(((hfi->irq_mask & HFI_IRQ_MSGQ_MASK) &&
 			!is_queue_empty(adreno_dev, HFI_MSG_ID)) ||
 			/* Trace buffer has messages to process */
-			!gmu_core_is_trace_empty(gmu->trace.md->hostptr) ||
+			!gmu_core_is_trace_empty(device->gmu_core.trace.md->hostptr) ||
 			/* Dbgq has messages to process */
 			!is_queue_empty(adreno_dev, HFI_DBG_ID)));
 
@@ -1214,7 +1214,7 @@ static int hfi_f2h_main(void *arg)
 
 		a6xx_hwsched_process_msgq(adreno_dev);
 		gmu_core_process_trace_data(device,
-				GMU_PDEV_DEV(device), &gmu->trace);
+				GMU_PDEV_DEV(device), &device->gmu_core.trace);
 		a6xx_hwsched_process_dbgq(adreno_dev, true);
 	}
 
@@ -1624,7 +1624,7 @@ int a6xx_hwsched_send_recurring_cmdobj(struct adreno_device *adreno_dev,
 	if (test_bit(CMDOBJ_RECURRING_STOP, &cmdobj->priv)) {
 		adreno_hwsched_retire_cmdobj(hwsched, hwsched->recurring_cmdobj);
 		hwsched->recurring_cmdobj = NULL;
-		del_timer_sync(&hwsched->lsr_timer);
+		kgsl_delete_timer_sync(&hwsched->lsr_timer);
 		if (active)
 			adreno_active_count_put(adreno_dev);
 		active = false;

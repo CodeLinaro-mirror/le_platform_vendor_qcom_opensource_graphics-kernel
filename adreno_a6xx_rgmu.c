@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/clk-provider.h>
@@ -1056,7 +1056,7 @@ no_gx_power:
 
 	clear_bit(RGMU_PRIV_GPU_STARTED, &rgmu->flags);
 
-	del_timer_sync(&device->idle_timer);
+	kgsl_delete_timer_sync(&device->idle_timer);
 
 	kgsl_pwrscale_sleep(device);
 
@@ -1142,7 +1142,7 @@ static void a6xx_rgmu_pm_resume(struct adreno_device *adreno_dev)
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct a6xx_rgmu_device *rgmu = to_a6xx_rgmu(adreno_dev);
 
-	if (WARN(!test_bit(GMU_PRIV_PM_SUSPEND, &rgmu->flags),
+	if (WARN(!test_bit(RGMU_PRIV_PM_SUSPEND, &rgmu->flags),
 		"resume invoked without a suspend\n"))
 		return;
 

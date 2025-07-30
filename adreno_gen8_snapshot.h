@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __ADRENO_GEN8_SNAPSHOT_H
 #define __ADRENO_GEN8_SNAPSHOT_H
@@ -685,8 +685,6 @@ struct gen8_snapshot_block_list {
 	struct gen8_sptp_cluster_registers *sptp_clusters;
 	/* num_sptp_clusters : Length of GPU SPTP cluster registers list */
 	size_t num_sptp_clusters;
-	/* post_crashdumper_regs : Registers which need to be dumped after CD runs */
-	const u32 *post_crashdumper_regs;
 	/* index_registers : List of index_registers */
 	struct gen8_cp_indexed_reg *index_registers;
 	/* index_registers_len : Length of the index registers */

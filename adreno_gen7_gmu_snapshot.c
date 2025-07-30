@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include "gen7_reg.h"
@@ -13,6 +13,7 @@
 #include "adreno_gen7_2_0_snapshot.h"
 #include "adreno_gen7_6_0_snapshot.h"
 #include "kgsl_device.h"
+#include "kgsl_gmu_core.h"
 
 static size_t gen7_gmu_snapshot_dtcm(struct kgsl_device *device,
 		u8 *buf, size_t remain, void *priv)
@@ -91,11 +92,12 @@ static void gen7_gmu_snapshot_memories(struct kgsl_device *device,
 {
 	struct gmu_mem_type_desc desc;
 	struct kgsl_memdesc *md;
+	struct gmu_core_device *gmu_core = &device->gmu_core;
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(device->gmu_core.gmu_globals); i++) {
+	for (i = 0; i < ARRAY_SIZE(gmu_core->gmu_globals); i++) {
 
-		md = &device->gmu_core.gmu_globals[i];
+		md = &gmu_core->gmu_globals[i];
 		if (!md->size)
 			continue;
 
@@ -106,9 +108,9 @@ static void gen7_gmu_snapshot_memories(struct kgsl_device *device,
 			desc.type = SNAPSHOT_GMU_MEM_LOG;
 		else if ((md == gmu->gmu_init_scratch) || (md == gmu->gpu_boot_scratch))
 			desc.type = SNAPSHOT_GMU_MEM_WARMBOOT;
-		else if (md == gmu->vrb)
+		else if (md == gmu_core->vrb)
 			desc.type = SNAPSHOT_GMU_MEM_VRB;
-		else if (md == gmu->trace.md)
+		else if (md == gmu_core->trace.md)
 			desc.type = SNAPSHOT_GMU_MEM_TRACE;
 		else
 			desc.type = SNAPSHOT_GMU_MEM_BIN_BLOCK;

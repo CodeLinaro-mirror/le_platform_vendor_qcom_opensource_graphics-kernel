@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2010-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/devfreq_cooling.h>
@@ -155,15 +155,15 @@ void kgsl_pwrscale_update(struct kgsl_device *device)
 }
 
 /*
- * kgsl_pwrscale_disable - temporarily disable the governor
- * @device: The device
+ * kgsl_pwrscale_tz_disable - temporarily disable the tz governor
+ * @device: Pointer to KGSL device
  * @turbo: Indicates if pwrlevel should be forced to turbo
  *
  * Temporarily disable the governor, to prevent interference
  * with profiling tools that expect a fixed clock frequency.
  * This function must be called with the device mutex locked.
  */
-void kgsl_pwrscale_disable(struct kgsl_device *device, bool turbo)
+void kgsl_pwrscale_tz_disable(struct kgsl_device *device, bool turbo)
 {
 	if (WARN_ON(!kgsl_mutex_is_locked(&device->mutex)))
 		return;
@@ -177,13 +177,13 @@ void kgsl_pwrscale_disable(struct kgsl_device *device, bool turbo)
 }
 
 /*
- * kgsl_pwrscale_enable - re-enable the governor
- * @device: The device
+ * kgsl_pwrscale_tz_enable - re-enable the tz governor
+ * @device: Pointer to KGSL device
  *
- * Reenable the governor after a kgsl_pwrscale_disable() call.
+ * Reenable the governor after a kgsl_pwrscale_tz_disable() call.
  * This function must be called with the device mutex locked.
  */
-void kgsl_pwrscale_enable(struct kgsl_device *device)
+void kgsl_pwrscale_tz_enable(struct kgsl_device *device)
 {
 	if (WARN_ON(!kgsl_mutex_is_locked(&device->mutex)))
 		return;
@@ -363,7 +363,7 @@ static int kgsl_devfreq_get_cur_freq(struct device *dev, unsigned long *freq)
 	if (freq == NULL)
 		return -EINVAL;
 
-	if (!pwrscale->devfreq_enabled) {
+	if (device->host_based_dcvs && !pwrscale->devfreq_enabled) {
 		/*
 		 * When we try to use performance governor, this function
 		 * will called by devfreq driver, while adding governor using
@@ -636,7 +636,70 @@ static void pwrscale_of_ca_aware(struct kgsl_device *device)
 	of_node_put(node);
 }
 
-int kgsl_pwrscale_init(struct kgsl_device *device, struct platform_device *pdev,
+#if IS_ENABLED(CONFIG_DEVFREQ_GOV_QCOM_ADRENO_RO)
+#define KGSL_PASSIVE_GOVERNOR_NAME "msm-adreno-ro"
+
+static int kgsl_passive_devfreq_target(struct device *dev, unsigned long *freq, u32 flags)
+{
+	return 0;
+}
+
+static int kgsl_passive_devfreq_get_dev_status(struct device *dev,
+	struct devfreq_dev_status *stat)
+{
+	return 0;
+}
+
+/**
+ * kgsl_pwrscale_passive_init - Initialize the passive governor for gmu based DCVS targets
+ * @device: Pointer to KGSL device
+ * @pdev: Pointer to the GPU platform device
+ */
+static void kgsl_pwrscale_passive_init(struct kgsl_device *device, struct platform_device *pdev)
+{
+	struct kgsl_pwrscale *pwrscale = &device->pwrscale;
+	struct devfreq_dev_profile *profile = &pwrscale->gpu_profile.profile;
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	struct device *dev;
+	int ret, i;
+
+	device->gmu_core.gpu_pwrscale_enable = true;
+	profile->target = kgsl_passive_devfreq_target;
+	profile->get_dev_status = kgsl_passive_devfreq_get_dev_status;
+	profile->get_cur_freq = kgsl_devfreq_get_cur_freq;
+	profile->initial_freq = pwr->pwrlevels[pwr->default_pwrlevel].gpu_freq;
+	profile->max_state = pwr->num_pwrlevels;
+
+	for (i = 0; i < pwr->num_pwrlevels; i++)
+		pwrscale->freq_table[i] = pwr->pwrlevels[i].gpu_freq;
+	profile->freq_table = pwrscale->freq_table;
+
+	pwrscale->gpu_ro_df = devfreq_add_device(&pdev->dev, profile,
+		KGSL_PASSIVE_GOVERNOR_NAME, NULL);
+	if (IS_ERR_OR_NULL(pwrscale->gpu_ro_df)) {
+		ret = PTR_ERR(pwrscale->gpu_ro_df);
+		pwrscale->gpu_ro_df = NULL;
+		dev_err(device->dev, "Failed to add devfreq device for %s governor: %d\n",
+			KGSL_PASSIVE_GOVERNOR_NAME, ret);
+		return;
+	}
+
+	dev = &pwrscale->gpu_ro_df->dev;
+	sysfs_remove_groups(&dev->kobj, dev->class->dev_groups);
+}
+#else
+static void kgsl_pwrscale_passive_init(struct kgsl_device *device, struct platform_device *pdev)
+{
+}
+#endif
+
+/**
+ * kgsl_pwrscale_tz_init - Initialize the pwrscale subsystem for host based DCVS targets
+ * @device: Pointer to KGSL device
+ * @pdev: Pointer to the GPU platform device
+ * @governor: Default devfreq governor to use for GPU frequency scaling
+ */
+static void kgsl_pwrscale_tz_init(struct kgsl_device *device, struct platform_device *pdev,
 		const char *governor)
 {
 	struct kgsl_pwrscale *pwrscale = &device->pwrscale;
@@ -647,12 +710,8 @@ int kgsl_pwrscale_init(struct kgsl_device *device, struct platform_device *pdev,
 
 	/* Set default bus control to true on all targets */
 	pwr->bus_control = true;
-	/* KGSL is performing powerscale */
-	device->host_based_dcvs = true;
-
 	gpu_profile = &pwrscale->gpu_profile;
 	gpu_profile->private_data = &adreno_tz_data;
-
 	gpu_profile->profile.target = kgsl_devfreq_target;
 	gpu_profile->profile.get_dev_status = kgsl_devfreq_get_dev_status;
 	gpu_profile->profile.get_cur_freq = kgsl_devfreq_get_cur_freq;
@@ -711,29 +770,32 @@ int kgsl_pwrscale_init(struct kgsl_device *device, struct platform_device *pdev,
 	if (!pwrscale->devfreq_wq) {
 		dev_err(device->dev, "Failed to allocate kgsl devfreq workqueue\n");
 		device->pwrscale.enabled = false;
-		return -ENOMEM;
+		return;
 	}
 
 	pwrscale->devfreq_notify_worker = kthread_create_worker(0, "kgsl_devfreq_notifier");
 	if (IS_ERR(pwrscale->devfreq_notify_worker)) {
 		ret = PTR_ERR(pwrscale->devfreq_notify_worker);
 		dev_err(device->dev, "Failed to create devfreq notify worker ret: %d\n", ret);
-		return ret;
+		return;
 	}
 
 	ret = msm_adreno_tz_init();
 	if (ret) {
 		dev_err(device->dev, "Failed to add adreno tz governor: %d\n", ret);
 		device->pwrscale.enabled = false;
-		return ret;
+		return;
 	}
 
 	devfreq = devfreq_add_device(&pdev->dev, &gpu_profile->profile,
 			governor, &adreno_tz_data);
 	if (IS_ERR_OR_NULL(devfreq)) {
 		device->pwrscale.enabled = false;
+		ret = PTR_ERR(devfreq);
 		msm_adreno_tz_exit();
-		return IS_ERR(devfreq) ? PTR_ERR(devfreq) : -EINVAL;
+		dev_err(device->dev, "Failed to add devfreq device for %s governor: %d\n",
+			governor, ret);
+		return;
 	}
 
 	pwrscale->enabled = true;
@@ -751,17 +813,21 @@ int kgsl_pwrscale_init(struct kgsl_device *device, struct platform_device *pdev,
 	sched_set_fifo(pwrscale->devfreq_notify_worker->task);
 	pwrscale->next_governor_call = ktime_add_us(ktime_get(),
 			KGSL_GOVERNOR_CALL_INTERVAL);
-
-	return 0;
 }
 
-/*
- * kgsl_pwrscale_close - clean up pwrscale
- * @device: the device
- *
- * This function should be called with the device mutex locked.
+void kgsl_pwrscale_init(struct kgsl_device *device, struct platform_device *pdev)
+{
+	if (device->host_based_dcvs)
+		return kgsl_pwrscale_tz_init(device, pdev, CONFIG_QCOM_ADRENO_DEFAULT_GOVERNOR);
+
+	kgsl_pwrscale_passive_init(device, pdev);
+}
+
+/**
+ * kgsl_pwrscale_tz_close - Clean up tz governor
+ * @device: Pointer to KGSL device
  */
-void kgsl_pwrscale_close(struct kgsl_device *device)
+static void kgsl_pwrscale_tz_close(struct kgsl_device *device)
 {
 	struct kgsl_pwrscale *pwrscale;
 	struct kgsl_pwrctrl *pwr;
@@ -793,6 +859,35 @@ void kgsl_pwrscale_close(struct kgsl_device *device)
 	devfreq_remove_device(device->pwrscale.devfreqptr);
 	device->pwrscale.devfreqptr = NULL;
 	msm_adreno_tz_exit();
+}
+
+#if IS_ENABLED(CONFIG_DEVFREQ_GOV_QCOM_ADRENO_RO)
+/**
+ * kgsl_pwrscale_passive_close - Clean up passive governor
+ * @device: Pointer to KGSL device
+ */
+static void kgsl_pwrscale_passive_close(struct kgsl_device *device)
+{
+	struct kgsl_pwrscale *pwrscale = &device->pwrscale;
+
+	if (!pwrscale->gpu_ro_df)
+		return;
+
+	devfreq_remove_device(pwrscale->gpu_ro_df);
+	pwrscale->gpu_ro_df = NULL;
+}
+#else
+static void kgsl_pwrscale_passive_close(struct kgsl_device *device)
+{
+}
+#endif
+
+void kgsl_pwrscale_close(struct kgsl_device *device)
+{
+	if (device->host_based_dcvs)
+		return kgsl_pwrscale_tz_close(device);
+
+	return kgsl_pwrscale_passive_close(device);
 }
 
 static void do_devfreq_suspend(struct work_struct *work)

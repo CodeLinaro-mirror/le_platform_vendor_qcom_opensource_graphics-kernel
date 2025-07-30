@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/component.h>
@@ -21,6 +21,7 @@
 #include "adreno_trace.h"
 #include "kgsl_bus.h"
 #include "kgsl_device.h"
+#include "kgsl_gmu_core.h"
 #include "kgsl_trace.h"
 #include "kgsl_util.h"
 
@@ -374,9 +375,8 @@ static void gmu_ao_sync_event(struct adreno_device *adreno_dev)
 int gen7_gmu_device_start(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
-	struct gen7_gmu_device *gmu = to_gen7_gmu(adreno_dev);
 
-	gmu_core_reset_trace_header(&gmu->trace);
+	gmu_core_reset_trace_header(&device->gmu_core.trace);
 
 	gmu_ao_sync_event(adreno_dev);
 
@@ -984,8 +984,8 @@ void gen7_gmu_register_config(struct adreno_device *adreno_dev)
 	kgsl_regwrite(device, GEN7_GBIF_HALT, 0x0);
 
 	/* Set vrb address before starting GMU */
-	if (!IS_ERR_OR_NULL(gmu->vrb))
-		gmu_core_regwrite(device, GEN7_GMU_GENERAL_11, gmu->vrb->gmuaddr);
+	if (!IS_ERR_OR_NULL(device->gmu_core.vrb))
+		gmu_core_regwrite(device, GEN7_GMU_GENERAL_11, device->gmu_core.vrb->gmuaddr);
 
 	/* Set the log wptr index */
 	gmu_core_regwrite(device, GEN7_GMU_GENERAL_9,
@@ -2039,10 +2039,14 @@ int gen7_gmu_probe(struct kgsl_device *device,
 		struct platform_device *pdev)
 {
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	const struct adreno_gen7_core *gen7_core = to_gen7_core(adreno_dev);
 	struct gen7_gmu_device *gmu = to_gen7_gmu(adreno_dev);
 	struct device *dev = &pdev->dev;
+	u64 freq = gen7_core->gmu_hub_clk_freq;
 	struct resource *res;
 	int ret, i;
+
+	adreno_dev->gmu_hub_clk_freq = freq ? freq : 150000000;
 
 	device->gmu_core.pdev = pdev;
 
@@ -2118,7 +2122,7 @@ int gen7_gmu_probe(struct kgsl_device *device,
 	gmu->log_group_mask = 0x3;
 
 	/* Initialize to zero to detect trace packet loss */
-	gmu->trace.seq_num = 0;
+	device->gmu_core.trace.seq_num = 0;
 
 	/* Disabled by default */
 	gmu->stats_enable = false;
@@ -2512,7 +2516,7 @@ no_gx_power:
 
 	clear_bit(GMU_PRIV_GPU_STARTED, &gmu->flags);
 
-	del_timer_sync(&device->idle_timer);
+	kgsl_delete_timer_sync(&device->idle_timer);
 
 	kgsl_pwrscale_sleep(device);
 

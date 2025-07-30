@@ -1,6 +1,7 @@
 targets = [
     # keep sorted
     "canoe",
+    "lahaina",
     "monaco",
     "parrot",
     "sun",

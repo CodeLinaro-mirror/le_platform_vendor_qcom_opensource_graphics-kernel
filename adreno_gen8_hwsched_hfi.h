@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef _ADRENO_GEN8_HWSCHED_HFI_H_
@@ -396,4 +396,15 @@ int gen8_hwsched_set_gmu_based_dcvs_value(struct adreno_device *adreno_dev, u32 
  */
 int gen8_hwsched_set_dcvs_profile(struct adreno_device *adreno_dev,
 	struct kgsl_process_private *proc_priv);
+
+/**
+ * gen8_hwsched_set_tuning_attrs - Set value for GMU based DCVS tunables
+ * @adreno_dev: pointer to the adreno device
+ * @type: Type of HFI for set value
+ * @subtype: Sub type of HFI
+ * @val: Value to set
+ *
+ */
+void gen8_hwsched_set_tuning_attrs(struct adreno_device *adreno_dev, u32 type,
+		u32 subtype, u32 val);
 #endif

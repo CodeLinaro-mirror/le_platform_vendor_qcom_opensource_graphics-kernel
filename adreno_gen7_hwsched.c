@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/interconnect.h>
@@ -12,7 +12,9 @@
 #include "adreno_snapshot.h"
 #include "kgsl_bus.h"
 #include "kgsl_device.h"
+#include "kgsl_gmu_core.h"
 #include "kgsl_trace.h"
+#include "kgsl_util.h"
 
 static void _wakeup_hw_fence_waiters(struct adreno_device *adreno_dev, u32 fault)
 {
@@ -46,7 +48,7 @@ static void _wakeup_hw_fence_waiters(struct adreno_device *adreno_dev, u32 fault
 
 	wake_up_all(&hwf->unack_wq);
 
-	del_timer_sync(&hfi->hw_fence_timer);
+	kgsl_delete_timer_sync(&hfi->hw_fence_timer);
 }
 
 void gen7_hwsched_fault(struct adreno_device *adreno_dev, u32 fault)
@@ -569,49 +571,9 @@ static int gen7_gmu_warmboot_init(struct adreno_device *adreno_dev)
 	return ret;
 }
 
-static int gen7_hwsched_gmu_memory_init(struct adreno_device *adreno_dev)
-{
-	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
-	struct gen7_gmu_device *gmu = to_gen7_gmu(adreno_dev);
-	int ret;
-
-	/* GMU Virtual register bank */
-	if (IS_ERR_OR_NULL(gmu->vrb)) {
-		gmu->vrb = gmu_core_reserve_kernel_block(device, 0, GMU_VRB_SIZE,
-						GMU_NONCACHED_KERNEL, 0);
-
-		if (IS_ERR(gmu->vrb))
-			return PTR_ERR(gmu->vrb);
-
-		/* Populate size of the virtual register bank */
-		ret = gmu_core_set_vrb_register(gmu->vrb, VRB_SIZE_IDX, gmu->vrb->size >> 2);
-		if (ret)
-			return ret;
-	}
-
-	/* GMU trace log */
-	if (IS_ERR_OR_NULL(gmu->trace.md)) {
-		gmu->trace.md = gmu_core_reserve_kernel_block(device, 0,
-					GMU_TRACE_SIZE, GMU_NONCACHED_KERNEL, 0);
-
-		if (IS_ERR(gmu->trace.md))
-			return PTR_ERR(gmu->trace.md);
-
-		/* Pass trace buffer address to GMU through the VRB */
-		ret = gmu_core_set_vrb_register(gmu->vrb, VRB_TRACE_BUFFER_ADDR_IDX,
-					gmu->trace.md->gmuaddr);
-		if (ret)
-			return ret;
-
-		/* Initialize the GMU trace buffer header */
-		gmu_core_trace_header_init(&gmu->trace);
-	}
-
-	return 0;
-}
-
 static int gen7_hwsched_gmu_init(struct adreno_device *adreno_dev)
 {
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	int ret;
 
 	ret = gen7_gmu_parse_fw(adreno_dev);
@@ -626,7 +588,7 @@ static int gen7_hwsched_gmu_init(struct adreno_device *adreno_dev)
 	if (ret)
 		return ret;
 
-	ret = gen7_hwsched_gmu_memory_init(adreno_dev);
+	ret = gmu_core_hwsched_memory_init(device);
 	if (ret)
 		return ret;
 
@@ -929,7 +891,7 @@ no_gx_power:
 
 	clear_bit(GMU_PRIV_GPU_STARTED, &gmu->flags);
 
-	del_timer_sync(&device->idle_timer);
+	kgsl_delete_timer_sync(&device->idle_timer);
 
 	kgsl_pwrscale_sleep(device);
 
@@ -1289,7 +1251,8 @@ static int process_inflight_hw_fences_after_reset(struct adreno_device *adreno_d
 	struct kgsl_context *context = NULL;
 	int id, ret = 0;
 	struct list_head hw_fence_list;
-	struct adreno_hw_fence_entry *entry;
+	struct adreno_hw_fence_entry *entry, *tmp;
+	bool update_out_fence_ts = false;
 
 	/*
 	 * Since we need to wait for ack from GMU when sending each inflight fence back to GMU, we
@@ -1306,9 +1269,31 @@ static int process_inflight_hw_fences_after_reset(struct adreno_device *adreno_d
 	}
 	read_unlock(&device->context_lock);
 
-	list_for_each_entry(entry, &hw_fence_list, reset_node) {
+	/*
+	 * Although we are not destroying the entries here, they can get destroyed concurrently
+	 * in f2h_main thread once they have been sent to GMU. Hence, to be safe against entry
+	 * destroy, use list_for_each_entry_safe.
+	 */
+	list_for_each_entry_safe(entry, tmp, &hw_fence_list, reset_node) {
 		struct adreno_context *drawctxt = entry->drawctxt;
 		struct gmu_context_queue_header *hdr = drawctxt->gmu_context_queue.hostptr;
+		u32 entry_ts = (u32)entry->cmd.ts;
+
+		/*
+		 * We must remove this entry from hw_fence_list before sending it to GMU to avoid
+		 * racing with the f2h_main thread
+		 */
+		list_del_init(&entry->reset_node);
+
+		/*
+		 * We must access the hw fence entry before sending it to GMU as once it is
+		 * sent to GMU, it may be freed by f2h_main thread concurrently
+		 */
+		if (((entry->cmd.flags & HW_FENCE_FLAG_SKIP_MEMSTORE) != 0) &&
+			(timestamp_cmp(entry_ts, hdr->out_fence_ts) > 0)) {
+			if (_kgsl_context_get(&drawctxt->base))
+				update_out_fence_ts = true;
+		}
 
 		/*
 		 * This is part of the reset sequence and any error in this path will be handled by
@@ -1321,9 +1306,18 @@ static int process_inflight_hw_fences_after_reset(struct adreno_device *adreno_d
 		 * If HW_FENCE_FLAG_SKIP_MEMSTORE is set, then GMU context queue header will not be
 		 * updated for this fence. Hence, update it here.
 		 */
-		if (((entry->cmd.flags & HW_FENCE_FLAG_SKIP_MEMSTORE) != 0) &&
-			(timestamp_cmp((u32)entry->cmd.ts, hdr->out_fence_ts) > 0))
-			hdr->out_fence_ts = (u32)entry->cmd.ts;
+		if (update_out_fence_ts) {
+			hdr->out_fence_ts = entry_ts;
+			kgsl_context_put(&drawctxt->base);
+			update_out_fence_ts = false;
+		}
+	}
+
+	/* Remove remaining entries from the list if we hit an error */
+	if (ret) {
+		list_for_each_entry_safe(entry, tmp, &hw_fence_list, reset_node) {
+			list_del_init(&entry->reset_node);
+		}
 	}
 
 	return ret;
@@ -1596,6 +1590,8 @@ int gen7_hwsched_add_to_minidump(struct adreno_device *adreno_dev)
 {
 	struct gen7_device *gen7_dev = container_of(adreno_dev,
 					struct gen7_device, adreno_dev);
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct gmu_core_device *gmu_core = &device->gmu_core;
 	struct gen7_hwsched_device *gen7_hwsched = container_of(gen7_dev,
 					struct gen7_hwsched_device, gen7_dev);
 	struct gen7_hwsched_hfi *hw_hfi = &gen7_hwsched->hwsched_hfi;
@@ -1625,20 +1621,20 @@ int gen7_hwsched_add_to_minidump(struct adreno_device *adreno_dev)
 			return ret;
 	}
 
-	if (!IS_ERR_OR_NULL(gen7_dev->gmu.vrb)) {
+	if (!IS_ERR_OR_NULL(gmu_core->vrb)) {
 		ret = kgsl_add_va_to_minidump(adreno_dev->dev.dev,
 					KGSL_GMU_VRB_ENTRY,
-					gen7_dev->gmu.vrb->hostptr,
-					gen7_dev->gmu.vrb->size);
+					gmu_core->vrb->hostptr,
+					gmu_core->vrb->size);
 		if (ret)
 			return ret;
 	}
 
-	if (!IS_ERR_OR_NULL(gen7_dev->gmu.trace.md)) {
+	if (!IS_ERR_OR_NULL(gmu_core->trace.md)) {
 		ret = kgsl_add_va_to_minidump(adreno_dev->dev.dev,
 					KGSL_GMU_TRACE_ENTRY,
-					gen7_dev->gmu.trace.md->hostptr,
-					gen7_dev->gmu.trace.md->size);
+					gmu_core->trace.md->hostptr,
+					gmu_core->trace.md->size);
 		if (ret)
 			return ret;
 	}

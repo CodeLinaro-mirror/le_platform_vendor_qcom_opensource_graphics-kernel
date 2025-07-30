@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef _ADRENO_GEN8_H_
@@ -17,6 +17,9 @@
 #define GEN8_2_0_NUM_PHYSICAL_SLICES	3
 #define GEN8_3_0_NUM_PHYSICAL_SLICES	1
 #define GEN8_6_0_NUM_PHYSICAL_SLICES	2
+#define GEN8_9_0_NUM_PHYSICAL_SLICES	2
+
+#define GET_SLICE_MASK(num_slices, value) FIELD_GET(GENMASK(num_slices, 0), (value))
 
 /* Forward struct declaration */
 struct gen8_snapshot_block_list;
@@ -24,6 +27,7 @@ struct gen8_snapshot_block_list;
 extern const struct adreno_power_ops gen8_gmu_power_ops;
 extern const struct adreno_power_ops gen8_hwsched_power_ops;
 extern const struct adreno_perfcounters adreno_gen8_perfcounters;
+extern const struct adreno_perfcounters adreno_gen8_2_x_perfcounters;
 
 struct gen8_gpudev {
 	struct adreno_gpudev base;
@@ -192,6 +196,8 @@ struct adreno_gen8_core {
 	const struct hfi_therm_profile_ctrl *therm_profile;
 	/** @limits_mit_cfg: GPU limits mitigation configuration */
 	const struct gen8_limits_mit_cfg *limits_mit_cfg;
+	/** @clx_tbl: GPU CLX table */
+	const struct hfi_clx_table_v2_cmd *clx_tbl;
 };
 
 /**

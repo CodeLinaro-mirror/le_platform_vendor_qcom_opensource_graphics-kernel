@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2002,2007-2020, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __ADRENO_DRAWCTXT_H
 #define __ADRENO_DRAWCTXT_H
@@ -96,6 +96,11 @@ struct adreno_context {
 	 * reset to 0 in some cases).
 	 */
 	u32 gmu_hw_fence_ready_ts;
+	/**
+	 * @hw_fence_last_ts: This tracks the latest timestamp for which a hw fence was created.
+	 * This is used to figure out if a new fence has an out-of-order timestamp.
+	 */
+	u32 hw_fence_last_ts;
 };
 
 /* Flag definitions for flag field in adreno_context */

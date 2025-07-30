@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/component.h>
@@ -23,6 +23,7 @@
 #include "adreno_trace.h"
 #include "kgsl_bus.h"
 #include "kgsl_device.h"
+#include "kgsl_gmu_core.h"
 #include "kgsl_trace.h"
 #include "kgsl_util.h"
 
@@ -312,7 +313,7 @@ void a6xx_load_rsc_ucode(struct adreno_device *adreno_dev)
 	_regwrite(rscc, A6XX_RSCC_HIDDEN_TCS_CMD0_DATA + RSC_CMD_OFFSET, 0);
 	_regwrite(rscc, A6XX_RSCC_HIDDEN_TCS_CMD0_ADDR + RSC_CMD_OFFSET, 0);
 	_regwrite(rscc, A6XX_RSCC_HIDDEN_TCS_CMD0_DATA + RSC_CMD_OFFSET * 2,
-			0x80000000);
+			adreno_is_a622(adreno_dev) ? 0x80000028 : 0x80000000);
 	_regwrite(rscc, A6XX_RSCC_HIDDEN_TCS_CMD0_ADDR + RSC_CMD_OFFSET * 2,
 			0);
 	_regwrite(rscc, A6XX_RSCC_OVERRIDE_START_ADDR, 0);
@@ -321,7 +322,13 @@ void a6xx_load_rsc_ucode(struct adreno_device *adreno_dev)
 	_regwrite(rscc, A6XX_RSCC_PDC_MATCH_VALUE_HI, 0x4514);
 
 	/* Load RSC sequencer uCode for sleep and wakeup */
-	if (adreno_is_a650_family(adreno_dev)) {
+	if (adreno_is_a622(adreno_dev)) {
+		_regwrite(rscc, A622_RSCC_SEQ_MEM_0_DRV0, 0xEAAAE5A0);
+		_regwrite(rscc, A622_RSCC_SEQ_MEM_0_DRV0 + 1, 0xE1A1EBAB);
+		_regwrite(rscc, A622_RSCC_SEQ_MEM_0_DRV0 + 2, 0xA2E0A581);
+		_regwrite(rscc, A622_RSCC_SEQ_MEM_0_DRV0 + 3, 0xECAC82E2);
+		_regwrite(rscc, A622_RSCC_SEQ_MEM_0_DRV0 + 4, 0x0020EDAD);
+	} else if (adreno_is_a650_family(adreno_dev)) {
 		_regwrite(rscc, A6XX_RSCC_SEQ_MEM_0_DRV0, 0xEAAAE5A0);
 		_regwrite(rscc, A6XX_RSCC_SEQ_MEM_0_DRV0 + 1, 0xE1A1EBAB);
 		_regwrite(rscc, A6XX_RSCC_SEQ_MEM_0_DRV0 + 2, 0xA2E0A581);
@@ -416,6 +423,10 @@ int a6xx_load_pdc_ucode(struct adreno_device *adreno_dev)
 	}
 
 	cfg = gmu->pdc_cfg_base;
+
+	/* PDC GPU SEQ start addr register is removed for A622 */
+	if (adreno_is_a622(adreno_dev) && a6xx_core->pdc_in_aop)
+		return 0;
 
 	/* PDC is programmed in AOP for newer platforms */
 	if (a6xx_core->pdc_in_aop)
@@ -611,11 +622,10 @@ void a6xx_gmu_disable_gdsc(struct adreno_device *adreno_dev)
 int a6xx_gmu_device_start(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
-	struct a6xx_gmu_device *gmu = to_a6xx_gmu(adreno_dev);
 	u32 val = 0x00000100;
 	u32 mask = 0x000001FF;
 
-	gmu_core_reset_trace_header(&gmu->trace);
+	gmu_core_reset_trace_header(&device->gmu_core.trace);
 	gmu_ao_sync_event(adreno_dev);
 
 	/* Check for 0xBABEFACE on legacy targets */
@@ -675,7 +685,8 @@ int a6xx_rscc_wakeup_sequence(struct adreno_device *adreno_dev)
 	if (!test_bit(GMU_PRIV_RSCC_SLEEP_DONE, &gmu->flags))
 		return 0;
 	 /* A660 has a replacement register */
-	if (adreno_is_a662(adreno_dev) || adreno_is_a621(adreno_dev))
+	if (adreno_is_a662(adreno_dev) || adreno_is_a621(adreno_dev) ||
+				adreno_is_a622(adreno_dev))
 		gmu_core_regread(device, A662_GPU_CC_GX_DOMAIN_MISC3, &val);
 	else if (adreno_is_a660(ADRENO_DEVICE(device)) ||
 			adreno_is_a663(adreno_dev))
@@ -1061,6 +1072,19 @@ static u32 a6xx_rscc_tcsm_drv0_status_reglist[] = {
 	A6XX_RSCC_TCS9_DRV0_STATUS,
 };
 
+static u32 a622_rscc_tcsm_drv0_status_reglist[] = {
+	A622_RSCC_TCS0_DRV0_STATUS,
+	A622_RSCC_TCS1_DRV0_STATUS,
+	A622_RSCC_TCS2_DRV0_STATUS,
+	A622_RSCC_TCS3_DRV0_STATUS,
+	A622_RSCC_TCS4_DRV0_STATUS,
+	A622_RSCC_TCS5_DRV0_STATUS,
+	A622_RSCC_TCS6_DRV0_STATUS,
+	A622_RSCC_TCS7_DRV0_STATUS,
+	A622_RSCC_TCS8_DRV0_STATUS,
+	A622_RSCC_TCS9_DRV0_STATUS,
+};
+
 static int a6xx_complete_rpmh_votes(struct adreno_device *adreno_dev,
 		unsigned int timeout)
 {
@@ -1070,9 +1094,15 @@ static int a6xx_complete_rpmh_votes(struct adreno_device *adreno_dev,
 				ARRAY_SIZE(a6xx_rscc_tcsm_drv0_status_reglist) : 4;
 	int i, ret = 0;
 
-	for (i = 0; i < count; i++)
-		ret |= timed_poll_check_rscc(device, a6xx_rscc_tcsm_drv0_status_reglist[i],
-				BIT(0), timeout, BIT(0));
+	if (adreno_is_a622(adreno_dev)) {
+		for (i = 0; i < count; i++)
+			ret |= timed_poll_check_rscc(device, a622_rscc_tcsm_drv0_status_reglist[i],
+					BIT(0), timeout, BIT(0));
+	} else {
+		for (i = 0; i < count; i++)
+			ret |= timed_poll_check_rscc(device, a6xx_rscc_tcsm_drv0_status_reglist[i],
+					BIT(0), timeout, BIT(0));
+	}
 
 	if (ret)
 		dev_err(device->dev, "RPMH votes timedout: %d\n", ret);
@@ -1506,8 +1536,8 @@ void a6xx_gmu_register_config(struct adreno_device *adreno_dev)
 		kgsl_regwrite(device, A6XX_GBIF_HALT, 0x0);
 
 	/* Set vrb address before starting GMU */
-	if (!IS_ERR_OR_NULL(gmu->vrb))
-		gmu_core_regwrite(device, A6XX_GMU_GENERAL_11, gmu->vrb->gmuaddr);
+	if (!IS_ERR_OR_NULL(device->gmu_core.vrb))
+		gmu_core_regwrite(device, A6XX_GMU_GENERAL_11, device->gmu_core.vrb->gmuaddr);
 
 	/* Set the log wptr index */
 	gmu_core_regwrite(device, A6XX_GPU_GMU_CX_GMU_PWR_COL_CP_RESP,
@@ -1736,7 +1766,7 @@ static void a6xx_gmu_pwrctrl_suspend(struct adreno_device *adreno_dev)
 	 * This could abort CX GDSC collapse. Assert Qactive to avoid this.
 	 */
 	if ((adreno_is_a662(adreno_dev) || adreno_is_a621(adreno_dev) ||
-			adreno_is_a635(adreno_dev)))
+			adreno_is_a622(adreno_dev) || adreno_is_a642l(adreno_dev)))
 		gmu_core_regwrite(device, A6XX_GPU_GMU_CX_GMU_CX_FALNEXT_INTF, 0x1);
 
 	/* Check no outstanding RPMh voting */
@@ -1877,7 +1907,7 @@ out:
 	 * This could abort CX GDSC collapse. Assert Qactive to avoid this.
 	 */
 	if ((adreno_is_a662(adreno_dev) || adreno_is_a621(adreno_dev) ||
-			adreno_is_a635(adreno_dev)))
+			adreno_is_a622(adreno_dev) || adreno_is_a642l(adreno_dev)))
 		gmu_core_regwrite(device, A6XX_GPU_GMU_CX_GMU_CX_FALNEXT_INTF, 0x1);
 
 	return ret;
@@ -2600,10 +2630,14 @@ int a6xx_gmu_probe(struct kgsl_device *device,
 		struct platform_device *pdev)
 {
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	const struct adreno_a6xx_core *a6xx_core = to_a6xx_core(adreno_dev);
 	struct a6xx_gmu_device *gmu = to_a6xx_gmu(adreno_dev);
+	u64 freq = a6xx_core->gmu_hub_clk_freq;
 	struct device *dev = &pdev->dev;
 	struct resource *res;
 	int ret;
+
+	adreno_dev->gmu_hub_clk_freq = freq ? freq : 150000000;
 
 	device->gmu_core.pdev = pdev;
 
@@ -2670,7 +2704,7 @@ int a6xx_gmu_probe(struct kgsl_device *device,
 	set_bit(GMU_ENABLED, &device->gmu_core.flags);
 
 	/* Initialize to zero to detect trace packet loss */
-	gmu->trace.seq_num = 0;
+	device->gmu_core.trace.seq_num = 0;
 
 	device->gmu_core.dev_ops = &a6xx_gmudev;
 
@@ -3105,7 +3139,7 @@ no_gx_power:
 
 	clear_bit(GMU_PRIV_GPU_STARTED, &gmu->flags);
 
-	del_timer_sync(&device->idle_timer);
+	kgsl_delete_timer_sync(&device->idle_timer);
 
 	kgsl_pwrscale_sleep(device);
 

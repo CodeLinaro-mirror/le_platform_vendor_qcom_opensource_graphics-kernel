@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/utsname.h>
@@ -162,8 +162,8 @@ static int snapshot_freeze_obj_list(struct kgsl_snapshot *snapshot,
 				(ib_objs->gpuaddr + ib_objs->size)) &&
 				(objbuf[index].entry->priv == process)) {
 				freeze = 0;
-				objbuf[index].entry->memdesc.priv &=
-					~KGSL_MEMDESC_SKIP_RECLAIM;
+				CLEAR_FLAG(KGSL_MEMDESC_SKIP_RECLAIM,
+					&(objbuf[index].entry->memdesc.priv));
 				break;
 			}
 		}
@@ -1112,7 +1112,12 @@ static size_t adreno_snapshot_aqe(struct kgsl_device *device, u8 *buf,
 	u32 *data = (u32 *)(buf + sizeof(*header));
 	struct adreno_firmware *fw = ADRENO_FW(adreno_dev, ADRENO_FW_AQE);
 
-	if (!ADRENO_FEATURE(adreno_dev, ADRENO_AQE))
+	/*
+	 * AQE firmware memory is allocated in the hwsched path.
+	 * In swsched path, the address is NULL, so add a check
+	 * to avoid NULL pointer dereference.
+	 */
+	if ((!ADRENO_FEATURE(adreno_dev, ADRENO_AQE)) || (fw->memdesc == NULL))
 		return 0;
 
 	if (remain < DEBUG_SECTION_SZ(AQE_FW_SNAPSHOT_DWORDS)) {

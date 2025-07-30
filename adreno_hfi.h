@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __ADRENO_HFI_H
 #define __ADRENO_HFI_H
@@ -1393,6 +1393,9 @@ struct payload_section {
 /* GPU encountered an unknown CP error */
 #define GMU_CP_UNKNOWN_ERROR 700
 
+#define GPU_DCVS_TUNING_INVALID_VALUE 0xffffffff
+#define GPU_DCVS_TUNING_INVALID_ACK_DATA 0xfffffffe
+
 enum gpu_tuning_attr {
 	GPU_TUNING_KEY_BUSY_PENALTY_UP = 0,
 	GPU_TUNING_KEY_BUSY_PENALTY_DOWN = 1,
@@ -1406,6 +1409,9 @@ enum gpu_tuning_attr {
 	GPU_TUNING_KEY_STRICT_FRAME = 9,
 	GPU_TUNING_KEY_NON_LINEAR_RAMP_UP = 10,
 	GPU_TUNING_KEY_NON_LINEAR_RAMP_DOWN = 11,
+	GPU_TUNING_KEY_MOD_PERCENT = 12,
+	GPU_TUNING_KEY_BUS_MIN_FREQUENCY = 13,
+	GPU_TUNING_KEY_BUS_MAX_FREQUENCY = 14,
 	GPU_TUNING_KEY_MAX,
 };
 

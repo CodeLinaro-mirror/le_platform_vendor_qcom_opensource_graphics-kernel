@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __ADRENO_GEN7_GMU_H
 #define __ADRENO_GEN7_GMU_H
@@ -37,10 +37,6 @@ struct gen7_gmu_device {
 	struct kgsl_memdesc *gmu_init_scratch;
 	/** @gpu_boot_scratch: Memory to store the bootup HFI messages */
 	struct kgsl_memdesc *gpu_boot_scratch;
-	/** @vrb: GMU virtual register bank memory */
-	struct kgsl_memdesc *vrb;
-	/** @trace: gmu trace container */
-	struct kgsl_gmu_trace trace;
 	struct gen7_hfi hfi;
 	unsigned int idle_level;
 	struct kgsl_mailbox mailbox;

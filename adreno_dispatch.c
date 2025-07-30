@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/slab.h>
@@ -13,6 +13,7 @@
 #include "kgsl_bus.h"
 #include "kgsl_eventlog.h"
 #include "kgsl_gmu_core.h"
+#include "kgsl_util.h"
 
 #define DRAWQUEUE_NEXT(_i, _s) (((_i) + 1) % (_s))
 
@@ -1963,14 +1964,14 @@ static int dispatcher_do_fault(struct adreno_device *adreno_dev)
 	}
 
 	/* Turn off all the timers */
-	del_timer_sync(&dispatcher->timer);
+	kgsl_delete_timer_sync(&dispatcher->timer);
 
 	/*
 	 * Deleting uninitialized timer will block for ever on kernel debug
 	 * disable build. Hence skip del timer if it is not initialized.
 	 */
 	if (adreno_is_preemption_enabled(adreno_dev))
-		del_timer_sync(&adreno_dev->preempt.timer);
+		kgsl_delete_timer_sync(&adreno_dev->preempt.timer);
 
 	if (gx_on)
 		adreno_readreg64(adreno_dev, ADRENO_REG_CP_RB_BASE,
@@ -2426,7 +2427,7 @@ void adreno_dispatcher_stop(struct adreno_device *adreno_dev)
 {
 	struct adreno_dispatcher *dispatcher = &adreno_dev->dispatcher;
 
-	del_timer_sync(&dispatcher->timer);
+	kgsl_delete_timer_sync(&dispatcher->timer);
 }
 
 /* Return the ringbuffer that matches the draw context priority */
@@ -2545,7 +2546,7 @@ static void adreno_dispatcher_close(struct adreno_device *adreno_dev)
 	struct adreno_ringbuffer *rb;
 
 	mutex_lock(&dispatcher->mutex);
-	del_timer_sync(&dispatcher->timer);
+	kgsl_delete_timer_sync(&dispatcher->timer);
 
 	FOR_EACH_RINGBUFFER(adreno_dev, rb, i) {
 		struct adreno_dispatcher_drawqueue *dispatch_q =

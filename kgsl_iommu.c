@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2011-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/bitfield.h>
@@ -110,13 +110,13 @@ static int _iommu_get_protection_flags(struct kgsl_mmu *mmu,
 	if (memdesc->flags & KGSL_MEMFLAGS_GPUREADONLY)
 		flags &= ~IOMMU_WRITE;
 
-	if (memdesc->priv & KGSL_MEMDESC_PRIVILEGED)
+	if (TEST_FLAG(KGSL_MEMDESC_PRIVILEGED, &memdesc->priv))
 		flags |= IOMMU_PRIV;
 
 	if (memdesc->flags & KGSL_MEMFLAGS_IOCOHERENT)
 		flags |= IOMMU_CACHE;
 
-	if (memdesc->priv & KGSL_MEMDESC_UCODE)
+	if (TEST_FLAG(KGSL_MEMDESC_UCODE, &memdesc->priv))
 		flags &= ~IOMMU_NOEXEC;
 
 	return flags;
@@ -790,7 +790,7 @@ static int kgsl_iommu_get_gpuaddr(struct kgsl_pagetable *pagetable,
 #define KGSL_GLOBAL_MEM_PAGES (KGSL_IOMMU_GLOBAL_MEM_SIZE >> PAGE_SHIFT)
 
 static u64 global_get_offset(struct kgsl_device *device, u64 size,
-		unsigned long priv)
+		atomic_t *priv)
 {
 	int start = 0, bit;
 
@@ -802,7 +802,7 @@ static u64 global_get_offset(struct kgsl_device *device, u64 size,
 			return (unsigned long) -ENOMEM;
 	}
 
-	if (priv & KGSL_MEMDESC_RANDOM) {
+	if (TEST_FLAG(KGSL_MEMDESC_RANDOM, priv)) {
 		u32 offset = KGSL_GLOBAL_MEM_PAGES - (size >> PAGE_SHIFT);
 
 		start = get_random_u32() % offset;
@@ -847,7 +847,7 @@ static int kgsl_iommu_reserve_global_gpuaddr(struct kgsl_mmu *mmu,
 		return ret;
 	}
 
-	offset = global_get_offset(device, memdesc->size + padding, memdesc->priv);
+	offset = global_get_offset(device, memdesc->size + padding, &memdesc->priv);
 
 	if (IS_ERR_VALUE(offset))
 		return -ENOSPC;
@@ -887,7 +887,7 @@ static void print_entry(struct device *dev, struct kgsl_mem_entry *entry,
 	dev_err(dev, "[%016llX - %016llX] %s %s (pid = %d) (%s)\n",
 	      entry->memdesc.gpuaddr,
 	      entry->memdesc.gpuaddr + entry->memdesc.size - 1,
-	      entry->memdesc.priv & KGSL_MEMDESC_GUARD_PAGE ? "(+guard)" : "",
+	      TEST_FLAG(KGSL_MEMDESC_GUARD_PAGE, &entry->memdesc.priv) ? "(+guard)" : "",
 	      entry->pending_free ? "(pending free)" : "",
 	      pid, name);
 }

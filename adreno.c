@@ -1449,7 +1449,6 @@ int adreno_device_probe(struct platform_device *pdev,
 		struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
-	struct gmu_core_device *gmu_core = &device->gmu_core;
 	struct device *dev = &pdev->dev;
 	unsigned int priv = 0;
 	int status;
@@ -1588,6 +1587,7 @@ int adreno_device_probe(struct platform_device *pdev,
 	kgsl_mutex_lock(&device->mutex);
 	device->memstore = kgsl_allocate_global(device,
 		KGSL_MEMSTORE_SIZE, 0, 0, priv, "memstore");
+	adreno_profile_init(adreno_dev);
 	kgsl_mutex_unlock(&device->mutex);
 
 	status = PTR_ERR_OR_ZERO(device->memstore);
@@ -1611,18 +1611,17 @@ int adreno_device_probe(struct platform_device *pdev,
 	kgsl_device_snapshot_probe(device, size);
 
 	adreno_debugfs_init(adreno_dev);
-	adreno_profile_init(adreno_dev);
 
 	adreno_dev->perfcounter = false;
 
 	adreno_sysfs_init(adreno_dev);
 
-	if (!ADRENO_FEATURE(adreno_dev, ADRENO_GMU_BASED_DCVS)) {
-		/* Ignore return value, as driver can still function without pwrscale enabled */
-		kgsl_pwrscale_init(device, pdev, CONFIG_QCOM_ADRENO_DEFAULT_GOVERNOR);
-	} else {
-		gmu_core->gpu_pwrscale_enable = true;
-	}
+	if (!ADRENO_FEATURE(adreno_dev, ADRENO_GMU_BASED_DCVS))
+		device->host_based_dcvs = true;
+	else if (ADRENO_FEATURE(adreno_dev, ADRENO_DCVS_PROFILE))
+		adreno_dev->dcvs_profile_enabled = true;
+
+	kgsl_pwrscale_init(device, pdev);
 
 	if (ADRENO_FEATURE(adreno_dev, ADRENO_L3_VOTE))
 		device->l3_vote = true;
@@ -2674,6 +2673,7 @@ int adreno_set_constraint(struct kgsl_device *device,
 	switch (constraint->type) {
 	case KGSL_CONSTRAINT_PWRLEVEL: {
 		struct kgsl_device_constraint_pwrlevel pwr;
+		u32 max_supported_level;
 
 		if (constraint->size != sizeof(pwr)) {
 			status = -EINVAL;
@@ -2686,7 +2686,10 @@ int adreno_set_constraint(struct kgsl_device *device,
 			status = -EFAULT;
 			break;
 		}
-		if (pwr.level >= KGSL_CONSTRAINT_PWR_MAXLEVELS) {
+
+		max_supported_level = (device->host_based_dcvs) ?
+			KGSL_CONSTRAINT_PWR_MAXLEVELS - 1 : KGSL_CONSTRAINT_PWR_PERC_MAX;
+		if (pwr.level > max_supported_level) {
 			status = -EINVAL;
 			break;
 		}
@@ -2796,7 +2799,7 @@ static int adreno_default_setproperty(struct kgsl_device_private *dev_priv,
 			device->pwrctrl.ctrl_flags = 0;
 
 		if (device->host_based_dcvs)
-			kgsl_pwrscale_enable(device);
+			kgsl_pwrscale_tz_enable(device);
 		else
 			device->ftbl->gmu_based_dcvs_pwr_ops(device, enable,
 					GPU_PWRLEVEL_OP_DCVS_ENABLE);
@@ -2811,7 +2814,7 @@ static int adreno_default_setproperty(struct kgsl_device_private *dev_priv,
 			device->pwrctrl.ctrl_flags = KGSL_PWR_ON;
 		}
 		if (device->host_based_dcvs) {
-			kgsl_pwrscale_disable(device, true);
+			kgsl_pwrscale_tz_disable(device, true);
 		} else {
 			device->ftbl->gmu_based_dcvs_pwr_ops(device, enable,
 					GPU_PWRLEVEL_OP_DCVS_ENABLE);
@@ -4108,7 +4111,7 @@ static int adreno_secure_pt_hibernate(struct adreno_device *adreno_dev)
 			memdesc = &entry->memdesc;
 			if (!kgsl_memdesc_is_secured(memdesc) ||
 				(memdesc->flags & KGSL_MEMFLAGS_USERMEM_ION) ||
-				(memdesc->priv & KGSL_MEMDESC_HYPASSIGNED_HLOS))
+				(TEST_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv)))
 				continue;
 
 			read_unlock(&kgsl_driver.proclist_lock);
@@ -4116,7 +4119,7 @@ static int adreno_secure_pt_hibernate(struct adreno_device *adreno_dev)
 			if (kgsl_unlock_sgt(memdesc->sgt))
 				dev_err(device->dev, "kgsl_unlock_sgt failed\n");
 
-			memdesc->priv |= KGSL_MEMDESC_HYPASSIGNED_HLOS;
+			SET_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv);
 
 			read_lock(&kgsl_driver.proclist_lock);
 		}
@@ -4126,13 +4129,13 @@ static int adreno_secure_pt_hibernate(struct adreno_device *adreno_dev)
 	list_for_each_entry(md, &device->globals, node) {
 		memdesc = &md->memdesc;
 		if (kgsl_memdesc_is_secured(memdesc) &&
-			!(memdesc->priv & KGSL_MEMDESC_HYPASSIGNED_HLOS)) {
+			!(TEST_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv))) {
 			ret = kgsl_unlock_sgt(memdesc->sgt);
 			if (ret) {
 				dev_err(device->dev, "kgsl_unlock_sgt failed ret %d\n", ret);
 				goto fail;
 			}
-			memdesc->priv |= KGSL_MEMDESC_HYPASSIGNED_HLOS;
+			SET_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv);
 		}
 	}
 
@@ -4142,9 +4145,9 @@ fail:
 	list_for_each_entry(md, &device->globals, node) {
 		memdesc = &md->memdesc;
 		if (kgsl_memdesc_is_secured(memdesc) &&
-			(memdesc->priv & KGSL_MEMDESC_HYPASSIGNED_HLOS)) {
+			(TEST_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv))) {
 			kgsl_lock_sgt(memdesc->sgt, memdesc->size);
-			memdesc->priv &= ~KGSL_MEMDESC_HYPASSIGNED_HLOS;
+			CLEAR_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv);
 		}
 	}
 
@@ -4163,13 +4166,13 @@ static int adreno_secure_pt_restore(struct adreno_device *adreno_dev)
 	list_for_each_entry(md, &device->globals, node) {
 		memdesc = &md->memdesc;
 		if (kgsl_memdesc_is_secured(memdesc) &&
-			(memdesc->priv & KGSL_MEMDESC_HYPASSIGNED_HLOS)) {
+			(TEST_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv))) {
 			ret = kgsl_lock_sgt(memdesc->sgt, memdesc->size);
 			if (ret) {
 				dev_err(device->dev, "kgsl_lock_sgt failed ret %d\n", ret);
 				return ret;
 			}
-			memdesc->priv &= ~KGSL_MEMDESC_HYPASSIGNED_HLOS;
+			CLEAR_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv);
 		}
 	}
 
@@ -4179,7 +4182,7 @@ static int adreno_secure_pt_restore(struct adreno_device *adreno_dev)
 			memdesc = &entry->memdesc;
 			if (!kgsl_memdesc_is_secured(memdesc) ||
 				(memdesc->flags & KGSL_MEMFLAGS_USERMEM_ION) ||
-				!(memdesc->priv & KGSL_MEMDESC_HYPASSIGNED_HLOS))
+				!(TEST_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv)))
 				continue;
 
 			read_unlock(&kgsl_driver.proclist_lock);
@@ -4189,7 +4192,7 @@ static int adreno_secure_pt_restore(struct adreno_device *adreno_dev)
 				dev_err(device->dev, "kgsl_lock_sgt failed ret %d\n", ret);
 				return ret;
 			}
-			memdesc->priv &= ~KGSL_MEMDESC_HYPASSIGNED_HLOS;
+			CLEAR_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv);
 
 			read_lock(&kgsl_driver.proclist_lock);
 		}
@@ -4365,7 +4368,7 @@ module_exit(kgsl_3d_exit);
 
 MODULE_DESCRIPTION("3D Graphics driver");
 MODULE_LICENSE("GPL v2");
-MODULE_SOFTDEP("pre: arm_smmu nvmem_qfprom socinfo governor_msm_adreno_tz governor_gpubw_mon");
+MODULE_SOFTDEP("pre: arm_smmu nvmem_qfprom socinfo governor_msm_adreno_tz governor_gpubw_mon governor_msm_adreno_ro");
 #if (KERNEL_VERSION(6, 13, 0) <= LINUX_VERSION_CODE)
 MODULE_IMPORT_NS("DMA_BUF");
 #elif (KERNEL_VERSION(5, 18, 0) <= LINUX_VERSION_CODE)

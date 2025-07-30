@@ -1104,9 +1104,9 @@ static ssize_t pwrscale_store(struct device *dev,
 
 	if (device->ftbl->gmu_based_dcvs_pwr_ops(device, enable, GPU_PWRLEVEL_OP_DCVS_ENABLE)) {
 		if (enable)
-			kgsl_pwrscale_enable(device);
+			kgsl_pwrscale_tz_enable(device);
 		else
-			kgsl_pwrscale_disable(device, false);
+			kgsl_pwrscale_tz_disable(device, false);
 	}
 
 	kgsl_mutex_unlock(&device->mutex);
@@ -1854,6 +1854,17 @@ static int pmqos_max_notifier_call(struct notifier_block *nb, unsigned long val,
 
 	trace_kgsl_thermal_constraint(max_freq);
 
+	/* Make sure pmqos_max_pwrlevel is updated before reading active_cnt */
+	smp_mb();
+
+	/*
+	 * Return early if the device is not active. Constraint will be applied on
+	 * subsequent boot. This will also prevent unnecessarily holding device
+	 * mutex while the device is not active.
+	 */
+	if (!atomic_read(&device->active_cnt))
+		return NOTIFY_OK;
+
 	kgsl_mutex_lock(&device->mutex);
 
 	if (!device->ftbl->gmu_based_dcvs_pwr_ops(device, 0, GPU_PWRLEVEL_OP_THERMAL))
@@ -2309,7 +2320,7 @@ static int _init(struct kgsl_device *device)
 	switch (device->state) {
 	case KGSL_STATE_ACTIVE:
 		kgsl_pwrctrl_irq(device, false);
-		del_timer_sync(&device->idle_timer);
+		kgsl_delete_timer_sync(&device->idle_timer);
 		device->ftbl->stop(device);
 		fallthrough;
 	case KGSL_STATE_AWARE:
@@ -2411,7 +2422,7 @@ _aware(struct kgsl_device *device)
 		break;
 	case KGSL_STATE_ACTIVE:
 		kgsl_pwrctrl_irq(device, false);
-		del_timer_sync(&device->idle_timer);
+		kgsl_delete_timer_sync(&device->idle_timer);
 		break;
 	case KGSL_STATE_SLUMBER:
 		status = kgsl_pwrctrl_enable(device);
@@ -2437,7 +2448,7 @@ _slumber(struct kgsl_device *device)
 			kgsl_pwrctrl_request_state(device, KGSL_STATE_NONE);
 			return -EBUSY;
 		}
-		del_timer_sync(&device->idle_timer);
+		kgsl_delete_timer_sync(&device->idle_timer);
 		kgsl_pwrctrl_irq(device, false);
 		/* make sure power is on to stop the device*/
 		status = kgsl_pwrctrl_enable(device);

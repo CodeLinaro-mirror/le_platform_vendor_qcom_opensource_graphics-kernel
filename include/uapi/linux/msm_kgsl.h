@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef _UAPI_MSM_KGSL_H
@@ -508,7 +508,9 @@ struct kgsl_gpu_model {
 #define KGSL_PERFCOUNTER_GROUP_BV_RAS 0x34
 #define KGSL_PERFCOUNTER_GROUP_BV_LRZ 0x35
 #define KGSL_PERFCOUNTER_GROUP_BV_HLSQ 0x36
-#define KGSL_PERFCOUNTER_GROUP_MAX 0x37
+#define KGSL_PERFCOUNTER_GROUP_BV_CCU 0x37
+#define KGSL_PERFCOUNTER_GROUP_BV_RB 0x38
+#define KGSL_PERFCOUNTER_GROUP_MAX 0x39
 
 #define KGSL_PERFCOUNTER_NOT_USED 0xFFFFFFFF
 #define KGSL_PERFCOUNTER_BROKEN 0xFFFFFFFE
@@ -1236,11 +1238,18 @@ struct kgsl_device_constraint {
 #define KGSL_CONSTRAINT_L3_NONE	2
 #define KGSL_CONSTRAINT_L3_PWRLEVEL	3
 
-/* PWRLEVEL constraint level*/
-/* set to min frequency */
+/* PWRLEVEL constraint sub type */
+/* Set to min frequency */
 #define KGSL_CONSTRAINT_PWR_MIN    0
-/* set to max frequency */
+/* Set to max frequency */
 #define KGSL_CONSTRAINT_PWR_MAX    1
+/**
+ * Supported PWR_PERC_X constraint values range from 2 to 100, where X is the floor value
+ * of X percent of the maximum gpu frequency. The resulting frequency will be matched to
+ * the closest available lower frequency, with clamping to the minimum gpu frequency.
+ */
+#define KGSL_CONSTRAINT_PWR_PERC_MIN 2
+#define KGSL_CONSTRAINT_PWR_PERC_MAX 100
 
 struct kgsl_device_constraint_pwrlevel {
 	unsigned int level;
@@ -2181,6 +2190,16 @@ struct kgsl_read_calibrated_timestamps {
  * @first_step_down_count: Number of consecutive down recommendations before first step down
  * @subsequent_step_down_count: Number of consecutive down recommendations for subsequent step down
  * after first step down
+ * @num_samples_up: Moving average window size used for vote up decision
+ * @num_samples_down: Moving average window size used for vote down decision
+ * @strict_frame: Flag used to enable/disable vote up decision if the average gpu busy% over some
+ * consecutive samples is very high. This node takes effect only when target_fps is configured
+ * @non_linear_ramp_up: Flag used to enable/disable non-linear ramp up which supports a larger
+ * stride jump if the gpu busy% is very high
+ * @non_linear_ramp_down: Flag used to enable/disable non-linear ramp down which supports a
+ * larger stride jump if the gpu busy% is very low enough
+ * @min_bus_freq: Minimum bus frequency in MHz
+ * @max_bus_freq: Maximum bus frequency in MHz
  */
 struct kgsl_dcvs_attrs {
 	__u32 min_gpu_freq;
@@ -2190,8 +2209,13 @@ struct kgsl_dcvs_attrs {
 	__u32 penalty_down;
 	__u32 first_step_down_count;
 	__u32 subsequent_step_down_count;
-	/* private: 64 bit compatibility */
-	__u32 padding;
+	__u32 num_samples_up;
+	__u32 num_samples_down;
+	__u32 strict_frame;
+	__u32 non_linear_ramp_up;
+	__u32 non_linear_ramp_down;
+	__u32 min_bus_freq;
+	__u32 max_bus_freq;
 };
 
 /**

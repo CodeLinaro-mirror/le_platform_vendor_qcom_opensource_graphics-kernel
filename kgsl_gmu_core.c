@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <dt-bindings/power/qcom-rpmpd.h>
 #include <linux/of.h>
 #include <linux/io.h>
+#include <linux/pm_opp.h>
 
 #include "adreno.h"
 #include "adreno_trace.h"
@@ -258,7 +259,7 @@ void gmu_core_free_globals(struct kgsl_device *device)
 
 		iommu_unmap(gmu->domain, md->gmuaddr, md->size);
 
-		if (md->priv & KGSL_MEMDESC_SYSMEM)
+		if (TEST_FLAG(KGSL_MEMDESC_SYSMEM, &md->priv))
 			kgsl_sharedmem_free(md);
 
 		memset(md, 0, sizeof(*md));
@@ -772,6 +773,15 @@ static void _gmu_trace_dcvs_pwrlevel(struct kgsl_device *device, struct gmu_trac
 		data->prev_pwrlvl = pwr->active_pwrlevel;
 
 	if (pwr->active_pwrlevel != data->new_pwrlvl) {
+		u32 penalty = FIELD_PREP(GENMASK(31, 16), data->penalty_down) |
+				FIELD_PREP(GENMASK(15, 0), data->penalty_up);
+		u32 step_down_cnt = FIELD_PREP(GENMASK(31, 16), data->subsequent_step_down_count) |
+				FIELD_PREP(GENMASK(15, 0), data->first_step_down_count);
+		u32 freq_cap = FIELD_PREP(GENMASK(31, 16), data->max_freq) |
+				FIELD_PREP(GENMASK(15, 0), data->min_freq);
+		u32 num_samples = FIELD_PREP(GENMASK(31, 16), data->num_samples_down) |
+				FIELD_PREP(GENMASK(15, 0), data->num_samples_up);
+
 		trace_kgsl_pwrlevel(device, data->new_pwrlvl,
 					pwr->pwrlevels[data->new_pwrlvl].gpu_freq,
 					data->prev_pwrlvl,
@@ -779,6 +789,10 @@ static void _gmu_trace_dcvs_pwrlevel(struct kgsl_device *device, struct gmu_trac
 					pkt->ticks);
 		KGSL_TRACE_GPU_FREQ(pwr->pwrlevels[data->new_pwrlvl].gpu_freq/1000,
 					0, pkt->ticks);
+
+		trace_adreno_gpu_vote_params(data->new_pwrlvl, data->prev_pwrlvl,
+				data->avg_busy, data->flag, penalty, step_down_cnt, freq_cap,
+				num_samples, data->target_fps, data->mod_percent, pkt->ticks);
 	}
 
 	pwr->active_pwrlevel = data->new_pwrlvl;
@@ -815,6 +829,8 @@ static void _gmu_trace_dcvs_pwrstats(struct kgsl_device *device, struct gmu_trac
 	pwr->time_in_pwrlevel[pwr->active_pwrlevel] += data->total_time;
 	if (pwr->thermal_pwrlevel)
 		pwr->thermal_time += data->gpu_time;
+
+	pwr->aggr_max_pwrlevel = data->aggr_max_pwrlevel;
 }
 
 static void stream_trace_data(struct kgsl_device *device, struct gmu_trace_packet *pkt)
@@ -1067,6 +1083,39 @@ void gmu_core_rdpm_cx_freq_update(struct kgsl_device *device, u32 freq)
 	wmb();
 }
 
+static void build_hub_opp_table(struct kgsl_device *device)
+{
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	struct gmu_core_device *gmu = &device->gmu_core;
+	struct device_node *opp_table, *opp;
+	int i = 0;
+
+	opp_table = of_find_node_by_name(NULL, "hub_opp_table");
+	if (!opp_table)
+		goto err;
+
+	for_each_child_of_node(opp_table, opp) {
+		if (of_property_read_u64(opp, "opp-hz", (u64 *)&gmu->hub_freqs[i]))
+			goto err;
+
+		if (of_property_read_u32(opp, "opp-level", &gmu->hub_vlvls[i]))
+			goto err;
+
+		i++;
+	}
+
+	gmu->num_hub_freqs = i;
+	of_node_put(opp_table);
+	return;
+
+err:
+	if (opp_table)
+		of_node_put(opp_table);
+
+	gmu->hub_freqs[0] = adreno_dev->gmu_hub_clk_freq;
+	gmu->num_hub_freqs = 1;
+}
+
 #define GMU_FREQ_MIN   200000000
 #define GMU_FREQ_MAX   500000000
 
@@ -1137,6 +1186,8 @@ read_gmu_freq:
 
 	gmu->num_freqs = num_freqs;
 
+	build_hub_opp_table(device);
+
 	return 0;
 
 default_gmu_freq:
@@ -1151,6 +1202,33 @@ default_gmu_freq:
 	if (adreno_is_a6xx(adreno_dev) && !adreno_is_a660(adreno_dev))
 		gmu->vlvls[0] = RPMH_REGULATOR_LEVEL_MIN_SVS;
 
+	return 0;
+}
+
+static int scale_hub_clock(struct kgsl_device *device, u32 cx_voltage)
+{
+	struct gmu_core_device *gmu = &device->gmu_core;
+	int ret, i;
+
+	for (i = 0; i < gmu->num_hub_freqs; i++) {
+		if (gmu->hub_vlvls[i] <= cx_voltage)
+			break;
+	}
+
+	/* Default to minimum hub frequency if no match found */
+	if (i == gmu->num_hub_freqs)
+		i = gmu->num_hub_freqs - 1;
+
+	if (i == gmu->cur_hub_level)
+		return 0;
+
+	ret = kgsl_clk_set_rate(gmu->clks, gmu->num_clks, "hub_clk", gmu->hub_freqs[i]);
+	if (ret && ret != -ENODEV) {
+		dev_err(GMU_PDEV_DEV(device), "Unable to set the HUB clock ret %d\n", ret);
+		return ret;
+	}
+
+	gmu->cur_hub_level = i;
 	return 0;
 }
 
@@ -1172,25 +1250,20 @@ int gmu_core_clock_set_rate(struct kgsl_device *device, u32 gmu_level)
 
 	gmu_core->cur_level = gmu_level;
 
-	return ret;
+	return scale_hub_clock(device, gmu_core->vlvls[gmu_level]);
 }
 
 int gmu_core_enable_clks(struct kgsl_device *device, u32 level)
 {
 	struct gmu_core_device *gmu = &device->gmu_core;
-	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	int ret;
+
+	/* Reset hub clock level */
+	gmu->cur_hub_level = gmu->num_hub_freqs;
 
 	ret = gmu_core_clock_set_rate(device, level);
 	if (ret)
 		return ret;
-
-	ret = kgsl_clk_set_rate(gmu->clks, gmu->num_clks, "hub_clk",
-			adreno_dev->gmu_hub_clk_freq);
-	if (ret && ret != -ENODEV) {
-		dev_err(GMU_PDEV_DEV(device), "Unable to set the HUB clock ret %d\n", ret);
-		return ret;
-	}
 
 	ret = clk_bulk_prepare_enable(gmu->num_clks, gmu->clks);
 	if (ret) {
@@ -1229,4 +1302,44 @@ void gmu_core_scale_gmu_frequency(struct kgsl_device *device, int buslevel)
 		gmu_core_clock_set_rate(device, gmu_level);
 
 	return;
+}
+
+int gmu_core_hwsched_memory_init(struct kgsl_device *device)
+{
+	int ret;
+
+	/* GMU Virtual register bank */
+	if (IS_ERR_OR_NULL(device->gmu_core.vrb)) {
+		device->gmu_core.vrb = gmu_core_reserve_kernel_block(device, 0, GMU_VRB_SIZE,
+				GMU_NONCACHED_KERNEL, 0);
+
+		if (IS_ERR(device->gmu_core.vrb))
+			return PTR_ERR(device->gmu_core.vrb);
+
+		/* Populate size of the virtual register bank */
+		ret = gmu_core_set_vrb_register(device->gmu_core.vrb, VRB_SIZE_IDX,
+					device->gmu_core.vrb->size >> 2);
+		if (ret)
+			return ret;
+	}
+
+	/* GMU trace log */
+	if (IS_ERR_OR_NULL(device->gmu_core.trace.md)) {
+		device->gmu_core.trace.md = gmu_core_reserve_kernel_block(device, 0,
+					GMU_TRACE_SIZE, GMU_NONCACHED_KERNEL, 0);
+
+		if (IS_ERR(device->gmu_core.trace.md))
+			return PTR_ERR(device->gmu_core.trace.md);
+
+		/* Pass trace buffer address to GMU through the VRB */
+		ret = gmu_core_set_vrb_register(device->gmu_core.vrb, VRB_TRACE_BUFFER_ADDR_IDX,
+					device->gmu_core.trace.md->gmuaddr);
+		if (ret)
+			return ret;
+
+		/* Initialize the GMU trace buffer header */
+		gmu_core_trace_header_init(&device->gmu_core.trace);
+	}
+
+	return 0;
 }

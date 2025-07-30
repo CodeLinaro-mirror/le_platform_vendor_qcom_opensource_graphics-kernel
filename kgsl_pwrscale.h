@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2010-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef __KGSL_PWRSCALE_H
@@ -27,6 +27,7 @@ struct kgsl_power_stats {
 /**
  * struct kgsl_pwrscale - Power scaling settings for a KGSL device
  * @devfreqptr - Pointer to the devfreq device
+ * @gpu_ro_df - Pointer to the msm-adreno-ro devfreq device
  * @gpu_profile - GPU profile data for the devfreq device
  * @bus_profile - Bus specific data for the bus devfreq device
  * @freq_table - GPU frequencies for the DCVS algorithm
@@ -46,6 +47,7 @@ struct kgsl_power_stats {
  */
 struct kgsl_pwrscale {
 	struct devfreq *devfreqptr;
+	struct devfreq *gpu_ro_df;
 	struct msm_adreno_extended_profile gpu_profile;
 	struct msm_busmon_extended_profile bus_profile;
 	unsigned long freq_table[KGSL_MAX_PWRLEVELS];
@@ -73,23 +75,23 @@ struct kgsl_pwrscale {
 
 /**
  * kgsl_pwrscale_init - Initialize the pwrscale subsystem
- * @device: A GPU device handle
- * @pdev: A pointer to the GPU platform device
- * @governor: default devfreq governor to use for GPU frequency scaling
- *
- * Return: 0 on success or negative on failure
+ * @device: Pointer to KGSL device
+ * @pdev: Pointer to the GPU platform device
  */
-int kgsl_pwrscale_init(struct kgsl_device *device, struct platform_device *pdev,
-		const char *governor);
-void kgsl_pwrscale_close(struct kgsl_device *device);
+void kgsl_pwrscale_init(struct kgsl_device *device, struct platform_device *pdev);
 
+/**
+ * kgsl_pwrscale_close - Clean up registered governor
+ * @device: Pointer to KGSL device
+ */
+void kgsl_pwrscale_close(struct kgsl_device *device);
 void kgsl_pwrscale_update(struct kgsl_device *device);
 void kgsl_pwrscale_update_stats(struct kgsl_device *device);
 void kgsl_pwrscale_sleep(struct kgsl_device *device);
 void kgsl_pwrscale_wake(struct kgsl_device *device);
-
-void kgsl_pwrscale_enable(struct kgsl_device *device);
-void kgsl_pwrscale_disable(struct kgsl_device *device, bool turbo);
+void kgsl_pwrscale_tz_enable(struct kgsl_device *device);
+void kgsl_pwrscale_tz_disable(struct kgsl_device *device, bool turbo);
+void kgsl_pwrscale_fast_bus_hint(bool on);
 
 #if IS_ENABLED(CONFIG_DEVFREQ_GOV_QCOM_ADRENO_TZ)
 static inline int msm_adreno_tz_init(void)
@@ -120,7 +122,5 @@ int devfreq_gpubw_init(void);
 
 void devfreq_gpubw_exit(void);
 #endif
-
-void kgsl_pwrscale_fast_bus_hint(bool on);
 
 #endif

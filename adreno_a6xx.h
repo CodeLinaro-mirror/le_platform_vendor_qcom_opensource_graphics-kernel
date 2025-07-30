@@ -341,7 +341,6 @@ int a6xx_ringbuffer_init(struct adreno_device *adreno_dev);
 extern const struct adreno_perfcounters adreno_a630_perfcounters;
 extern const struct adreno_perfcounters adreno_a6xx_perfcounters;
 extern const struct adreno_perfcounters adreno_a6xx_legacy_perfcounters;
-extern const struct adreno_perfcounters adreno_a6xx_hwsched_perfcounters;
 
 /**
  * a6xx_ringbuffer_addcmds - Submit a command to the ringbuffer

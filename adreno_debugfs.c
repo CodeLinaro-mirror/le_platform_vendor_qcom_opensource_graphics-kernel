@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2002,2008-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/debugfs.h>
@@ -754,17 +754,19 @@ static void _toggle_host_based_dcvs(struct adreno_device *adreno_dev, void *priv
 		/* Enable host based DCVS */
 		device->pwrscale.devfreq_enabled = true;
 		device->pwrctrl.bus_control = true;
-		kgsl_pwrscale_init(device, device->pdev, CONFIG_QCOM_ADRENO_DEFAULT_GOVERNOR);
-		kgsl_pwrscale_enable(device);
+		kgsl_pwrscale_close(device);
+		device->host_based_dcvs = val;
+		kgsl_pwrscale_init(device, device->pdev);
+		kgsl_pwrscale_tz_enable(device);
 	} else {
 		/* Disable host based DCVS */
-		kgsl_pwrscale_disable(device, false);
+		kgsl_pwrscale_tz_disable(device, false);
 		kgsl_pwrscale_close(device);
+		device->host_based_dcvs = val;
+		kgsl_pwrscale_init(device, device->pdev);
 		device->pwrscale.devfreq_enabled = false;
 		device->pwrctrl.bus_control = false;
 	}
-
-	device->host_based_dcvs = val;
 }
 
 static int _host_based_dcvs_show(void *data, u64 *val)

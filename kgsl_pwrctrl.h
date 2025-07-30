@@ -209,6 +209,8 @@ struct kgsl_pwrctrl {
 	bool update_dcvs_table;
 	/** @mutex: Mutex to protect pwrctrl entities */
 	struct mutex mutex;
+	/** @aggr_max_pwrlevel: Aggregated max allowed gpu pwrlevel **/
+	u32 aggr_max_pwrlevel;
 };
 
 int kgsl_pwrctrl_init(struct kgsl_device *device);

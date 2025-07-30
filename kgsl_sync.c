@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2019, 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <dt-bindings/soc/qcom,ipcc.h>
@@ -193,7 +193,7 @@ bool kgsl_hw_fence_signaled(struct dma_fence *fence)
 static bool kgsl_is_input_hw_fence(struct dma_fence *fence)
 {
 	return test_bit(SYNX_HW_FENCE_FLAG_ENABLED_BIT, &fence->flags) ||
-		test_bit(SYNX_NATIVE_FENCE_FLAG_ENABLED_BIT, &fence->flags);
+		test_bit(SYNX_NATIVE_FENCE_FLAG_ENABLED_BIT, &fence->flags) || is_kgsl_fence(fence);
 }
 
 static bool kgsl_is_output_hw_fence(struct dma_fence *fence)

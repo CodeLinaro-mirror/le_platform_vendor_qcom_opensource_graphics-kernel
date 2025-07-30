@@ -106,7 +106,7 @@ def external_deps(target, variant):
             "//vendor/qcom/opensource/synx-kernel:synx_headers"
             ]
 
-    if target in [ "monaco", "parrot", "vienna" ]:
+    if target in [ "monaco", "parrot", "vienna", "lahaina" ]:
         deplist = deplist + [
             "//vendor/qcom/opensource/mm-drivers/hw_fence:hw_fence_headers"
             ]

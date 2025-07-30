@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include "a6xx_reg.h"
@@ -10,6 +10,7 @@
 #include "adreno_a6xx_gmu.h"
 #include "adreno_snapshot.h"
 #include "kgsl_device.h"
+#include "kgsl_gmu_core.h"
 
 static const unsigned int a6xx_gmu_gx_registers[] = {
 	/* GMU GX */
@@ -214,11 +215,12 @@ static void a6xx_gmu_snapshot_memories(struct kgsl_device *device,
 {
 	struct gmu_mem_type_desc desc;
 	struct kgsl_memdesc *md;
+	struct gmu_core_device *gmu_core = &device->gmu_core;
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(device->gmu_core.gmu_globals); i++) {
+	for (i = 0; i < ARRAY_SIZE(gmu_core->gmu_globals); i++) {
 
-		md = &device->gmu_core.gmu_globals[i];
+		md = &gmu_core->gmu_globals[i];
 		if (!md->size)
 			continue;
 
@@ -229,9 +231,9 @@ static void a6xx_gmu_snapshot_memories(struct kgsl_device *device,
 			desc.type = SNAPSHOT_GMU_MEM_LOG;
 		else if (md == gmu->dump_mem)
 			desc.type = SNAPSHOT_GMU_MEM_DEBUG;
-		else if (md == gmu->vrb)
+		else if (md == gmu_core->vrb)
 			desc.type = SNAPSHOT_GMU_MEM_VRB;
-		else if (md == gmu->trace.md)
+		else if (md == gmu_core->trace.md)
 			desc.type = SNAPSHOT_GMU_MEM_TRACE;
 		else
 			desc.type = SNAPSHOT_GMU_MEM_BIN_BLOCK;
@@ -344,7 +346,8 @@ void a6xx_gmu_device_snapshot(struct kgsl_device *device,
 	adreno_snapshot_registers(device, snapshot, a6xx_gmu_registers,
 					ARRAY_SIZE(a6xx_gmu_registers) / 2);
 
-	if (adreno_is_a662(adreno_dev) || adreno_is_a621(adreno_dev))
+	if (adreno_is_a662(adreno_dev) || adreno_is_a621(adreno_dev) ||
+		adreno_is_a622(adreno_dev))
 		adreno_snapshot_registers(device, snapshot,
 			a662_gmu_gpucc_registers,
 			ARRAY_SIZE(a662_gmu_gpucc_registers) / 2);

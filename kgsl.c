@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2008-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <uapi/linux/sched/types.h>
@@ -38,6 +38,7 @@
 #include "kgsl_sync.h"
 #include "kgsl_sysfs.h"
 #include "kgsl_trace.h"
+#include "kgsl_util.h"
 /* Instantiate tracepoints */
 #define CREATE_TRACE_POINTS
 #include "kgsl_power_trace.h"
@@ -347,7 +348,7 @@ static void kgsl_destroy_ion(struct kgsl_memdesc *memdesc)
 		struct kgsl_mem_entry, memdesc);
 	struct kgsl_dma_buf_meta *metadata = entry->priv_data;
 
-	if (memdesc->priv & KGSL_MEMDESC_MAPPED)
+	if (TEST_FLAG(KGSL_MEMDESC_MAPPED, &memdesc->priv))
 		return;
 
 	if (metadata != NULL) {
@@ -378,7 +379,7 @@ static void kgsl_destroy_anon(struct kgsl_memdesc *memdesc)
 	struct scatterlist *sg;
 	struct page *page;
 
-	if (memdesc->priv & KGSL_MEMDESC_MAPPED)
+	if (TEST_FLAG(KGSL_MEMDESC_MAPPED, &memdesc->priv))
 		return;
 
 	for_each_sg(memdesc->sgt->sgl, sg, memdesc->sgt->nents, i) {
@@ -586,7 +587,7 @@ static void kgsl_mem_entry_detach_process(struct kgsl_mem_entry *entry)
 
 	kgsl_sharedmem_put_gpuaddr(&entry->memdesc);
 
-	if (entry->memdesc.priv & KGSL_MEMDESC_RECLAIMED)
+	if (TEST_FLAG(KGSL_MEMDESC_RECLAIMED, &entry->memdesc.priv))
 		atomic_sub(entry->memdesc.page_count,
 					&entry->priv->unpinned_page_count);
 
@@ -3163,7 +3164,7 @@ static long _gpuobj_map_dma_buf(struct kgsl_device *device,
 		if (!check_and_warn_secured(device))
 			return -ENOTSUPP;
 
-		entry->memdesc.priv |= KGSL_MEMDESC_SECURE;
+		SET_FLAG(KGSL_MEMDESC_SECURE, &entry->memdesc.priv);
 	}
 
 	if (copy_struct_from_user(&buf, sizeof(buf),
@@ -3340,7 +3341,7 @@ static int _map_usermem_dma_buf(struct kgsl_device *device,
 		if (!check_and_warn_secured(device))
 			return -EOPNOTSUPP;
 
-		entry->memdesc.priv |= KGSL_MEMDESC_SECURE;
+		SET_FLAG(KGSL_MEMDESC_SECURE, &entry->memdesc.priv);
 	}
 
 	dmabuf = dma_buf_get(fd);
@@ -3367,7 +3368,7 @@ static int _map_usermem_dma_buf(struct kgsl_device *device,
 static int verify_secure_access(struct kgsl_device *device,
 	struct kgsl_mem_entry *entry, struct dma_buf *dmabuf)
 {
-	bool secure = entry->memdesc.priv & KGSL_MEMDESC_SECURE;
+	bool secure = TEST_FLAG(KGSL_MEMDESC_SECURE, &entry->memdesc.priv);
 	uint32_t *vmid_list = NULL, *perms_list = NULL;
 	uint32_t nelems = 0;
 	int i;
@@ -4215,7 +4216,7 @@ gpumem_alloc_vbo_entry(struct kgsl_device_private *dev_priv,
 	}
 
 	if (flags & KGSL_MEMFLAGS_SECURE)
-		entry->memdesc.priv |= KGSL_MEMDESC_SECURE;
+		SET_FLAG(KGSL_MEMDESC_SECURE, &entry->memdesc.priv);
 
 	ret = kgsl_mem_entry_attach_to_process(device, private, entry);
 	if (ret)
@@ -4309,7 +4310,7 @@ struct kgsl_mem_entry *gpumem_alloc_entry(
 			(!(flags & KGSL_MEMFLAGS_IOCOHERENT) &&
 			 !(cachemode == KGSL_CACHEMODE_WRITEBACK) &&
 			!(cachemode == KGSL_CACHEMODE_WRITETHROUGH))))
-		entry->memdesc.priv |= KGSL_MEMDESC_CAN_RECLAIM;
+		SET_FLAG(KGSL_MEMDESC_CAN_RECLAIM, &entry->memdesc.priv);
 
 	kgsl_process_add_stats(private,
 			kgsl_memdesc_usermem_type(&entry->memdesc),
@@ -5300,7 +5301,7 @@ error:
 
 void kgsl_device_platform_remove(struct kgsl_device *device)
 {
-	del_timer(&device->work_period_timer);
+	kgsl_delete_timer(&device->work_period_timer);
 
 	kthread_destroy_worker(device->events_worker);
 

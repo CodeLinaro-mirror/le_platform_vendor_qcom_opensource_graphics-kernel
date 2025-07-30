@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef _GEN8_REG_H
@@ -491,6 +491,24 @@
 #define GEN8_RBBM_PERFCTR_BV_LRZ_2_HI            0x369
 #define GEN8_RBBM_PERFCTR_BV_LRZ_3_LO            0x36a
 #define GEN8_RBBM_PERFCTR_BV_LRZ_3_HI            0x36b
+#define GEN8_RBBM_PERFCTR_BV_CCU_0_LO            0x36c
+#define GEN8_RBBM_PERFCTR_BV_CCU_0_HI            0x36d
+#define GEN8_RBBM_PERFCTR_BV_CCU_1_LO            0x36e
+#define GEN8_RBBM_PERFCTR_BV_CCU_1_HI            0x36f
+#define GEN8_RBBM_PERFCTR_BV_CCU_2_LO            0x370
+#define GEN8_RBBM_PERFCTR_BV_CCU_2_HI            0x371
+#define GEN8_RBBM_PERFCTR_BV_RB_0_LO             0x372
+#define GEN8_RBBM_PERFCTR_BV_RB_0_HI             0x373
+#define GEN8_RBBM_PERFCTR_BV_RB_1_LO             0x374
+#define GEN8_RBBM_PERFCTR_BV_RB_1_HI             0x375
+#define GEN8_RBBM_PERFCTR_BV_RB_2_LO             0x376
+#define GEN8_RBBM_PERFCTR_BV_RB_2_HI             0x377
+#define GEN8_RBBM_PERFCTR_BV_RB_3_LO             0x378
+#define GEN8_RBBM_PERFCTR_BV_RB_3_HI             0x379
+#define GEN8_RBBM_PERFCTR_BV_RB_4_LO             0x37a
+#define GEN8_RBBM_PERFCTR_BV_RB_4_HI             0x37b
+#define GEN8_RBBM_PERFCTR_BV_RB_5_LO             0x37c
+#define GEN8_RBBM_PERFCTR_BV_RB_5_HI             0x37d
 
 #define GEN8_RBBM_NC_MODE_CNTL                   0x440
 #define GEN8_RBBM_PERFCTR_RBBM_SEL_0             0x441

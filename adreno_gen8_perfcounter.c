@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include "adreno.h"
@@ -501,6 +501,15 @@ static struct adreno_perfcount_register gen8_perfcounters_ccu[] = {
 		GEN8_RBBM_PERFCTR_CCU_4_HI, -1, GEN8_RB_PERFCTR_CCU_SEL_4 },
 };
 
+static struct adreno_perfcount_register gen8_perfcounters_bv_ccu[] = {
+	{ KGSL_PERFCOUNTER_NOT_USED, 0, 0, GEN8_RBBM_PERFCTR_BV_CCU_0_LO,
+		GEN8_RBBM_PERFCTR_BV_CCU_0_HI, -1, GEN8_RB_PERFCTR_CCU_SEL_0 },
+	{ KGSL_PERFCOUNTER_NOT_USED, 0, 0, GEN8_RBBM_PERFCTR_BV_CCU_1_LO,
+		GEN8_RBBM_PERFCTR_BV_CCU_1_HI, -1, GEN8_RB_PERFCTR_CCU_SEL_1 },
+	{ KGSL_PERFCOUNTER_NOT_USED, 0, 0, GEN8_RBBM_PERFCTR_BV_CCU_2_LO,
+		GEN8_RBBM_PERFCTR_BV_CCU_2_HI, -1, GEN8_RB_PERFCTR_CCU_SEL_2 },
+};
+
 static struct adreno_perfcount_register gen8_perfcounters_tse[] = {
 	{ KGSL_PERFCOUNTER_NOT_USED, 0, 0, GEN8_RBBM_PERFCTR_TSE_0_LO,
 		GEN8_RBBM_PERFCTR_TSE_0_HI, -1, GEN8_GRAS_PERFCTR_TSE_SEL_0, 0,
@@ -745,6 +754,21 @@ static struct adreno_perfcount_register gen8_perfcounters_rb[] = {
 		GEN8_RBBM_PERFCTR_RB_6_HI, -1, GEN8_RB_PERFCTR_RB_SEL_6 },
 	{ KGSL_PERFCOUNTER_NOT_USED, 0, 0, GEN8_RBBM_PERFCTR_RB_7_LO,
 		GEN8_RBBM_PERFCTR_RB_7_HI, -1, GEN8_RB_PERFCTR_RB_SEL_7 },
+};
+
+static struct adreno_perfcount_register gen8_perfcounters_bv_rb[] = {
+	{ KGSL_PERFCOUNTER_NOT_USED, 0, 0, GEN8_RBBM_PERFCTR_BV_RB_0_LO,
+		GEN8_RBBM_PERFCTR_BV_RB_0_HI, -1, GEN8_RB_PERFCTR_RB_SEL_0 },
+	{ KGSL_PERFCOUNTER_NOT_USED, 0, 0, GEN8_RBBM_PERFCTR_BV_RB_1_LO,
+		GEN8_RBBM_PERFCTR_BV_RB_1_HI, -1, GEN8_RB_PERFCTR_RB_SEL_1 },
+	{ KGSL_PERFCOUNTER_NOT_USED, 0, 0, GEN8_RBBM_PERFCTR_BV_RB_2_LO,
+		GEN8_RBBM_PERFCTR_BV_RB_2_HI, -1, GEN8_RB_PERFCTR_RB_SEL_2 },
+	{ KGSL_PERFCOUNTER_NOT_USED, 0, 0, GEN8_RBBM_PERFCTR_BV_RB_3_LO,
+		GEN8_RBBM_PERFCTR_BV_RB_3_HI, -1, GEN8_RB_PERFCTR_RB_SEL_3 },
+	{ KGSL_PERFCOUNTER_NOT_USED, 0, 0, GEN8_RBBM_PERFCTR_BV_RB_4_LO,
+		GEN8_RBBM_PERFCTR_BV_RB_4_HI, -1, GEN8_RB_PERFCTR_RB_SEL_4 },
+	{ KGSL_PERFCOUNTER_NOT_USED, 0, 0, GEN8_RBBM_PERFCTR_BV_RB_5_LO,
+		GEN8_RBBM_PERFCTR_BV_RB_5_HI, -1, GEN8_RB_PERFCTR_RB_SEL_5 },
 };
 
 static struct adreno_perfcount_register gen8_perfcounters_vsc[] = {
@@ -1123,8 +1147,62 @@ static const struct adreno_perfcount_group gen8_perfcounter_groups
 	GEN8_BV_PERFCOUNTER_GROUP(HLSQ, hlsq, gen8_counter_bv_enable, gen8_counter_read),
 };
 
+static const struct adreno_perfcount_group gen8_2_x_perfcounter_groups
+				[KGSL_PERFCOUNTER_GROUP_MAX] = {
+	GEN8_REGULAR_PERFCOUNTER_GROUP(CP, cp),
+	GEN8_PERFCOUNTER_GROUP_FLAGS(gen8, RBBM, rbbm, 0,
+		gen8_counter_enable, gen8_counter_read),
+	GEN8_PERFCOUNTER_GROUP(PC, pc, gen8_counter_br_enable, gen8_counter_read),
+	GEN8_PERFCOUNTER_GROUP(VFD, vfd, gen8_counter_br_enable, gen8_counter_read),
+	GEN8_PERFCOUNTER_GROUP(HLSQ, hlsq, gen8_counter_br_enable, gen8_counter_read),
+	GEN8_PERFCOUNTER_GROUP(VPC, vpc, gen8_counter_br_enable, gen8_counter_read),
+	GEN8_PERFCOUNTER_GROUP(CCU, ccu, gen8_counter_br_enable, gen8_counter_read),
+	GEN8_PERFCOUNTER_GROUP(CMP, cmp, gen8_counter_br_enable, gen8_counter_read),
+	GEN8_PERFCOUNTER_GROUP(TSE, tse, gen8_counter_br_enable, gen8_counter_read),
+	GEN8_PERFCOUNTER_GROUP(RAS, ras, gen8_counter_br_enable, gen8_counter_read),
+	GEN8_PERFCOUNTER_GROUP(LRZ, lrz, gen8_counter_br_enable, gen8_counter_read),
+	GEN8_REGULAR_PERFCOUNTER_GROUP(UCHE, uche),
+	GEN8_REGULAR_PERFCOUNTER_GROUP(TP, tp),
+	GEN8_REGULAR_PERFCOUNTER_GROUP(SP, sp),
+	GEN8_PERFCOUNTER_GROUP(RB, rb, gen8_counter_br_enable, gen8_counter_read),
+	GEN8_REGULAR_PERFCOUNTER_GROUP(VSC, vsc),
+	GEN8_PERFCOUNTER_GROUP_FLAGS(gen8, VBIF, gbif, 0,
+		gen8_counter_gbif_enable, gen8_counter_read_norestore),
+	GEN8_PERFCOUNTER_GROUP_FLAGS(gen8, VBIF_PWR, gbif_pwr,
+		ADRENO_PERFCOUNTER_GROUP_FIXED,
+		gen8_counter_gbif_pwr_enable, gen8_counter_read_norestore),
+	GEN8_PERFCOUNTER_GROUP_FLAGS(gen8, ALWAYSON, alwayson,
+		ADRENO_PERFCOUNTER_GROUP_FIXED,
+		gen8_counter_alwayson_enable, gen8_counter_alwayson_read),
+	GEN8_PERFCOUNTER_GROUP_FLAGS(gen8, GMU_XOCLK, gmu_xoclk, 0,
+		gen8_counter_gmu_pwr_enable, gen8_counter_read_norestore),
+	GEN8_PERFCOUNTER_GROUP_FLAGS(gen8, GMU_GMUCLK, gmu_gmuclk, 0,
+		gen8_counter_gmu_pwr_enable, gen8_counter_read_norestore),
+	GEN8_PERFCOUNTER_GROUP_FLAGS(gen8, GMU_PERF, gmu_perf, 0,
+		gen8_counter_gmu_perf_enable, gen8_counter_read_norestore),
+	GEN8_REGULAR_PERFCOUNTER_GROUP(UFC, ufc),
+	GEN8_BV_REGULAR_PERFCOUNTER_GROUP(CP, cp),
+	GEN8_BV_PERFCOUNTER_GROUP(PC, pc, gen8_counter_bv_enable, gen8_counter_read),
+	GEN8_BV_PERFCOUNTER_GROUP(VFD, vfd, gen8_counter_bv_enable, gen8_counter_read),
+	GEN8_BV_PERFCOUNTER_GROUP(VPC, vpc, gen8_counter_bv_enable, gen8_counter_read),
+	GEN8_BV_REGULAR_PERFCOUNTER_GROUP(TP, tp),
+	GEN8_BV_REGULAR_PERFCOUNTER_GROUP(SP, sp),
+	GEN8_BV_REGULAR_PERFCOUNTER_GROUP(UFC, ufc),
+	GEN8_BV_PERFCOUNTER_GROUP(TSE, tse, gen8_counter_bv_enable, gen8_counter_read),
+	GEN8_BV_PERFCOUNTER_GROUP(RAS, ras, gen8_counter_bv_enable, gen8_counter_read),
+	GEN8_BV_PERFCOUNTER_GROUP(LRZ, lrz, gen8_counter_bv_enable, gen8_counter_read),
+	GEN8_BV_PERFCOUNTER_GROUP(HLSQ, hlsq, gen8_counter_bv_enable, gen8_counter_read),
+	GEN8_BV_PERFCOUNTER_GROUP(CCU, ccu, gen8_counter_bv_enable, gen8_counter_read),
+	GEN8_BV_PERFCOUNTER_GROUP(RB, rb, gen8_counter_bv_enable, gen8_counter_read),
+};
+
 const struct adreno_perfcounters adreno_gen8_perfcounters = {
 	gen8_perfcounter_groups,
 	ARRAY_SIZE(gen8_perfcounter_groups),
+};
+
+const struct adreno_perfcounters adreno_gen8_2_x_perfcounters = {
+	gen8_2_x_perfcounter_groups,
+	ARRAY_SIZE(gen8_2_x_perfcounter_groups),
 };
 

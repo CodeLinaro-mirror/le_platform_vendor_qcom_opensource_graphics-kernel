@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef _ADRENO_HWSCHED_H_
@@ -181,6 +181,8 @@ struct adreno_hwsched {
 	struct kgsl_memdesc *secure_preempt_rec_gmem[KGSL_PRIORITY_MAX_RB_LEVELS - 1];
 	/** @dcvs_param_update: True if dcvs params have to be sent to GMU at slumber exit */
 	bool dcvs_param_update;
+	/** @tunables_kobj: Kobj for dcvs tunables **/
+	struct kobject tunables_kobj;
 	/** @dcvs_kobj: Kobj for dcvs params **/
 	struct kobject dcvs_kobj;
 	/** @dcvs_tunables: Tuning parameters for GMU based DCVS **/

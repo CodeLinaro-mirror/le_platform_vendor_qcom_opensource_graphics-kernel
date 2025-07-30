@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/iommu.h>
@@ -14,6 +14,7 @@
 #include "adreno_trace.h"
 #include "kgsl_device.h"
 #include "kgsl_eventlog.h"
+#include "kgsl_gmu_core.h"
 #include "kgsl_pwrctrl.h"
 #include "kgsl_trace.h"
 #include "kgsl_util.h"
@@ -1109,7 +1110,7 @@ static void process_hw_fence_ack(struct adreno_device *adreno_dev, u32 *rcvd)
 
 	spin_unlock(&hwf->lock);
 
-	del_timer_sync(&hfi->hw_fence_timer);
+	kgsl_delete_timer_sync(&hfi->hw_fence_timer);
 
 	/*
 	 * We need to handle the deferred context in another thread so that we can unblock the f2h
@@ -1560,7 +1561,7 @@ poll:
 		break;
 	case F2H_MSG_PROCESS_TRACE:
 		rc = 0;
-		gmu_core_process_trace_data(device, GMU_PDEV_DEV(device), &gmu->trace);
+		gmu_core_process_trace_data(device, GMU_PDEV_DEV(device), &device->gmu_core.trace);
 		break;
 	default:
 		if (MSG_HDR_GET_TYPE(rcvd[0]) == HFI_MSG_ACK) {
@@ -2386,7 +2387,6 @@ static int hfi_f2h_main(void *arg)
 	struct adreno_device *adreno_dev = arg;
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct gen7_hwsched_hfi *hfi = to_gen7_hwsched_hfi(adreno_dev);
-	struct gen7_gmu_device *gmu = to_gen7_gmu(adreno_dev);
 
 	while (!kthread_should_stop()) {
 		wait_event_interruptible(hfi->f2h_wq, kthread_should_stop() ||
@@ -2394,7 +2394,7 @@ static int hfi_f2h_main(void *arg)
 			(((hfi->irq_mask & HFI_IRQ_MSGQ_MASK) &&
 			!is_queue_empty(adreno_dev, HFI_MSG_ID)) ||
 			/* Trace buffer has messages to process */
-			!gmu_core_is_trace_empty(gmu->trace.md->hostptr) ||
+			!gmu_core_is_trace_empty(device->gmu_core.trace.md->hostptr) ||
 			/* Dbgq has messages to process */
 			!is_queue_empty(adreno_dev, HFI_DBG_ID)));
 
@@ -2403,7 +2403,7 @@ static int hfi_f2h_main(void *arg)
 
 		gen7_hwsched_process_msgq(adreno_dev);
 		gmu_core_process_trace_data(KGSL_DEVICE(adreno_dev),
-					GMU_PDEV_DEV(device), &gmu->trace);
+					GMU_PDEV_DEV(device), &device->gmu_core.trace);
 		gen7_hwsched_process_dbgq(adreno_dev, true);
 	}
 
@@ -2825,7 +2825,7 @@ int gen7_hwsched_check_context_inflight_hw_fences(struct adreno_device *adreno_d
 
 		if (timestamp_cmp((u32)entry->cmd.ts, hdr->out_fence_ts) > 0) {
 			dev_err(GMU_PDEV_DEV(KGSL_DEVICE(adreno_dev)),
-				"detached ctx:%d has unsignaled fence ts:%d retired:%d\n",
+				"ctx:%d has unsignaled fence ts:%d retired:%d\n",
 				drawctxt->base.id, (u32)entry->cmd.ts, hdr->out_fence_ts);
 			ret = -EINVAL;
 			break;
@@ -3135,9 +3135,22 @@ void gen7_hwsched_create_hw_fence(struct adreno_device *adreno_dev,
 	u32 retired = 0;
 	int ret = 0;
 	bool destroy = false;
+	u32 hw_fence_last_ts;
 
 	spin_lock(&drawctxt->lock);
 	spin_lock(&hwf->lock);
+
+	hw_fence_last_ts = drawctxt->hw_fence_last_ts;
+
+	/*
+	 * Only create hw fences if the timestamp is greater than timestamp of the last hw fence
+	 * that was created. Otherwise, we will hit a GMU assert as GMU doesn't expect duplicate
+	 * or out-of-order fences
+	 */
+	if (timestamp_cmp(hw_fence_last_ts, kfence->timestamp) >= 0)
+		goto done;
+
+	drawctxt->hw_fence_last_ts = kfence->timestamp;
 
 	/*
 	 * If we create a hardware fence and this context is going away, we may never dispatch
@@ -3191,6 +3204,7 @@ void gen7_hwsched_create_hw_fence(struct adreno_device *adreno_dev,
 				kfence->context_id, kfence->timestamp, ret);
 		kgsl_hw_fence_destroy(kfence);
 		destroy = true;
+		drawctxt->hw_fence_last_ts = hw_fence_last_ts;
 		goto done;
 	}
 
@@ -3529,7 +3543,7 @@ int gen7_hwsched_send_recurring_cmdobj(struct adreno_device *adreno_dev,
 
 	if (test_bit(CMDOBJ_RECURRING_STOP, &cmdobj->priv)) {
 		adreno_hwsched_retire_cmdobj(hwsched, hwsched->recurring_cmdobj);
-		del_timer_sync(&hwsched->lsr_timer);
+		kgsl_delete_timer_sync(&hwsched->lsr_timer);
 		hwsched->recurring_cmdobj = NULL;
 		if (active)
 			adreno_active_count_put(adreno_dev);

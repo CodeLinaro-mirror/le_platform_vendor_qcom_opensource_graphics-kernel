@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __KGSL_GMU_CORE_H
 #define __KGSL_GMU_CORE_H
@@ -353,9 +353,27 @@ struct trace_syncobj_retire {
 	u32 timestamp;
 } __packed;
 
+#define TRACE_FLAG_BIT_DCVS_VOTE	0
+#define TRACE_FLAG_BIT_STRICT_FRAME	1
+#define TRACE_FLAG_BIT_NON_LINEAR_UP	2
+#define TRACE_FLAG_BIT_NON_LINEAR_DOWN	3
+
 struct trace_dcvs_pwrlvl {
 	u32 new_pwrlvl;
 	u32 prev_pwrlvl;
+	u32 flag;
+	u16 penalty_up;
+	u16 penalty_down;
+	u16 first_step_down_count;
+	u16 subsequent_step_down_count;
+	u16 min_freq;
+	u16 max_freq;
+	u16 num_samples_up;
+	u16 num_samples_down;
+	u16 target_fps;
+	u16 mod_percent;
+	u16 avg_busy;
+	u16 padding;
 } __packed;
 
 struct trace_dcvs_buslvl {
@@ -369,6 +387,8 @@ struct trace_dcvs_pwrstats {
 	u64 gpu_time;
 	u64 ram_wait;
 	u64 ram_time;
+	u16 aggr_max_pwrlevel;
+	u16 padding;
 } __packed;
 
 struct trace_pwr_constraint {
@@ -484,7 +504,9 @@ enum gmu_fault_panic_policy {
 
 #define KGSL_GMU_CORE_FORCE_PANIC(gf_panic, pdev, ticks, policy) do { \
 		if (gf_panic & BIT(policy)) { \
-			dev_err(&pdev->dev, "GMU always on ticks: %llx\n", ticks);\
+			dev_err(&pdev->dev, \
+				"GMU always on ticks: %llx gf_policy: 0x%x gf_trigger: 0x%lx\n", \
+				ticks, gf_panic, BIT(policy));\
 			BUG();\
 		} \
 	} while (0)
@@ -572,8 +594,20 @@ struct gmu_core_device {
 	u32 perf_ddr_bw[MAX_CX_LEVELS];
 	/** @cur_level: Tracks current frequency level for GMU */
 	u32 cur_level;
+	/** @hub_freqs: Array of GMU hub frequencies */
+	u32 hub_freqs[MAX_CX_LEVELS];
+	/** @hub_vlvls: Array of GMU hub voltage levels */
+	u32 hub_vlvls[MAX_CX_LEVELS];
+	/** @num_hub_freqs: Number of entries in the @hub_freqs array */
+	int num_hub_freqs;
+	/** @cur_hub_level: Tracks current frequency level for hub clock */
+	u32 cur_hub_level;
 	/** @gpu_pwrscale_enable: Flag to toggle GMU based DCVS pwrscale */
 	bool gpu_pwrscale_enable;
+	/** @vrb: GMU virtual register bank memory */
+	struct kgsl_memdesc *vrb;
+	/** @trace: gmu trace container */
+	struct kgsl_gmu_trace trace;
 };
 
 extern struct platform_driver a6xx_gmu_driver;
@@ -948,4 +982,16 @@ void gmu_core_disable_clks(struct kgsl_device *device);
  * @buslevel: DDR bus level to determine the required GMU frequency
  */
 void gmu_core_scale_gmu_frequency(struct kgsl_device *device, int buslevel);
+
+/**
+ * gmu_core_hwsched_memory_init() - Initialize GMU hardware-scheduler memory
+ * @device: Pointer to the kgsl device
+ *
+ * This function initializes the GMU hardware-scheduler memory
+ * by setting up the GMU virtual bank and GMU trace log.
+ *
+ * Return: 0 on success or negative error on failure.
+ */
+int gmu_core_hwsched_memory_init(struct kgsl_device *device);
+
 #endif /* __KGSL_GMU_CORE_H */

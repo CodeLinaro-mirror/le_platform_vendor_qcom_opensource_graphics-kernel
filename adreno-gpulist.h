@@ -3266,7 +3266,7 @@ static const struct hfi_limits_mit_tbl gen8_2_0_limits_mit_tbl[] = {
 			.msg_path = 0,
 			.lkgen = 0,
 			.mode = 0,
-			.sid_val = 0x12,
+			.sid_val = 0x9,
 			.mit_time = 2000,
 			.curr_limit = 6000,
 		}
@@ -3452,6 +3452,9 @@ static const struct hfi_therm_profile_ctrl therm_profile_8_2_0 = {
 	.throttle_cfg.throttle_lvls[2] = 20,
 };
 
+/* Set the BCL throttle levels to 62/75/83 percent */
+#define GEN8_2_X_BCL_DATA ((62 << 15) | (75 << 8) | (83 << 1) | 0x1)
+
 static const struct adreno_gen8_core adreno_gpu_core_gen8_2_0 = {
 	.base = {
 		DEFINE_ADRENO_REV(ADRENO_REV_GEN8_2_0,
@@ -3486,7 +3489,7 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_2_0 = {
 	.gmu_hub_clk_freq = 150000000,
 	.gen8_snapshot_block_list = &gen8_2_0_snapshot_block_list,
 	.fast_bus_hint = true,
-	.bcl_data = 1,
+	.bcl_data = GEN8_2_X_BCL_DATA,
 	.acv_perfmode_ddr_freq = MHZ_TO_KBPS(2736, 4),
 	.noc_timeout_us = 3410, /* 3.41 msec */
 	.cl_no_ft_timeout_ms = 6500,
@@ -3531,7 +3534,7 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_2_1 = {
 	.gmu_hub_clk_freq = 150000000,
 	.gen8_snapshot_block_list = &gen8_2_0_snapshot_block_list,
 	.fast_bus_hint = true,
-	.bcl_data = 1,
+	.bcl_data = GEN8_2_X_BCL_DATA,
 	.acv_perfmode_ddr_freq = MHZ_TO_KBPS(2736, 4),
 	.noc_timeout_us = 3410, /* 3.41 msec */
 	.cl_no_ft_timeout_ms = 6500,
@@ -3914,6 +3917,7 @@ static const struct gen8_nonctxt_regs gen8_9_0_nonctxt_regs[] = {
 	{ GEN8_GRAS_TSEFE_DBG_ECO_CNTL, 0x00200000, BIT(PIPE_BR) | BIT(PIPE_BV) },
 	{ GEN8_GRAS_DBG_ECO_CNTL, 0x00000800, BIT(PIPE_BR) | BIT(PIPE_BV) },
 	{ GEN8_RB_CCU_CNTL, 0x00000068, BIT(PIPE_BR) },
+	{ GEN8_RB_CCU_DBG_ECO_CNTL, 0x00002200, BIT(PIPE_BR) },
 	{ GEN8_RB_GC_GMEM_PROTECT, 0x02600000, BIT(PIPE_BR) },
 	{ GEN8_RB_RESOLVE_PREFETCH_CNTL, 0x00000007, BIT(PIPE_BR) },
 	{ GEN8_RB_CMP_DBG_ECO_CNTL, 0x00004000, BIT(PIPE_BR) },
@@ -3931,6 +3935,7 @@ static const struct gen8_nonctxt_regs gen8_9_0_nonctxt_regs[] = {
 	{ GEN8_VFD_CB_BUSY_REQ_CNT, 0x00200020, BIT(PIPE_BR) | BIT(PIPE_BV) },
 	{ GEN8_VFD_CB_LP_REQ_CNT, 0x00000020, BIT(PIPE_BR) | BIT(PIPE_BV) },
 	{ GEN8_SP_CHICKEN_BITS_3, 0x00300000, BIT(PIPE_NONE) },
+	{ GEN8_SP_CHICKEN_BITS_4, 0x00000002, BIT(PIPE_NONE) },
 	{ GEN8_SP_PERFCTR_SHADER_MASK, 0x0000003f, BIT(PIPE_NONE) },
 	/* Ignore HLSQ shared constant feedback from SP */
 	{ GEN8_SP_HLSQ_DBG_ECO_CNTL_1, BIT(17), BIT(PIPE_NONE) },
@@ -3939,7 +3944,8 @@ static const struct gen8_nonctxt_regs gen8_9_0_nonctxt_regs[] = {
 	{ GEN8_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080, BIT(PIPE_NONE) },
 	{ GEN8_SP_READ_SEL, 0x0001ff00, BIT(PIPE_NONE) },
 	{ GEN8_TPL1_DBG_ECO_CNTL, 0x10000000, BIT(PIPE_NONE) },
-	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x00000720, BIT(PIPE_NONE) },
+	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x04000720, BIT(PIPE_NONE) },
+	{ 0 },
 };
 
 extern const struct gen8_snapshot_block_list gen8_9_0_snapshot_block_list;

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2011-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #if !defined(_KGSL_TRACE_H) || defined(TRACE_HEADER_MULTI_READ)
@@ -1613,6 +1613,62 @@ TRACE_EVENT(kgsl_reclaim_process,
 		"tgid=%u swapped=%u swapped_out_total=%u swap=%s",
 		__entry->pid, __entry->swap_count, __entry->unpinned_page_count,
 		__entry->swapout ? "out" : "in"
+	)
+);
+
+TRACE_EVENT(kgsl_migrate_memdesc,
+	TP_PROTO(
+		struct kgsl_mem_entry *mem_entry
+	),
+
+	TP_ARGS(mem_entry
+	),
+
+	TP_STRUCT__entry(
+		__field(uint64_t, gpuaddr)
+		__field(uint64_t, size)
+		__field(unsigned int, page_count)
+		__field(unsigned int, tgid)
+		__field(unsigned int, id)
+		__field(uint64_t, flags)
+	),
+
+	TP_fast_assign(
+		__entry->gpuaddr = mem_entry->memdesc.gpuaddr;
+		__entry->size = mem_entry->memdesc.size;
+		__entry->page_count = mem_entry->memdesc.page_count;
+		__entry->tgid = pid_nr(mem_entry->priv->pid);
+		__entry->id = mem_entry->id;
+		__entry->flags = mem_entry->memdesc.flags;
+	),
+
+	TP_printk(
+		"gpuaddr=0x%llx size=%llu page_count=%u tgid=%u id=%u flags=0x%llx",
+		__entry->gpuaddr, __entry->size, __entry->page_count, __entry->tgid,
+		__entry->id, __entry->flags
+	)
+);
+
+TRACE_EVENT(kgsl_migrate_process,
+	TP_PROTO(
+		struct kgsl_process_private *process,
+		u32 migrate_count
+	),
+
+	TP_ARGS(process, migrate_count
+	),
+
+	TP_STRUCT__entry(
+		__field(unsigned int, pid)
+		__field(u32, migrate_count)
+	),
+	TP_fast_assign(
+		__entry->pid = pid_nr(process->pid);
+		__entry->migrate_count = migrate_count;
+	),
+	TP_printk(
+		"tgid=%u migrate_count=%u",
+		__entry->pid, __entry->migrate_count
 	)
 );
 

@@ -93,6 +93,22 @@ config QCOM_KGSL_PROCESS_RECLAIM
 	  process. Based on this kgsl can unpin given number of pages from
 	  background processes and make them available to the shrinker.
 
+# QCOM_KGSL_POOL is an internal config to compile kgsl_pool.c
+# This config is not user-selectable so it has no prompt or help sections
+config QCOM_KGSL_POOL
+	bool
+	default y if !QCOM_KGSL_USE_SHMEM
+
+config QCOM_KGSL_HYBRID_ALLOCATION
+	bool "Enable hybrid allocation scheme"
+	select QCOM_KGSL_POOL
+	depends on QCOM_KGSL_PROCESS_RECLAIM
+	help
+	  Say 'Y' here to enable using a hybrid memory allocation scheme. Pages
+	  are initially allocated from the memory pools. As processes are put into
+	  the background, kgsl pages are migrated to shmem, in order to make them
+	  available for reclaiming.
+
 config QCOM_KGSL_HIBERNATION
 	bool "Enable Hibernation support in KGSL"
 	depends on HIBERNATION

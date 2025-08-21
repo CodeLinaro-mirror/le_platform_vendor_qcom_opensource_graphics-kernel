@@ -148,8 +148,8 @@ const struct gen8_snapshot_block_list gen8_6_0_snapshot_block_list = {
 };
 
 const struct gen8_snapshot_block_list gen8_9_0_snapshot_block_list = {
-	.pre_crashdumper_regs = gen8_9_0_ahb_registers,
-	.num_pre_crashdumper_regs = ARRAY_SIZE(gen8_9_0_ahb_registers),
+	.pre_crashdumper_regs = gen8_2_0_ahb_registers,
+	.num_pre_crashdumper_regs = ARRAY_SIZE(gen8_2_0_ahb_registers),
 	.debugbus_blocks = gen8_9_0_debugbus_blocks,
 	.debugbus_blocks_len = ARRAY_SIZE(gen8_9_0_debugbus_blocks),
 	.gbif_debugbus_blocks = gen8_gbif_debugbus_blocks,
@@ -158,7 +158,7 @@ const struct gen8_snapshot_block_list gen8_9_0_snapshot_block_list = {
 	.cx_debugbus_blocks_len = ARRAY_SIZE(gen8_cx_debugbus_blocks),
 	.external_core_regs = gen8_9_0_external_core_regs,
 	.num_external_core_regs = ARRAY_SIZE(gen8_9_0_external_core_regs),
-	.gmu_cx_unsliced_regs = gen8_9_0_gmucx_registers,
+	.gmu_cx_unsliced_regs = gen8_2_0_gmucx_registers,
 	.gmu_gx_regs = gen8_2_0_gmu_gx_registers,
 	.num_gmu_gx_regs = ARRAY_SIZE(gen8_2_0_gmu_gx_registers),
 	.rscc_regs = gen8_2_0_rscc_rsc_registers,

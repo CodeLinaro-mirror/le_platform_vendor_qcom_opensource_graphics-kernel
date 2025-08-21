@@ -1985,13 +1985,15 @@ int gen8_hwsched_add_to_minidump(struct adreno_device *adreno_dev)
 	for (i = 0; i < hwsched->mem_alloc_entries; i++) {
 		struct hfi_mem_alloc_entry *entry = &hwsched->mem_alloc_table[i];
 		char hfi_minidump_str[MAX_VA_MINIDUMP_STR_LEN] = {0};
+		char name[MAX_VA_MINIDUMP_STR_LEN];
 		u32 rb_id = 0;
 
 		if (!hfi_get_minidump_string(entry->desc.mem_kind,
 						&hfi_minidump_str[0],
 						sizeof(hfi_minidump_str), &rb_id)) {
+			snprintf(name, sizeof(name), "kgsl_global_%s", hfi_minidump_str);
 			ret = kgsl_add_va_to_minidump(adreno_dev->dev.dev,
-						hfi_minidump_str,
+						name,
 						entry->md->hostptr,
 						entry->md->size);
 			if (ret)

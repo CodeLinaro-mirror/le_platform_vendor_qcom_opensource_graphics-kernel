@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __KGSL_RECLAIM_H
 #define __KGSL_RECLAIM_H
@@ -10,11 +10,6 @@
 #include "kgsl_device.h"
 
 #ifdef CONFIG_QCOM_KGSL_PROCESS_RECLAIM
-
-/* Set if all the memdescs of this process are pinned */
-#define KGSL_PROC_PINNED_STATE 0
-/* Process foreground/background state. Set if process is in foreground */
-#define KGSL_PROC_STATE 1
 
 int kgsl_reclaim_start(void);
 int kgsl_reclaim_init(void);

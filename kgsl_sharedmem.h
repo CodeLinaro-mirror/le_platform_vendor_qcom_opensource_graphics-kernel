@@ -41,6 +41,8 @@ struct kgsl_process_private;
 #define KGSL_MEMDESC_SKIP_RECLAIM BIT(12)
 /* The memdesc is hypassigned to HLOS*/
 #define KGSL_MEMDESC_HYPASSIGNED_HLOS BIT(13)
+/* The memdesc is migrated to shmem */
+#define KGSL_MEMDESC_MIGRATED BIT(14)
 
 #define TEST_FLAG(_bit, _val) ((atomic_read(_val) & (_bit)) != 0)
 #define SET_FLAG(_bit, _val) atomic_or((int)(_bit), (_val))
@@ -94,11 +96,11 @@ struct kgsl_memdesc {
 	unsigned long attrs;
 	struct page **pages;
 	u32 page_count;
-	/*
-	 * @lock: Spinlock to protect the gpuaddr from being accessed by
+	/**
+	 * @lock: RW-semaphore to protect the gpuaddr from being accessed by
 	 * multiple entities trying to map the same SVM region at once
 	 */
-	spinlock_t lock;
+	struct rw_semaphore lock;
 	/** @shmem_filp: Pointer to the shmem file backing this memdesc */
 	struct file *shmem_filp;
 	/** @ranges: rbtree base for the interval list of vbo ranges */
@@ -109,6 +111,10 @@ struct kgsl_memdesc {
 	u32 gmuaddr;
 	/*@shmem_page_list: shmem pages list */
 	struct list_head shmem_page_list;
+	/** @shmem_pages: Count of shmem pages allocated */
+	u32 shmem_pages;
+	/** @vma_idr: idr to store VMAs corresponding to userspace mmap regions */
+	struct idr vma_idr;
 };
 
 /*
@@ -707,4 +713,28 @@ static inline void kgsl_sharedmem_put_bind_op(struct kgsl_sharedmem_bind_op *op)
  * driver
  */
 void kgsl_register_shmem_callback(void);
+
+/**
+ * kgsl_memdesc_file_setup - Setup the shmem file for the memdesc
+ * @memdesc: Pointer to the memdesc
+ */
+struct file *kgsl_memdesc_file_setup(struct kgsl_memdesc *memdesc);
+
+/**
+ * kgsl_alloc_shmem_page - Allocate a page from shmem for a memdesc
+ * @memdesc: Pointer to the memdesc
+ * @page_size: Size of the page
+ * @pages: Array to store pointers to the pages allocated
+ * @align: Page alignment requested
+ * @page_off: Page offset in the GPU object
+ */
+int kgsl_alloc_shmem_page(struct kgsl_memdesc *memdesc, struct file *shmem_file, int *page_size,
+			struct page **pages, unsigned int *align, unsigned int page_off);
+
+/**
+ * kgsl_memdesc_pagelist_cleanup - Clean up the memdesc's shmem list
+ * @memdesc: Pointer to the memdesc
+ */
+void kgsl_memdesc_pagelist_cleanup(struct file *shmem_filp, struct kgsl_memdesc *memdesc);
+
 #endif /* __KGSL_SHAREDMEM_H */

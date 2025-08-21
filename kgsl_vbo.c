@@ -428,7 +428,7 @@ kgsl_sharedmem_create_bind_op(struct kgsl_process_private *private,
 	op->target = target;
 
 	/* Make sure process is pinned in memory before proceeding */
-	atomic_inc(&private->cmd_count);
+	kgsl_process_inc_cmd_count(private);
 	ret = kgsl_reclaim_to_pinned_state(private);
 	if (ret)
 		goto err;
@@ -533,14 +533,14 @@ kgsl_sharedmem_create_bind_op(struct kgsl_process_private *private,
 		ranges += ranges_size;
 	}
 
-	atomic_dec(&private->cmd_count);
+	kgsl_process_dec_cmd_count(private);
 	init_completion(&op->comp);
 	kref_init(&op->ref);
 
 	return op;
 
 err:
-	atomic_dec(&private->cmd_count);
+	kgsl_process_dec_cmd_count(private);
 	kgsl_sharedmem_free_bind_op(op);
 	return ERR_PTR(ret);
 }

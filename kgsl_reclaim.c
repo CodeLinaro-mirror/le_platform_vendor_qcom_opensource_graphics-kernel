@@ -11,6 +11,7 @@
 #include <linux/swap.h>
 #include <linux/version.h>
 
+#include "kgsl_pool.h"
 #include "kgsl_reclaim.h"
 #include "kgsl_sharedmem.h"
 #include "kgsl_trace.h"
@@ -48,15 +49,14 @@ static void kgsl_memdesc_clear_unevictable(struct kgsl_process_private *process,
 	 * Once reclaim is done, hint that further shmem allocations
 	 * will have to be on the unevictable list.
 	 */
+	down_write(&memdesc->lock);
 	mapping_clear_unevictable(memdesc->shmem_filp->f_mapping);
 	folio_batch_init(&fbatch);
 	for (i = 0; i < memdesc->page_count; i++) {
 		set_page_dirty_lock(memdesc->pages[i]);
-		spin_lock(&memdesc->lock);
 		folio_batch_add(&fbatch, page_folio(memdesc->pages[i]));
 		memdesc->pages[i] = NULL;
 		atomic_inc(&process->unpinned_page_count);
-		spin_unlock(&memdesc->lock);
 		if (folio_batch_count(&fbatch) == PAGEVEC_SIZE) {
 			check_move_unevictable_folios(&fbatch);
 			__folio_batch_release(&fbatch);
@@ -67,6 +67,7 @@ static void kgsl_memdesc_clear_unevictable(struct kgsl_process_private *process,
 		check_move_unevictable_folios(&fbatch);
 		__folio_batch_release(&fbatch);
 	}
+	up_write(&memdesc->lock);
 }
 
 static int kgsl_read_mapping(struct kgsl_memdesc *memdesc, struct page **page, int i)
@@ -98,15 +99,14 @@ static void kgsl_memdesc_clear_unevictable(struct kgsl_process_private *process,
 	 * Once reclaim is done, hint that further shmem allocations
 	 * will have to be on the unevictable list.
 	 */
+	down_write(&memdesc->lock);
 	mapping_clear_unevictable(memdesc->shmem_filp->f_mapping);
 	pagevec_init(&pvec);
 	for (i = 0; i < memdesc->page_count; i++) {
 		set_page_dirty_lock(memdesc->pages[i]);
-		spin_lock(&memdesc->lock);
 		pagevec_add(&pvec, memdesc->pages[i]);
 		memdesc->pages[i] = NULL;
 		atomic_inc(&process->unpinned_page_count);
-		spin_unlock(&memdesc->lock);
 		if (pagevec_count(&pvec) == PAGEVEC_SIZE) {
 			check_move_unevictable_pages(&pvec);
 			__pagevec_release(&pvec);
@@ -117,6 +117,7 @@ static void kgsl_memdesc_clear_unevictable(struct kgsl_process_private *process,
 		check_move_unevictable_pages(&pvec);
 		__pagevec_release(&pvec);
 	}
+	up_write(&memdesc->lock);
 }
 
 static int kgsl_read_mapping(struct kgsl_memdesc *memdesc, struct page **page, int i)
@@ -133,13 +134,16 @@ static int kgsl_memdesc_get_reclaimed_pages(struct kgsl_mem_entry *entry)
 	int i, ret;
 	struct page *page = NULL;
 
+	down_write(&memdesc->lock);
 	for (i = 0; i < memdesc->page_count; i++) {
 		if (memdesc->pages[i])
 			continue;
 
 		ret = kgsl_read_mapping(memdesc, &page, i);
-		if (ret)
+		if (ret) {
+			up_write(&memdesc->lock);
 			return ret;
+		}
 
 		kgsl_page_sync(memdesc->dev, page, PAGE_SIZE, DMA_BIDIRECTIONAL);
 
@@ -147,14 +151,13 @@ static int kgsl_memdesc_get_reclaimed_pages(struct kgsl_mem_entry *entry)
 		 * Update the pages array only if vmfault has not
 		 * updated it meanwhile
 		 */
-		spin_lock(&memdesc->lock);
 		if (!memdesc->pages[i]) {
 			memdesc->pages[i] = page;
 			atomic_dec(&entry->priv->unpinned_page_count);
 		} else
 			put_page(page);
-		spin_unlock(&memdesc->lock);
 	}
+	up_write(&memdesc->lock);
 
 	ret = kgsl_mmu_map(memdesc->pagetable, memdesc);
 	if (ret)
@@ -220,6 +223,225 @@ static void kgsl_reclaim_foreground_work(struct work_struct *work)
 	kgsl_process_private_put(process);
 }
 
+#ifdef CONFIG_QCOM_KGSL_HYBRID_ALLOCATION
+static void _copy_page(struct kgsl_memdesc *memdesc, struct page *dest, struct page *src)
+{
+	void *src_ptr, *dest_ptr;
+
+	set_page_dirty_lock(src);
+
+	src_ptr = kmap_local_page(src);
+	dest_ptr = kmap_local_page(dest);
+
+	memcpy(dest_ptr, src_ptr, PAGE_SIZE);
+	kunmap_local(src_ptr);
+	kunmap_local(dest_ptr);
+
+	kgsl_page_sync(memdesc->dev, dest, PAGE_SIZE, DMA_BIDIRECTIONAL);
+}
+
+static u32 kgsl_shmem_mem_entry_migrate(struct task_struct *task, struct kgsl_mem_entry *entry)
+{
+	struct kgsl_memdesc *memdesc = &entry->memdesc;
+	u32 page_count = 0;
+	struct page **pages = NULL;
+	struct file *shmem_filp = NULL;
+	int i = 0;
+	int ret = 1;
+	int vidx;
+	struct vm_area_struct *vma;
+	int page_size = PAGE_SIZE;
+	struct page **old_pages;
+
+	/* Skip mem entries that are mapped into a VBO */
+	if (atomic_read(&entry->vbo_count))
+		return 0;
+
+	/* Check if migrating this memdesc will put us over the limit */
+	if ((atomic_read(&entry->priv->migrated_page_count) + memdesc->page_count) >
+		kgsl_reclaim_max_page_limit)
+		return 0;
+
+	pages = kvcalloc(memdesc->page_count, sizeof(*pages), GFP_KERNEL);
+	if (!pages)
+		return 0;
+
+	shmem_filp = kgsl_memdesc_file_setup(memdesc);
+	if (IS_ERR_OR_NULL(shmem_filp))
+		goto cleanup_pages;
+
+	/* Allocate replacement shmem pages */
+	for (i = 0; i < memdesc->page_count; i++) {
+		ret = kgsl_alloc_shmem_page(memdesc, shmem_filp, &page_size, &pages[i], NULL, i);
+		if (ret <= 0) {
+			pr_err_ratelimited(
+				"kgsl: Failed to alloc shmem page process %d entry %d offset %d\n",
+				pid_nr(entry->priv->pid), entry->id, i);
+			goto cleanup_shmem;
+		}
+	}
+
+	/* Unmap the memdesc from the mmu */
+	ret = kgsl_mmu_unmap(memdesc->pagetable, memdesc);
+	if (ret) {
+		pr_err_ratelimited("kgsl: Failed to unmap process %d entry %d\n",
+				pid_nr(entry->priv->pid), entry->id);
+		kill_pid(entry->priv->pid, SIGKILL, 1);
+		goto cleanup_shmem;
+	}
+
+	/* Take the mmap lock to prevent concurrent entry mmaps */
+	mmap_read_lock(task->mm);
+
+	/* Take the memdesc lock to prevent concurrent vm_faults */
+	down_write(&memdesc->lock);
+
+	/* Zap ptes to force a vm_fault on the next userspace access */
+	idr_for_each_entry(&memdesc->vma_idr, vma, vidx) {
+		zap_page_range_single(vma, vma->vm_start,
+			vma->vm_end - vma->vm_start, NULL);
+
+		fput(vma->vm_file);
+		vma->vm_file = get_file(shmem_filp);
+	}
+
+	for (i = 0; i < memdesc->page_count; ) {
+		struct page *p;
+		int n;
+		int count;
+
+		p = memdesc->pages[i];
+		count = 1 << compound_order(p);
+
+		/* Copy over existing data */
+		for (n = 0; n < count; n++) {
+			struct page *page = memdesc->pages[i + n];
+			struct page *new_page = pages[i + n];
+
+			_copy_page(memdesc, new_page, page);
+			page_count++;
+		}
+
+		i += count;
+	}
+
+	old_pages = memdesc->pages;
+	memdesc->pages = pages;
+	memdesc->shmem_filp = shmem_filp;
+	SET_FLAG(KGSL_MEMDESC_MIGRATED, &memdesc->priv);
+
+	up_write(&memdesc->lock);
+	mmap_read_unlock(task->mm);
+
+	/* Free the old pages back into the pool */
+	kgsl_pool_free_pages(old_pages, memdesc->page_count);
+	kvfree(old_pages);
+
+	/* Map the new pages to the mmu */
+	ret = kgsl_mmu_map(memdesc->pagetable, memdesc);
+	if (ret) {
+		pr_err_ratelimited("kgsl: Failed to map process %d entry %d\n",
+					pid_nr(entry->priv->pid), entry->id);
+		kill_pid(entry->priv->pid, SIGKILL, 1);
+	}
+
+	atomic_add(memdesc->page_count, &entry->priv->migrated_page_count);
+	trace_kgsl_migrate_memdesc(entry);
+
+	return page_count;
+
+cleanup_shmem:
+	for (i--; i >= 0; i--)
+		put_page(pages[i]);
+
+	kgsl_memdesc_pagelist_cleanup(shmem_filp, memdesc);
+	SHMEM_I(shmem_filp->f_mapping->host)->android_vendor_data1 = 0;
+	fput(shmem_filp);
+
+cleanup_pages:
+	kvfree(pages);
+
+	return 0;
+}
+
+static void kgsl_shmem_migrate(struct kgsl_process_private *process)
+{
+	u32 migrate_count = 0;
+	struct kgsl_mem_entry *entry;
+	struct task_struct *task;
+	u32 next = 0;
+
+	/* Skip migration if we're already over the limit for the process */
+	if (atomic_read(&process->migrated_page_count) >= kgsl_reclaim_max_page_limit)
+		return;
+
+	if (!mutex_trylock(&process->reclaim_lock))
+		return;
+
+	task = get_pid_task(process->pid, PIDTYPE_PID);
+	if (!task)
+		goto done;
+
+	for ( ; ; ) {
+		struct kgsl_mem_entry *valid_entry = NULL;
+		u32 priv;
+
+		/* Abort migration if process submitted work. */
+		if (atomic_read(&process->cmd_count))
+			goto abort;
+
+		if (atomic_read(&process->migrated_page_count) >= kgsl_reclaim_max_page_limit)
+			break;
+
+		spin_lock(&process->mem_lock);
+		entry = idr_get_next(&process->mem_idr, &next);
+		if (entry == NULL) {
+			spin_unlock(&process->mem_lock);
+			break;
+		}
+
+		/*
+		 * Skip entries that are pending free or are already migrated or
+		 * cannot be reclaimed
+		 */
+		priv = atomic_read(&entry->memdesc.priv);
+		if (!(entry->pending_free || (priv & KGSL_MEMDESC_MIGRATED) ||
+			!(priv & KGSL_MEMDESC_CAN_RECLAIM)))
+			valid_entry = kgsl_mem_entry_get(entry);
+
+		spin_unlock(&process->mem_lock);
+
+		next++;
+		if (!valid_entry)
+			continue;
+
+		migrate_count += kgsl_shmem_mem_entry_migrate(task, valid_entry);
+		kgsl_mem_entry_put(valid_entry);
+	}
+
+	clear_bit(KGSL_PROC_CAN_MIGRATE, &process->state);
+abort:
+	put_task_struct(task);
+	trace_kgsl_migrate_process(process, migrate_count);
+done:
+	mutex_unlock(&process->reclaim_lock);
+}
+
+static void kgsl_background_work(struct work_struct *work)
+{
+	struct kgsl_process_private *process =
+		container_of(work, struct kgsl_process_private, bg_work);
+
+	if (!test_bit(KGSL_PROC_STATE, &process->state))
+		kgsl_shmem_migrate(process);
+	kgsl_process_private_put(process);
+}
+#else
+static void kgsl_background_work(struct work_struct *work)
+{
+}
+#endif
+
 static ssize_t kgsl_proc_state_show(struct kobject *kobj,
 		struct kgsl_process_attribute *attr, char *buf)
 {
@@ -243,7 +465,11 @@ static ssize_t kgsl_proc_state_store(struct kobject *kobj,
 			kgsl_process_private_get(process))
 			kgsl_schedule_work(&process->fg_work);
 	} else if (sysfs_streq(buf, "background")) {
-		clear_bit(KGSL_PROC_STATE, &process->state);
+		bool bg = test_and_clear_bit(KGSL_PROC_STATE, &process->state);
+
+		if (IS_ENABLED(CONFIG_QCOM_KGSL_HYBRID_ALLOCATION) && bg &&
+			!atomic_read(&process->cmd_count) && kgsl_process_private_get(process))
+			kgsl_schedule_work(&process->bg_work);
 	} else
 		return -EINVAL;
 
@@ -260,12 +486,24 @@ static ssize_t gpumem_reclaimed_show(struct kobject *kobj,
 		atomic_read(&process->unpinned_page_count) << PAGE_SHIFT);
 }
 
+static ssize_t gpumem_migrated_show(struct kobject *kobj,
+		struct kgsl_process_attribute *attr, char *buf)
+{
+	struct kgsl_process_private *process =
+		container_of(kobj, struct kgsl_process_private, kobj);
+
+	return scnprintf(buf, PAGE_SIZE, "%d\n",
+		atomic_read(&process->migrated_page_count) << PAGE_SHIFT);
+}
+
 PROCESS_ATTR(state, 0644, kgsl_proc_state_show, kgsl_proc_state_store);
 PROCESS_ATTR(gpumem_reclaimed, 0444, gpumem_reclaimed_show, NULL);
+PROCESS_ATTR(gpumem_migrated, 0444, gpumem_migrated_show, NULL);
 
 static const struct attribute *proc_reclaim_attrs[] = {
 	&attr_state.attr,
 	&attr_gpumem_reclaimed.attr,
+	&attr_gpumem_migrated.attr,
 	NULL,
 };
 
@@ -355,6 +593,12 @@ static u32 kgsl_reclaim_process(struct kgsl_process_private *process,
 			continue;
 		}
 
+		if (!valid_entry->memdesc.shmem_filp) {
+			kgsl_mem_entry_put(entry);
+			next++;
+			continue;
+		}
+
 		/* Do not reclaim pages mapped into a VBO */
 		if (atomic_read(&valid_entry->vbo_count)) {
 			kgsl_mem_entry_put(entry);
@@ -397,7 +641,7 @@ static u32 kgsl_reclaim_process(struct kgsl_process_private *process,
 	return (pages_to_reclaim - remaining);
 }
 
-static void kgsl_reclaim_background_work(struct work_struct *work)
+static void kgsl_reclaim_shrinker_work(struct work_struct *work)
 {
 	u32 bg_proc = 0, nr_pages = atomic_read(&kgsl_nr_to_reclaim);
 	u64 pp_nr_pages;
@@ -472,9 +716,14 @@ void kgsl_reclaim_proc_private_init(struct kgsl_process_private *process)
 {
 	mutex_init(&process->reclaim_lock);
 	INIT_WORK(&process->fg_work, kgsl_reclaim_foreground_work);
+
+	if (IS_ENABLED(CONFIG_QCOM_KGSL_HYBRID_ALLOCATION))
+		INIT_WORK(&process->bg_work, kgsl_background_work);
+
 	set_bit(KGSL_PROC_PINNED_STATE, &process->state);
 	set_bit(KGSL_PROC_STATE, &process->state);
 	atomic_set(&process->unpinned_page_count, 0);
+	atomic_set(&process->migrated_page_count, 0);
 }
 
 #if (KERNEL_VERSION(6, 7, 0) <= LINUX_VERSION_CODE)
@@ -546,7 +795,7 @@ int kgsl_reclaim_init(void)
 		return ret;
 	}
 
-	INIT_WORK(&reclaim_work, kgsl_reclaim_background_work);
+	INIT_WORK(&reclaim_work, kgsl_reclaim_shrinker_work);
 
 	return 0;
 }

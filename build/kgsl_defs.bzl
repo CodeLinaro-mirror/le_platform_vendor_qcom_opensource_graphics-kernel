@@ -180,8 +180,8 @@ def define_target_variant_module(target, variant):
                 "adreno_a6xx_coresight.c",
                 "adreno_gen7_coresight.c",
                 "adreno_gen8_coresight.c"] },
+            "CONFIG_QCOM_KGSL_POOL": { True: [ "kgsl_pool.c" ] },
             "CONFIG_QCOM_KGSL_PROCESS_RECLAIM": { True: [ "kgsl_reclaim.c" ] },
-            "CONFIG_QCOM_KGSL_USE_SHMEM": { False: [ "kgsl_pool.c" ] },
             "CONFIG_SYNC_FILE": { True: [ "kgsl_sync.c" ] },
             "CONFIG_DEVFREQ_GOV_QCOM_ADRENO_TZ": { False: [ "governor_msm_adreno_tz.c" ] },
             "CONFIG_DEVFREQ_GOV_QCOM_GPUBW_MON": { False: [ "governor_gpubw_mon.c" ] }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023, 2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 
@@ -416,7 +416,7 @@ static int kgsl_add_driver_data_to_va_minidump(struct kgsl_device *device)
 	if (!adreno_dev->hwsched_enabled) {
 		list_for_each_entry(md, &device->globals, node) {
 			if (include_global_in_minidump(md)) {
-				snprintf(name, sizeof(name), "kgsl_%s", md->name);
+				snprintf(name, sizeof(name), "kgsl_global_%s", md->name);
 				ret = kgsl_add_va_to_minidump(device->dev, name,
 						md->memdesc.hostptr, md->memdesc.size);
 				if (ret)

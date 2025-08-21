@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/debugfs.h>
@@ -424,7 +424,7 @@ static bool kgsl_pool_available(unsigned int page_size)
 	return (kgsl_get_pool_index(order) >= 0);
 }
 
-u32 kgsl_get_page_size(size_t size, unsigned int align)
+u32 kgsl_pool_get_page_size(size_t size, unsigned int align)
 {
 	u32 pool;
 
@@ -528,7 +528,7 @@ done:
 
 eagain:
 	trace_kgsl_pool_try_page_lower(get_order(*page_size));
-	*page_size = kgsl_get_page_size(size, ilog2(size));
+	*page_size = kgsl_pool_get_page_size(size, ilog2(size));
 	*align = ilog2(*page_size);
 	return -EAGAIN;
 }

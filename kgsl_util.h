@@ -16,16 +16,16 @@
 #define KGSL_HWSCHED_DEVICE "kgsl_hwsched_device"
 #define KGSL_GEN8_DEVICE "kgsl_gen8_device"
 
-#define KGSL_SCRATCH_ENTRY "kgsl_scratch"
-#define KGSL_MEMSTORE_ENTRY "kgsl_memstore"
+#define KGSL_SCRATCH_ENTRY "scratch"
+#define KGSL_MEMSTORE_ENTRY "memstore"
 #define KGSL_GMU_LOG_ENTRY "kgsl_gmu_log"
 #define KGSL_GMU_TRACE_ENTRY "kgsl_gmu_trace"
 #define KGSL_HFIMEM_ENTRY "kgsl_hfi_mem"
 #define KGSL_GMU_DUMPMEM_ENTRY "kgsl_gmu_dump_mem"
-#define KGSL_GMU_RB_ENTRY "kgsl_gmu_rb"
-#define KGSL_GMU_KERNEL_PROF_ENTRY "kgsl_gmu_kernel_profiling"
-#define KGSL_GMU_USER_PROF_ENTRY "kgsl_gmu_user_profiling"
-#define KGSL_GMU_CMD_BUFFER_ENTRY "kgsl_gmu_cmd_buffer"
+#define KGSL_GMU_RB_ENTRY "gmu_rb"
+#define KGSL_GMU_KERNEL_PROF_ENTRY "gmu_kernel_profiling"
+#define KGSL_GMU_USER_PROF_ENTRY "gmu_user_profiling"
+#define KGSL_GMU_CMD_BUFFER_ENTRY "gmu_cmd_buffer"
 #define KGSL_HFI_BIG_IB_ENTRY "kgsl_hfi_big_ib"
 #define KGSL_HFI_BIG_IB_REC_ENTRY "kgsl_hfi_big_ib_rec"
 #define KGSL_ADRENO_CTX_ENTRY "kgsl_adreno_ctx"
@@ -38,7 +38,7 @@
 #define KGSL_ADRENO_TZ_DATA_ENTRY "kgsl_adreno_tz_data"
 #define KGSL_NC_OVERRIDES_ENTRY "kgsl_nc_overrides"
 
-#define MAX_VA_MINIDUMP_STR_LEN 32
+#define MAX_VA_MINIDUMP_STR_LEN 48
 
 
 /**

@@ -1,28 +1,14 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2016-2017,2019,2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __KGSL_POOL_H
 #define __KGSL_POOL_H
 
-#ifdef CONFIG_QCOM_KGSL_USE_SHMEM
+#ifndef CONFIG_QCOM_KGSL_POOL
 static inline void kgsl_probe_page_pools(void) { }
 static inline void kgsl_exit_page_pools(void) { }
-
-static inline u32 kgsl_get_page_size(size_t size, unsigned int align)
-{
-	u32 page_size;
-
-	if (!size)
-		return 0;
-
-	for (page_size = rounddown_pow_of_two(size); page_size > PAGE_SIZE; page_size >>= 1)
-		if ((align >= ilog2(page_size)) && (size >= page_size))
-			return page_size;
-
-	return PAGE_SIZE;
-}
 
 static inline int kgsl_pool_page_count_get(void *data, u64 *val)
 {
@@ -96,14 +82,14 @@ extern int kgsl_num_pools;
 void kgsl_pool_free_page(struct page *page);
 
 /**
- * kgsl_get_page_size - Get supported pagesize
+ * kgsl_pool_get_page_size - Get supported pagesize
  * @size: Size of the page
  * @align: Desired alignment of the size
  *
  * Return largest available page size from pools that can be used to meet
  * given size and alignment requirements
  */
-u32 kgsl_get_page_size(size_t size, unsigned int align);
+u32 kgsl_pool_get_page_size(size_t size, unsigned int align);
 
 /**
  * kgsl_pool_alloc_page - Allocate a page of requested size
@@ -148,6 +134,6 @@ void kgsl_probe_page_pools(void);
  */
 void kgsl_exit_page_pools(void);
 
-#endif
+#endif /* CONFIG_QCOM_KGSL_POOL */
 #endif /* __KGSL_POOL_H */
 

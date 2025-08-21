@@ -1126,6 +1126,8 @@ int gmu_core_clk_probe(struct kgsl_device *device)
 	struct gmu_core_device *gmu = &device->gmu_core;
 	int tbl_size, num_freqs, num_perf_ddr_bw, offset, ret, i;
 
+	build_hub_opp_table(device);
+
 	ret = devm_clk_bulk_get_all(GMU_PDEV_DEV(device), &gmu->clks);
 	if (ret < 0)
 		return ret;
@@ -1185,8 +1187,6 @@ read_gmu_freq:
 	}
 
 	gmu->num_freqs = num_freqs;
-
-	build_hub_opp_table(device);
 
 	return 0;
 

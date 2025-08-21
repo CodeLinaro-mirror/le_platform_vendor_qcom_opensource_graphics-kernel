@@ -591,6 +591,14 @@ static void kgsl_mem_entry_detach_process(struct kgsl_mem_entry *entry)
 		atomic_sub(entry->memdesc.page_count,
 					&entry->priv->unpinned_page_count);
 
+	if (TEST_FLAG(KGSL_MEMDESC_MIGRATED, &entry->memdesc.priv)) {
+		atomic_sub(entry->memdesc.page_count,
+					&entry->priv->migrated_page_count);
+
+		if (IS_ENABLED(CONFIG_QCOM_KGSL_HYBRID_ALLOCATION))
+			set_bit(KGSL_PROC_CAN_MIGRATE, &entry->priv->state);
+	}
+
 	kgsl_process_private_put(entry->priv);
 
 	entry->priv = NULL;
@@ -4309,8 +4317,11 @@ struct kgsl_mem_entry *gpumem_alloc_entry(
 			!(cachemode == KGSL_CACHEMODE_WRITETHROUGH)) ||
 			(!(flags & KGSL_MEMFLAGS_IOCOHERENT) &&
 			 !(cachemode == KGSL_CACHEMODE_WRITEBACK) &&
-			!(cachemode == KGSL_CACHEMODE_WRITETHROUGH))))
+			!(cachemode == KGSL_CACHEMODE_WRITETHROUGH)))) {
 		SET_FLAG(KGSL_MEMDESC_CAN_RECLAIM, &entry->memdesc.priv);
+		if (IS_ENABLED(CONFIG_QCOM_KGSL_HYBRID_ALLOCATION))
+			set_bit(KGSL_PROC_CAN_MIGRATE, &private->state);
+	}
 
 	kgsl_process_add_stats(private,
 			kgsl_memdesc_usermem_type(&entry->memdesc),
@@ -4625,9 +4636,16 @@ kgsl_mmap_memstore(struct file *file, struct kgsl_device *device,
 static void kgsl_gpumem_vm_open(struct vm_area_struct *vma)
 {
 	struct kgsl_mem_entry *entry = vma->vm_private_data;
+	int ret;
 
-	if (!kgsl_mem_entry_get(entry))
+	if (!kgsl_mem_entry_get(entry)) {
 		vma->vm_private_data = NULL;
+		return;
+	}
+
+	ret = idr_alloc(&entry->memdesc.vma_idr, vma, 1, 0, GFP_KERNEL);
+	if (ret < 0)
+		CLEAR_FLAG(KGSL_MEMDESC_CAN_RECLAIM, &entry->memdesc.priv);
 
 	atomic_inc(&entry->map_count);
 }
@@ -4648,17 +4666,28 @@ kgsl_gpumem_vm_fault(struct vm_fault *vmf)
 static void
 kgsl_gpumem_vm_close(struct vm_area_struct *vma)
 {
-	struct kgsl_mem_entry *entry  = vma->vm_private_data;
+	struct kgsl_mem_entry *entry = vma->vm_private_data;
+	struct kgsl_memdesc *memdesc;
+	struct vm_area_struct *mapped_vma;
+	int vidx = 0;
 
 	if (!entry)
 		return;
 
+	memdesc = &entry->memdesc;
 	/*
 	 * Remove the memdesc from the mapped stat once all the mappings have
 	 * gone away
 	 */
 	if (!atomic_dec_return(&entry->map_count))
-		atomic64_sub(entry->memdesc.size, &entry->priv->gpumem_mapped);
+		atomic64_sub(memdesc->size, &entry->priv->gpumem_mapped);
+
+	idr_for_each_entry(&memdesc->vma_idr, mapped_vma, vidx) {
+		if (mapped_vma == vma) {
+			idr_remove(&memdesc->vma_idr, vidx);
+			break;
+		}
+	}
 
 	kgsl_mem_entry_put(entry);
 }
@@ -4729,10 +4758,10 @@ static unsigned long _gpu_set_svm_region(struct kgsl_process_private *private,
 	 * Protect access to the gpuaddr here to prevent multiple vmas from
 	 * trying to map a SVM region at the same time
 	 */
-	spin_lock(&entry->memdesc.lock);
+	down_write(&entry->memdesc.lock);
 
 	if (entry->memdesc.gpuaddr) {
-		spin_unlock(&entry->memdesc.lock);
+		up_write(&entry->memdesc.lock);
 		return (unsigned long) -EBUSY;
 	}
 
@@ -4740,12 +4769,12 @@ static unsigned long _gpu_set_svm_region(struct kgsl_process_private *private,
 		(uint64_t) size);
 
 	if (ret != 0) {
-		spin_unlock(&entry->memdesc.lock);
+		up_write(&entry->memdesc.lock);
 		return (unsigned long) ret;
 	}
 
 	entry->memdesc.gpuaddr = (uint64_t) addr;
-	spin_unlock(&entry->memdesc.lock);
+	up_write(&entry->memdesc.lock);
 
 	entry->memdesc.pagetable = private->pagetable;
 
@@ -4985,6 +5014,10 @@ static int kgsl_mmap(struct file *file, struct vm_area_struct *vma)
 		fput(vma->vm_file);
 		vma->vm_file = get_file(entry->memdesc.shmem_filp);
 	}
+
+	ret = idr_alloc(&entry->memdesc.vma_idr, vma, 1, 0, GFP_KERNEL);
+	if (ret < 0)
+		CLEAR_FLAG(KGSL_MEMDESC_CAN_RECLAIM, &entry->memdesc.priv);
 
 	/*
 	 * kgsl gets the entry id or the gpu address through vm_pgoff.

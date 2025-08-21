@@ -1583,6 +1583,9 @@ static inline int hfi_get_minidump_string(u32 mem_kind, char *hfi_minidump_str,
 	case HFI_MEMKIND_CMD_BUFFER:
 		snprintf(hfi_minidump_str, size, KGSL_GMU_CMD_BUFFER_ENTRY);
 		break;
+	case HFI_MEMKIND_MEMSTORE:
+		snprintf(hfi_minidump_str, size, KGSL_MEMSTORE_ENTRY);
+		break;
 	default:
 		return -EINVAL;
 	}

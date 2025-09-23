@@ -66,17 +66,6 @@ static inline int adreno_gmu_chipid_based(struct adreno_device *adreno_dev)
 		adreno_is_gen7_4_0(adreno_dev) || adreno_is_gen7_3_0(adreno_dev);
 }
 
-/**
- * adreno_gmu_ab_support() - Return true for targets where AB voting
- * is supported through GMU
- * @adreno_dev: A pointer to the adreno_device
- */
-static inline int adreno_gmu_ab_support(struct adreno_device *adreno_dev)
-{
-	return adreno_is_gen7_9_0(adreno_dev) || adreno_is_gen7_9_1(adreno_dev) ||
-		adreno_is_gen7_11_0(adreno_dev);
-}
-
 static ssize_t log_stream_enable_store(struct kobject *kobj,
 	struct kobj_attribute *attr, const char *buf, size_t count)
 {
@@ -1676,12 +1665,14 @@ static int gen7_gmu_first_boot(struct adreno_device *adreno_dev)
 	if (ret)
 		goto err;
 
-	if (adreno_gmu_ab_support(adreno_dev) &&
+	if (adreno_dev->gmu_ab &&
 		gen7_hfi_send_get_value(adreno_dev, HFI_VALUE_GMU_AB_VOTE, 0) == 1 &&
 		!WARN_ONCE(!adreno_dev->gpucore->num_ddr_channels,
 			"Number of DDR channel is not specified in gpu core")) {
-		adreno_dev->gmu_ab = true;
 		set_bit(ADRENO_DEVICE_GMU_AB, &adreno_dev->priv);
+	} else {
+		/* If gmu_ab feature flag is enabled but GMU doesn't support it, set it to false */
+		adreno_dev->gmu_ab = false;
 	}
 
 	icc_set_bw(pwr->icc_path, 0, 0);
@@ -2085,7 +2076,9 @@ int gen7_gmu_probe(struct kgsl_device *device,
 		goto error;
 
 	device->gmu_core.vma = gen7_gmu_vma;
-	for (i = 0; i < ARRAY_SIZE(gen7_gmu_vma); i++) {
+	device->gmu_core.num_vmas = ARRAY_SIZE(gen7_gmu_vma);
+
+	for (i = 0; i < device->gmu_core.num_vmas; i++) {
 		struct gmu_vma_entry *vma = &gen7_gmu_vma[i];
 
 		vma->vma_root = RB_ROOT;
@@ -2096,6 +2089,9 @@ int gen7_gmu_probe(struct kgsl_device *device,
 	ret = gen7_gmu_reg_probe(adreno_dev);
 	if (ret)
 		goto error;
+
+	if (ADRENO_FEATURE(adreno_dev, ADRENO_GMU_AB))
+		adreno_dev->gmu_ab = true;
 
 	/* Populates RPMh configurations */
 	ret = gen7_build_rpmh_tables(adreno_dev);

@@ -407,4 +407,28 @@ int gen8_hwsched_set_dcvs_profile(struct adreno_device *adreno_dev,
  */
 void gen8_hwsched_set_tuning_attrs(struct adreno_device *adreno_dev, u32 type,
 		u32 subtype, u32 val);
+
+/**
+ * gen8_hwsched_hfi_get_dcvs_tuning_attrs - Get values for GMU based DCVS tuning attrs
+ * @adreno_dev: pointer to the adreno device
+ * @subtype: subtype to get from GMU for HFI_VALUE_DCVS_TUNING_PARAM property
+ * @data: Pointer to the data array to store the values
+ *
+ * This functions sends GET_VALUE HFI packet to query dcvs tuning attrs values for
+ * HFI_VALUE_DCVS_TUNING_PARAM property.
+ */
+void gen8_hwsched_hfi_get_dcvs_tuning_attrs(struct adreno_device *adreno_dev, u32 subtype,
+	u32 *data);
+
+/**
+ * gen8_hwsched_process_f2h_platform_msg - Handle F2H platform message
+ * @adreno_dev: Pointer to the adreno device
+ * @rcvd: Pointer to the message payload
+ *
+ * This function processes the payload in the received F2H_MSG_PLATFORM_LA message and executes
+ * the corresponding subtype-specific action.
+ *
+ * Return: Zero on success or negative error on failure
+ */
+int gen8_hwsched_process_f2h_platform_msg(struct adreno_device *adreno_dev, u32 *rcvd);
 #endif

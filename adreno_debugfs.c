@@ -758,6 +758,7 @@ static void _toggle_host_based_dcvs(struct adreno_device *adreno_dev, void *priv
 		device->host_based_dcvs = val;
 		kgsl_pwrscale_init(device, device->pdev);
 		kgsl_pwrscale_tz_enable(device);
+		adreno_dev->dcvs_profile_enabled = false;
 	} else {
 		/* Disable host based DCVS */
 		kgsl_pwrscale_tz_disable(device, false);
@@ -766,6 +767,8 @@ static void _toggle_host_based_dcvs(struct adreno_device *adreno_dev, void *priv
 		kgsl_pwrscale_init(device, device->pdev);
 		device->pwrscale.devfreq_enabled = false;
 		device->pwrctrl.bus_control = false;
+		if (ADRENO_FEATURE(adreno_dev, ADRENO_DCVS_PROFILE))
+			adreno_dev->dcvs_profile_enabled = true;
 	}
 }
 

@@ -1110,6 +1110,7 @@ err:
 
 	kvfree(timelineobj->timelines);
 	timelineobj->timelines = NULL;
+	timelineobj->count = 0;
 	return ret;
 }
 

@@ -80,6 +80,8 @@ struct gen8_device {
 	bool nc_overrides_enabled;
 	/** @slice_mask: The bitmask of active GPU slices */
 	u32 slice_mask;
+	/** @tsense_work: Work struct for TSENSE suspend in parallel with GPU suspend */
+	struct work_struct tsense_work;
 };
 
 /**
@@ -565,6 +567,16 @@ void gen8_reset_preempt_records(struct adreno_device *adreno_dev);
  * Return: 0 on success or negative on failure
  */
 int gen8_scm_gpu_init_cx_regs(struct adreno_device *adreno_dev);
+
+/**
+ * gen8_scm_gpu_tsense_default - Program gpu tsense measurement interval
+ * @adreno_dev: Handle to the adreno device
+ * @default_req: Bool on if should update tsense with default or slow interval
+ *
+ * Program gpu tsense reg for measurement granularity. Scm call for the same
+ * is added from kernel version 6.0 onwards.
+ */
+void gen8_scm_gpu_tsense_default(struct adreno_device *adreno_dev, bool default_req);
 
 /**
  * gen8_legacy_snapshot_registers - Dump registers for GPU/GMU

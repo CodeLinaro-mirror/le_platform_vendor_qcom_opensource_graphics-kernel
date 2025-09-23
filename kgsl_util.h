@@ -61,6 +61,10 @@
  * gpu temperature sensors
  */
 #define GPU_TSENSE_EN_REQ BIT(3)
+/**
+ * Request TZ to program tsense measurement to a large period
+ */
+#define GPU_TSENSE_MEASURE_DEFAULT_DISABLE BIT(4)
 
 struct regulator;
 struct clk_bulk_data;

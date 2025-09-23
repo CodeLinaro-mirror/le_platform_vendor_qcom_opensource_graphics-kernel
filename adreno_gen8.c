@@ -351,6 +351,7 @@ static const u32 gen8_2_0_ifpc_pwrup_reglist[] = {
 	GEN8_RBBM_SLICE_INTERFACE_HANG_INT_CNTL,
 	GEN8_SP_HLSQ_DBG_ECO_CNTL_1,
 	GEN8_SP_HLSQ_DBG_ECO_CNTL_2,
+	GEN8_SP_HLSQ_DBG_ECO_CNTL_3,
 	GEN8_SP_HLSQ_LPAC_GMEM_RANGE_MIN_LO,
 	GEN8_SP_HLSQ_LPAC_GMEM_RANGE_MIN_HI,
 	GEN8_CP_INTERRUPT_STATUS_MASK_GLOBAL,
@@ -480,6 +481,7 @@ static const struct gen8_pwrup_extlist gen8_0_0_pwrup_extlist[] = {
 	{ GEN8_GRAS_NC_MODE_CNTL, BIT(PIPE_BV) | BIT(PIPE_BR)},
 	{ GEN8_GRAS_DBG_ECO_CNTL, BIT(PIPE_BV) | BIT(PIPE_BR)},
 	{ GEN8_RB_CCU_CNTL, BIT(PIPE_BR)},
+	{ GEN8_RB_CCU_DBG_ECO_CNTL, BIT(PIPE_BR)},
 	{ GEN8_RB_CCU_NC_MODE_CNTL, BIT(PIPE_BR)},
 	{ GEN8_RB_CMP_NC_MODE_CNTL, BIT(PIPE_BR)},
 	{ GEN8_RB_RESOLVE_PREFETCH_CNTL, BIT(PIPE_BR)},
@@ -543,6 +545,7 @@ static const struct gen8_pwrup_extlist gen8_3_0_pwrup_extlist[] = {
 	{ GEN8_GRAS_NC_MODE_CNTL, BIT(PIPE_BV) | BIT(PIPE_BR)},
 	{ GEN8_GRAS_DBG_ECO_CNTL, BIT(PIPE_BV) | BIT(PIPE_BR)},
 	{ GEN8_RB_CCU_CNTL, BIT(PIPE_BR)},
+	{ GEN8_RB_CCU_DBG_ECO_CNTL, BIT(PIPE_BR)},
 	{ GEN8_RB_CCU_NC_MODE_CNTL, BIT(PIPE_BR)},
 	{ GEN8_RB_CMP_NC_MODE_CNTL, BIT(PIPE_BR)},
 	{ GEN8_RB_RESOLVE_PREFETCH_CNTL, BIT(PIPE_BR)},
@@ -580,7 +583,7 @@ struct gen8_nonctxt_overrides gen8_nc_overrides[] = {
 	{ GEN8_GRAS_DBG_ECO_CNTL, BIT(PIPE_BV) | BIT(PIPE_BR), 0, 0, 0, },
 	{ GEN8_RB_RBP_CNTL, BIT(PIPE_BV) | BIT(PIPE_BR), 0, 0, 0, },
 	{ GEN8_RB_DBG_ECO_CNTL, BIT(PIPE_BR), 0, 0, 3, },
-	{ GEN8_RB_CCU_DBG_ECO_CNTL, BIT(PIPE_BR), 0, 0, 3, },
+	{ GEN8_RB_CCU_DBG_ECO_CNTL, BIT(PIPE_BR), 0, 0, 0, },
 	{ GEN8_RB_CCU_CNTL, BIT(PIPE_BR), 0, 0, 0, },
 	{ GEN8_RB_CCU_NC_MODE_CNTL, BIT(PIPE_BR), 0, 0, 0, },
 	{ GEN8_RB_SLICE_UFC_PREFETCH_CNTL, BIT(PIPE_BR), 0, 0, 3, },
@@ -1830,6 +1833,20 @@ int gen8_start(struct adreno_device *adreno_dev)
 		sched_set_normal(current, nice);
 
 	return 0;
+}
+
+void gen8_scm_gpu_tsense_default(struct adreno_device *adreno_dev, bool default_req)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	u32 gpu_req = GPU_TSENSE_EN_REQ;
+
+	if (!ADRENO_FEATURE(adreno_dev, ADRENO_TSENSE_DYNAMIC_PERIOD))
+		return;
+
+	if (!default_req)
+		gpu_req |= GPU_TSENSE_MEASURE_DEFAULT_DISABLE;
+
+	kgsl_scm_gpu_init_regs(&device->pdev->dev, gpu_req);
 }
 
 int gen8_scm_gpu_init_cx_regs(struct adreno_device *adreno_dev)

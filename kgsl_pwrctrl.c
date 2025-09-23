@@ -622,10 +622,10 @@ static ssize_t gpubusy_show(struct device *dev,
 
 	/* Reset the stats if GPU is OFF */
 	if ((atomic_read(&device->active_cnt) == 0)) {
-		mutex_lock(&pwr->mutex);
+		spin_lock(&pwr->stats_lock);
 		stats->busy_old = 0;
 		stats->total_old = 0;
-		mutex_unlock(&pwr->mutex);
+		spin_unlock(&pwr->stats_lock);
 	}
 	return ret;
 }
@@ -892,10 +892,10 @@ static ssize_t _gpu_busy_show(struct kgsl_device *device,
 
 	/* Reset the stats if GPU is OFF */
 	if ((atomic_read(&device->active_cnt) == 0)) {
-		mutex_lock(&pwr->mutex);
+		spin_lock(&pwr->stats_lock);
 		stats->busy_old = 0;
 		stats->total_old = 0;
-		mutex_unlock(&pwr->mutex);
+		spin_unlock(&pwr->stats_lock);
 	}
 	return ret;
 }
@@ -1234,13 +1234,13 @@ void kgsl_pwrctrl_busy_time(struct kgsl_device *device, u64 time, u64 busy, u64 
 	if (stats->total < UPDATE_BUSY_VAL)
 		return;
 
-	mutex_lock(&pwr->mutex);
+	spin_lock(&pwr->stats_lock);
 	/* Update the output regularly and reset the counters. */
 	stats->total_old = stats->total;
 	stats->busy_old = stats->busy;
 	stats->total = 0;
 	stats->busy = 0;
-	mutex_unlock(&pwr->mutex);
+	spin_unlock(&pwr->stats_lock);
 
 	trace_kgsl_gpubusy(device, stats->busy_old, stats->total_old, ticks);
 }
@@ -2002,7 +2002,7 @@ int kgsl_pwrctrl_init(struct kgsl_device *device)
 		return -EINVAL;
 	}
 
-	mutex_init(&pwr->mutex);
+	spin_lock_init(&pwr->stats_lock);
 
 	init_waitqueue_head(&device->active_cnt_wq);
 

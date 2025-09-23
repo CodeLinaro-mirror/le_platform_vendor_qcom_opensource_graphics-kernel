@@ -207,10 +207,14 @@ struct kgsl_pwrctrl {
 	struct kthread_work cooling_work;
 	/** @update_dcvs_table: Set when the dcvs table needs an update for GMU */
 	bool update_dcvs_table;
-	/** @mutex: Mutex to protect pwrctrl entities */
-	struct mutex mutex;
+	/** @stats_lock: Spinlock for updating pwr stats */
+	spinlock_t stats_lock;
 	/** @aggr_max_pwrlevel: Aggregated max allowed gpu pwrlevel **/
 	u32 aggr_max_pwrlevel;
+	/** @accum_busy_stats: Accumulated gpu busy time */
+	u64 accum_busy_stats;
+	/** @accum_total_time: Accumulated gpu total sampling time */
+	u64 accum_total_time;
 };
 
 int kgsl_pwrctrl_init(struct kgsl_device *device);

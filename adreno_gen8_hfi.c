@@ -326,6 +326,7 @@ static int gen8_hfi_send_cmd_wait_inline(struct adreno_device *adreno_dev,
 	if (rc)
 		return rc;
 
+poll:
 	rc = poll_gmu_reg(adreno_dev, GEN8_GMUCX_GMU2HOST_INTR_INFO,
 		HFI_IRQ_MSGQ_MASK, HFI_IRQ_MSGQ_MASK, HFI_RSP_TIMEOUT);
 
@@ -341,7 +342,14 @@ static int gen8_hfi_send_cmd_wait_inline(struct adreno_device *adreno_dev,
 	gmu_core_regwrite(device, GEN8_GMUCX_GMU2HOST_INTR_CLR,
 		HFI_IRQ_MSGQ_MASK);
 
+	/* Add a barrier to ensure interrupt is cleared before reading queue and polling again */
+	mb();
+
 	rc = gen8_hfi_process_queue(gmu, HFI_MSG_ID, ret_cmd);
+
+	/* If ACK not received, try polling again */
+	if (rc == -EAGAIN)
+		goto poll;
 
 	return rc;
 }
@@ -519,7 +527,9 @@ int gen8_hfi_process_queue(struct gen8_gmu_device *gmu,
 		u32 queue_idx, struct pending_cmd *ret_cmd)
 {
 	struct kgsl_device *device = KGSL_DEVICE(gen8_gmu_to_adreno(gmu));
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	u32 rcvd[MAX_RCVD_SIZE];
+	bool retry_for_ack = true;
 
 	while (gen8_hfi_queue_read(gmu, queue_idx, rcvd, sizeof(rcvd)) > 0) {
 		/* ACK Handler */
@@ -528,6 +538,8 @@ int gen8_hfi_process_queue(struct gen8_gmu_device *gmu,
 
 			if (ret)
 				return ret;
+
+			retry_for_ack = false;
 			continue;
 		}
 
@@ -535,6 +547,7 @@ int gen8_hfi_process_queue(struct gen8_gmu_device *gmu,
 		switch (MSG_HDR_GET_ID(rcvd[0])) {
 		case F2H_MSG_ERR: /* No Reply */
 			adreno_gen8_receive_err_req(gmu, rcvd);
+			retry_for_ack = false;
 			break;
 		case F2H_MSG_DEBUG: /* No Reply */
 			adreno_gen8_receive_debug_req(gmu, rcvd);
@@ -543,6 +556,9 @@ int gen8_hfi_process_queue(struct gen8_gmu_device *gmu,
 			gmu_core_process_trace_data(device,
 					GMU_PDEV_DEV(device), &device->gmu_core.trace);
 			break;
+		case F2H_MSG_PLATFORM_LA:
+			gen8_hwsched_process_f2h_platform_msg(adreno_dev, rcvd);
+			break;
 		default: /* No Reply */
 			dev_err(GMU_PDEV_DEV(device),
 				"HFI request %d not supported\n",
@@ -550,6 +566,14 @@ int gen8_hfi_process_queue(struct gen8_gmu_device *gmu,
 			break;
 		}
 	}
+
+	/**
+	 * gen8_hfi_process_queue with HFI_MSG_ID uses a synchronous HFI which expects
+	 * an ACK. Poll again if we processed the queue but didn't receive the expected ACK.
+	 * Return -EAGAIN to trigger another polling attempt.
+	 */
+	if ((retry_for_ack) && (queue_idx == HFI_MSG_ID))
+		return -EAGAIN;
 
 	return 0;
 }

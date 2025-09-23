@@ -555,6 +555,8 @@ struct gmu_core_device {
 	u32 global_entries;
 	/** @vma: VMA entry for GMU */
 	struct gmu_vma_entry *vma;
+	/** @num_vmas: Number of entries in the @vma array */
+	u32 num_vmas;
 	/** @common_caps: GMU firmware common capabilities */
 	struct firmware_capabilities common_caps;
 	/** @platform_caps: GMU firmware platform capabilities */

@@ -185,8 +185,10 @@ struct adreno_hwsched {
 	struct kobject tunables_kobj;
 	/** @dcvs_kobj: Kobj for dcvs params **/
 	struct kobject dcvs_kobj;
-	/** @dcvs_tunables: Tuning parameters for GMU based DCVS **/
-	struct adreno_dcvs_tunable dcvs_tunables[GPU_TUNING_KEY_MAX];
+	/** @sysfs_dcvs_tunables : Tuning parameters for GMU based DCVS **/
+	struct adreno_dcvs_tunable sysfs_dcvs_tunables[GPU_TUNING_KEY_MAX];
+	/** @default_dcvs_tunables: Default value of GMU based DCVS tunables **/
+	u32 default_dcvs_tunables[GPU_TUNING_KEY_MAX];
 };
 
 /*

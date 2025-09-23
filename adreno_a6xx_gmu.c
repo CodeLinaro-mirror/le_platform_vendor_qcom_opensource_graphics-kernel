@@ -2675,10 +2675,13 @@ int a6xx_gmu_probe(struct kgsl_device *device,
 	if (ret)
 		goto error;
 
-	if (adreno_is_a650_family(adreno_dev))
+	if (adreno_is_a650_family(adreno_dev)) {
 		device->gmu_core.vma = a6xx_gmu_vma;
-	else
+		device->gmu_core.num_vmas = ARRAY_SIZE(a6xx_gmu_vma);
+	} else {
 		device->gmu_core.vma = a6xx_gmu_vma_legacy;
+		device->gmu_core.num_vmas = ARRAY_SIZE(a6xx_gmu_vma_legacy);
+	}
 
 	/* Map and reserve GMU CSRs registers */
 	ret = a6xx_gmu_reg_probe(adreno_dev);

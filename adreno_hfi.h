@@ -1396,6 +1396,10 @@ struct payload_section {
 #define GPU_DCVS_TUNING_INVALID_VALUE 0xffffffff
 #define GPU_DCVS_TUNING_INVALID_ACK_DATA 0xfffffffe
 
+/**
+ * Keep this enum in sync with dcvs_tunables_strings[]. Each index in this enum must correspond
+ * to the matching string entry.
+ */
 enum gpu_tuning_attr {
 	GPU_TUNING_KEY_BUSY_PENALTY_UP = 0,
 	GPU_TUNING_KEY_BUSY_PENALTY_DOWN = 1,
@@ -1412,8 +1416,14 @@ enum gpu_tuning_attr {
 	GPU_TUNING_KEY_MOD_PERCENT = 12,
 	GPU_TUNING_KEY_BUS_MIN_FREQUENCY = 13,
 	GPU_TUNING_KEY_BUS_MAX_FREQUENCY = 14,
+	GPU_TUNING_KEY_MIN_AB_MBPS = 15,
+	GPU_TUNING_KEY_MAX_AB_MBPS = 16,
 	GPU_TUNING_KEY_MAX,
 };
+
+/* Macro for subtype of the HFI_VALUE_DCVS_TUNING_PARAM property */
+#define HFI_DCVS_ATTRS_DEFAULT 0
+#define HFI_DCVS_ATTRS_AGGREGATED 1
 
 /**
  * hfi_update_read_idx - Update the read index of an hfi queue

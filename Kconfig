@@ -133,3 +133,12 @@ config QCOM_KGSL_RT_MUTEX
 	  enabled, KGSL will use RT-mutex instead of mutex to prevent
 	  priority inversion. RT-mutexes extend the semantics of simple
 	  mutexes by the priority inheritance protocol.
+
+config QCOM_KGSL_DEVCOREDUMP
+	bool "Use devcoredump for KGSL snapshots"
+	depends on DEV_COREDUMP
+	help
+	  Say 'Y' to use devcoredump framework for GPU snapshot dumps
+	  instead of the custom sysfs interface. Snapshot data will be
+	  accessible through /sys/class/devcoredump/ interface. If enabled,
+	  the snapshot/dump sysfs node will not be set up.

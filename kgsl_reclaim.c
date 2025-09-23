@@ -240,7 +240,7 @@ static void _copy_page(struct kgsl_memdesc *memdesc, struct page *dest, struct p
 	kgsl_page_sync(memdesc->dev, dest, PAGE_SIZE, DMA_BIDIRECTIONAL);
 }
 
-static u32 kgsl_shmem_mem_entry_migrate(struct task_struct *task, struct kgsl_mem_entry *entry)
+static u32 kgsl_shmem_mem_entry_migrate(struct mm_struct *mm, struct kgsl_mem_entry *entry)
 {
 	struct kgsl_memdesc *memdesc = &entry->memdesc;
 	u32 page_count = 0;
@@ -291,7 +291,7 @@ static u32 kgsl_shmem_mem_entry_migrate(struct task_struct *task, struct kgsl_me
 	}
 
 	/* Take the mmap lock to prevent concurrent entry mmaps */
-	mmap_read_lock(task->mm);
+	mmap_write_lock(mm);
 
 	/* Take the memdesc lock to prevent concurrent vm_faults */
 	down_write(&memdesc->lock);
@@ -300,9 +300,6 @@ static u32 kgsl_shmem_mem_entry_migrate(struct task_struct *task, struct kgsl_me
 	idr_for_each_entry(&memdesc->vma_idr, vma, vidx) {
 		zap_page_range_single(vma, vma->vm_start,
 			vma->vm_end - vma->vm_start, NULL);
-
-		fput(vma->vm_file);
-		vma->vm_file = get_file(shmem_filp);
 	}
 
 	for (i = 0; i < memdesc->page_count; ) {
@@ -331,7 +328,7 @@ static u32 kgsl_shmem_mem_entry_migrate(struct task_struct *task, struct kgsl_me
 	SET_FLAG(KGSL_MEMDESC_MIGRATED, &memdesc->priv);
 
 	up_write(&memdesc->lock);
-	mmap_read_unlock(task->mm);
+	mmap_write_unlock(mm);
 
 	/* Free the old pages back into the pool */
 	kgsl_pool_free_pages(old_pages, memdesc->page_count);
@@ -369,6 +366,7 @@ static void kgsl_shmem_migrate(struct kgsl_process_private *process)
 	u32 migrate_count = 0;
 	struct kgsl_mem_entry *entry;
 	struct task_struct *task;
+	struct mm_struct *mm;
 	u32 next = 0;
 
 	/* Skip migration if we're already over the limit for the process */
@@ -381,6 +379,10 @@ static void kgsl_shmem_migrate(struct kgsl_process_private *process)
 	task = get_pid_task(process->pid, PIDTYPE_PID);
 	if (!task)
 		goto done;
+
+	mm = get_task_mm(task);
+	if (!mm)
+		goto put_task;
 
 	for ( ; ; ) {
 		struct kgsl_mem_entry *valid_entry = NULL;
@@ -415,14 +417,16 @@ static void kgsl_shmem_migrate(struct kgsl_process_private *process)
 		if (!valid_entry)
 			continue;
 
-		migrate_count += kgsl_shmem_mem_entry_migrate(task, valid_entry);
+		migrate_count += kgsl_shmem_mem_entry_migrate(mm, valid_entry);
 		kgsl_mem_entry_put(valid_entry);
 	}
 
 	clear_bit(KGSL_PROC_CAN_MIGRATE, &process->state);
 abort:
-	put_task_struct(task);
 	trace_kgsl_migrate_process(process, migrate_count);
+	mmput(mm);
+put_task:
+	put_task_struct(task);
 done:
 	mutex_unlock(&process->reclaim_lock);
 }

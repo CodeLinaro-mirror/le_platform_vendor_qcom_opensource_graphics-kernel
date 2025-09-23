@@ -684,6 +684,12 @@ static void kgsl_pwrscale_passive_init(struct kgsl_device *device, struct platfo
 		return;
 	}
 
+	/* Passive governor does not need qos notifiers */
+	dev_pm_qos_remove_notifier(&device->pdev->dev, &pwrscale->gpu_ro_df->nb_max,
+			DEV_PM_QOS_MAX_FREQUENCY);
+	dev_pm_qos_remove_notifier(&device->pdev->dev, &pwrscale->gpu_ro_df->nb_min,
+			DEV_PM_QOS_MIN_FREQUENCY);
+
 	dev = &pwrscale->gpu_ro_df->dev;
 	sysfs_remove_groups(&dev->kobj, dev->class->dev_groups);
 }

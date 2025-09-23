@@ -1,4 +1,4 @@
-load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
+load("//build/kernel/kleaf:kernel.bzl", "ddk_module", "ddk_headers")
 load("//build/bazel_common_rules/dist:dist.bzl", "copy_to_dist_dir")
 load(":build/target_variants.bzl", "get_all_la_variants")
 
@@ -204,5 +204,11 @@ def define_target_variant_module(target, variant):
     )
 
 def define_target_modules():
+        ddk_headers(
+            name = "kgsl_uapi_headers",
+            hdrs = native.glob(["include/uapi/linux/*.h"]),
+            visibility = ["//visibility:public"]
+        )
+
         for target, variant in get_all_la_variants():
                 define_target_variant_module(target, variant)

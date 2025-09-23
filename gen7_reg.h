@@ -55,6 +55,7 @@
 #define GEN7_CP_CHICKEN_DBG              0x841
 #define GEN7_CP_DBG_ECO_CNTL             0x843
 #define GEN7_CP_APRIV_CNTL               0x844
+#define GEN7_CP_SEMAPHORE_REG_0          0x846
 #define GEN7_CP_PROTECT_CNTL             0x84f
 #define GEN7_CP_PROTECT_REG              0x850
 #define GEN7_CP_CONTEXT_SWITCH_CNTL      0x8a0

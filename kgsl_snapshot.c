@@ -4,6 +4,7 @@
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
+#include <linux/devcoredump.h>
 #include <linux/of.h>
 #include <linux/panic_notifier.h>
 #include <linux/slab.h>
@@ -801,6 +802,37 @@ static int snapshot_release(struct kgsl_device *device,
 	return ret;
 }
 
+static ssize_t kgsl_snapshot_do_read(struct kgsl_snapshot *snapshot,
+	char *buf, loff_t off, size_t count)
+{
+	struct kgsl_snapshot_section_header head;
+	struct snapshot_obj_itr itr;
+	int ret;
+
+	obj_itr_init(&itr, buf, off, count);
+
+	ret = obj_itr_out(&itr, snapshot->start, snapshot->size);
+	if (ret == 0)
+		goto out;
+
+	/* Dump the memory pool if it exists */
+	if (snapshot->mempool) {
+		ret = obj_itr_out(&itr, snapshot->mempool,
+				snapshot->mempool_size);
+		if (ret == 0)
+			goto out;
+	}
+
+	head.magic = SNAPSHOT_SECTION_MAGIC;
+	head.id = KGSL_SNAPSHOT_SECTION_END;
+	head.size = sizeof(head);
+
+	obj_itr_out(&itr, &head, sizeof(head));
+
+out:
+	return itr.write;
+}
+
 /* Dump the sysfs binary data to the user */
 static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
 	struct bin_attribute *attr, char *buf, loff_t off,
@@ -808,8 +840,7 @@ static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
 {
 	struct kgsl_device *device = kobj_to_device(kobj);
 	struct kgsl_snapshot *snapshot;
-	struct kgsl_snapshot_section_header head;
-	struct snapshot_obj_itr itr;
+	ssize_t written;
 	int ret = 0;
 
 	kgsl_mutex_lock(&device->mutex);
@@ -848,36 +879,15 @@ static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
 		return ret;
 	}
 
-	obj_itr_init(&itr, buf, off, count);
-
-	ret = obj_itr_out(&itr, snapshot->start, snapshot->size);
-	if (ret == 0)
-		goto done;
-
-	/* Dump the memory pool if it exists */
-	if (snapshot->mempool) {
-		ret = obj_itr_out(&itr, snapshot->mempool,
-				snapshot->mempool_size);
-		if (ret == 0)
-			goto done;
-	}
-
-	{
-		head.magic = SNAPSHOT_SECTION_MAGIC;
-		head.id = KGSL_SNAPSHOT_SECTION_END;
-		head.size = sizeof(head);
-
-		obj_itr_out(&itr, &head, sizeof(head));
-	}
+	written = kgsl_snapshot_do_read(snapshot, buf, off, count);
 
 	/*
 	 * Make sure everything has been written out before destroying things.
 	 * The best way to confirm this is to go all the way through without
 	 * writing any bytes - so only release if we get this far and
-	 * itr->write is 0 and there are no concurrent reads pending
+	 * written is 0 and there are no concurrent reads pending
 	 */
-
-	if (itr.write == 0) {
+	if (written == 0) {
 		bool snapshot_free = false;
 
 		kgsl_mutex_lock(&device->mutex);
@@ -893,9 +903,8 @@ static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
 		return 0;
 	}
 
-done:
 	ret = snapshot_release(device, snapshot);
-	return (ret < 0) ? ret : itr.write;
+	return (ret < 0) ? ret : written;
 }
 
 /* Show the total number of hangs since device boot */
@@ -959,6 +968,9 @@ static ssize_t prioritize_unrecoverable_store(
 		struct kgsl_device *device, const char *buf, size_t count)
 {
 	int ret;
+
+	if (IS_ENABLED(CONFIG_QCOM_KGSL_DEVCOREDUMP))
+		return -EOPNOTSUPP;
 
 	ret = kstrtobool(buf, &device->prioritize_unrecoverable);
 	return ret ? ret : count;
@@ -1094,6 +1106,46 @@ static int kgsl_panic_notifier_callback(struct notifier_block *nb,
 	return NOTIFY_OK;
 }
 
+static ssize_t kgsl_devcoredump_read(char *buf, loff_t off,
+	size_t count, void *data, size_t datalen)
+{
+	struct kgsl_device *device = data;
+	struct kgsl_snapshot *snapshot;
+	ssize_t written;
+
+	snapshot = device->snapshot;
+	if (!snapshot)
+		return 0;
+
+	written = kgsl_snapshot_do_read(snapshot, buf, off, count);
+	return written;
+}
+
+/*
+ * Note: kgsl_devcoredump_read() and kgsl_devcoredump_free() are not
+ * called concurrently. Devcoredump framework maintains a reference count
+ * to ensure that free is called only after all readers have finished.
+ */
+static void kgsl_devcoredump_free(void *data)
+{
+	struct kgsl_device *device = data;
+	struct kgsl_snapshot *snapshot;
+
+	snapshot = device->snapshot;
+	device->snapshot = NULL;
+
+	if (snapshot)
+		kgsl_free_snapshot(snapshot);
+}
+
+static void kgsl_devcoredump(struct kgsl_device *device)
+{
+	/* Dump the snapshot through coredump when config is enabled */
+	if (IS_ENABLED(CONFIG_QCOM_KGSL_DEVCOREDUMP))
+		dev_coredumpm(device->dev, THIS_MODULE, device, 0, GFP_KERNEL,
+			kgsl_devcoredump_read, kgsl_devcoredump_free);
+}
+
 void kgsl_device_snapshot_probe(struct kgsl_device *device, u32 size)
 {
 	device->snapshot_memory.size = size;
@@ -1139,7 +1191,14 @@ void kgsl_device_snapshot_probe(struct kgsl_device *device, u32 size)
 		&device->dev->kobj, "snapshot"))
 		return;
 
-	WARN_ON(sysfs_create_bin_file(&device->snapshot_kobj, &snapshot_attr));
+	/*
+	 * When using coredump, the snapshot sysfs nodes will not be initialized
+	 * as the snapshot data is handled through the devcoredump framework
+	 * instead of the traditional sysfs interface.
+	 */
+	if (!IS_ENABLED(CONFIG_QCOM_KGSL_DEVCOREDUMP))
+		WARN_ON(sysfs_create_bin_file(&device->snapshot_kobj, &snapshot_attr));
+
 	WARN_ON(sysfs_create_files(&device->snapshot_kobj, snapshot_attrs));
 	atomic_notifier_chain_register(&panic_notifier_list,
 			&device->panic_nb);
@@ -1163,7 +1222,9 @@ void kgsl_device_snapshot_close(struct kgsl_device *device)
 	atomic_notifier_chain_unregister(&panic_notifier_list,
 					 &device->panic_nb);
 
-	sysfs_remove_bin_file(&device->snapshot_kobj, &snapshot_attr);
+	if (!IS_ENABLED(CONFIG_QCOM_KGSL_DEVCOREDUMP))
+		sysfs_remove_bin_file(&device->snapshot_kobj, &snapshot_attr);
+
 	sysfs_remove_files(&device->snapshot_kobj, snapshot_attrs);
 
 	kobject_put(&device->snapshot_kobj);
@@ -1311,4 +1372,5 @@ gmu_only:
 	BUG_ON(!snapshot->device->skip_ib_capture &&
 				snapshot->device->force_panic);
 	complete_all(&snapshot->dump_gate);
+	kgsl_devcoredump(snapshot->device);
 }

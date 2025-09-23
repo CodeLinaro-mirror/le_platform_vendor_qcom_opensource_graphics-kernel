@@ -49,7 +49,7 @@ static void _wakeup_hw_fence_waiters(struct adreno_device *adreno_dev, u32 fault
 
 	wake_up_all(&hwf->unack_wq);
 
-	kgsl_delete_timer_sync(&hfi->hw_fence_timer);
+	kgsl_delete_timer(&hfi->hw_fence_timer);
 }
 
 void gen8_hwsched_fault(struct adreno_device *adreno_dev, u32 fault)
@@ -232,6 +232,7 @@ static int gen8_hwsched_gmu_first_boot(struct adreno_device *adreno_dev)
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
+	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
 	int level, ret = 0;
 
 	kgsl_pwrctrl_request_state(device, KGSL_STATE_AWARE);
@@ -317,16 +318,25 @@ static int gen8_hwsched_gmu_first_boot(struct adreno_device *adreno_dev)
 	if (ret)
 		goto err;
 
-	if (gen8_hwsched_hfi_get_value(adreno_dev, HFI_VALUE_GMU_AB_VOTE, 0) == 1 &&
+	if (adreno_dev->gmu_ab &&
+		gen8_hwsched_hfi_get_value(adreno_dev, HFI_VALUE_GMU_AB_VOTE, 0) == 1 &&
 		!WARN_ONCE(!adreno_dev->gpucore->num_ddr_channels,
 			"Number of DDR channel is not specified in gpu core")) {
-		adreno_dev->gmu_ab = true;
 		set_bit(ADRENO_DEVICE_GMU_AB, &adreno_dev->priv);
+	} else {
+		/* If gmu_ab feature flag is enabled but GMU doesn't support it, set it to false */
+		adreno_dev->gmu_ab = false;
 	}
 
 	icc_set_bw(pwr->icc_path, 0, 0);
 
 	device->gmu_fault = false;
+
+	memset(hwsched->default_dcvs_tunables, 0xFF, sizeof(hwsched->default_dcvs_tunables));
+
+	if (!device->host_based_dcvs)
+		gen8_hwsched_hfi_get_dcvs_tuning_attrs(adreno_dev, HFI_DCVS_ATTRS_DEFAULT,
+			hwsched->default_dcvs_tunables);
 
 	kgsl_pwrctrl_set_state(device, KGSL_STATE_AWARE);
 
@@ -354,6 +364,18 @@ gdsc_off:
 	return ret;
 }
 
+static void gen8_scm_gpu_tsense_boot(struct adreno_device *adreno_dev)
+{
+	struct gen8_device *gen8_dev = container_of(adreno_dev,
+					struct gen8_device, adreno_dev);
+
+	/* Cancel any pending TSENSE work that didn't run */
+	cancel_work_sync(&gen8_dev->tsense_work);
+
+	/* Set default tsense measurement window */
+	gen8_scm_gpu_tsense_default(adreno_dev, true);
+}
+
 static int gen8_hwsched_gmu_boot(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
@@ -369,6 +391,8 @@ static int gen8_hwsched_gmu_boot(struct adreno_device *adreno_dev)
 	ret = gmu_core_enable_clks(device, 0);
 	if (ret)
 		goto gdsc_off;
+
+	gen8_scm_gpu_tsense_boot(adreno_dev);
 
 	/*
 	 * Enable AHB timeout detection to catch any register access taking longer
@@ -432,6 +456,30 @@ gdsc_off:
 	return ret;
 }
 
+/* TSENSE suspend work can be done in parallel with GPU suspend */
+static void gen8_scm_gpu_tsense_suspend_work(struct work_struct *work)
+{
+	struct gen8_device *gen8_dev = container_of(work, struct gen8_device, tsense_work);
+
+	/* Set non-default tsense measurement window */
+	gen8_scm_gpu_tsense_default(&gen8_dev->adreno_dev, false);
+}
+
+static void gen8_scm_gpu_tsense_suspend(struct adreno_device *adreno_dev)
+{
+	struct gen8_device *gen8_dev = container_of(adreno_dev,
+					struct gen8_device, adreno_dev);
+
+	if (!ADRENO_FEATURE(adreno_dev, ADRENO_TSENSE_DYNAMIC_PERIOD))
+		return;
+
+	/*
+	 * Schedule on the lockless workqueue instead of the kgsl workqueue
+	 * to avoid deadlocks with the device mutex
+	 */
+	queue_work(kgsl_driver.lockless_workqueue, &gen8_dev->tsense_work);
+}
+
 static int gen8_hwsched_notify_slumber(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
@@ -450,6 +498,8 @@ static int gen8_hwsched_notify_slumber(struct adreno_device *adreno_dev)
 	req.bw |= adreno_gmu_bus_ab_quantize(adreno_dev, 0);
 	/* Disable the power counter so that the GMU is not busy */
 	gmu_core_regwrite(device, GEN8_GMUCX_POWER_COUNTER_ENABLE, 0);
+
+	gen8_scm_gpu_tsense_suspend(adreno_dev);
 
 	ret = gen8_hfi_send_cmd_async(adreno_dev, &req, sizeof(req));
 
@@ -1682,10 +1732,10 @@ static void gen8_hwsched_set_tuning_param(struct adreno_device *adreno_dev, u32 
 	if (device->state == KGSL_STATE_ACTIVE) {
 		/* If GMU is up, send the HFI */
 		gen8_hwsched_set_tuning_attrs(adreno_dev, HFI_VALUE_DCVS_TUNING_PARAM,
-				attr, hwsched->dcvs_tunables[attr].value);
+				attr, hwsched->sysfs_dcvs_tunables[attr].value);
 	} else {
 		/* Mark for updating GMU in the slumber exit path */
-		hwsched->dcvs_tunables[attr].update = true;
+		hwsched->sysfs_dcvs_tunables[attr].update = true;
 	}
 }
 
@@ -1708,7 +1758,7 @@ static ssize_t dcvs_tuning_show(struct kobject *kobj, struct kobj_attribute *att
 	struct adreno_hwsched *hwsched = container_of(kobj, struct adreno_hwsched, tunables_kobj);
 
 	return scnprintf(buf, PAGE_SIZE, "%d\n",
-				hwsched->dcvs_tunables[pattr->tuning_attr].value);
+				hwsched->sysfs_dcvs_tunables[pattr->tuning_attr].value);
 }
 
 static ssize_t dcvs_tuning_store(struct kobject *kobj,
@@ -1736,7 +1786,7 @@ static ssize_t dcvs_tuning_store(struct kobject *kobj,
 		return -ERANGE;
 
 	kgsl_mutex_lock(&device->mutex);
-	hwsched->dcvs_tunables[pattr->tuning_attr].value = (u32) val;
+	hwsched->sysfs_dcvs_tunables[pattr->tuning_attr].value = (u32)val;
 	device->ftbl->gmu_based_dcvs_pwr_ops(device,  pattr->tuning_attr,
 			GPU_PWRLEVEL_OP_TUNING_ATTR);
 	kgsl_mutex_unlock(&device->mutex);
@@ -1786,6 +1836,31 @@ static struct kobj_type ktype_tunables = {
 	.default_groups = dcvs_tunables_groups,
 };
 
+/**
+ * Keep this array in sync with enum gpu_tuning_attr. Each index in this array must correspond
+ * to the matching enum value.
+ */
+static const char * const dcvs_tunables_strings[] = {
+	[GPU_TUNING_KEY_BUSY_PENALTY_UP] = "penalty_up",
+	[GPU_TUNING_KEY_BUSY_PENALTY_DOWN] = "penalty_down",
+	[GPU_TUNING_KEY_FIRST_STEP_DOWN_COUNT] = "first_step_down",
+	[GPU_TUNING_KEY_SUBSEQUENT_STEP_DOWN_COUNT] = "subsequent_step_down",
+	[GPU_TUNING_KEY_MIN_GPU_FREQUENCY] = "min_gpu_freq_mhz",
+	[GPU_TUNING_KEY_MAX_GPU_FREQUENCY] = "max_gpu_freq_mhz",
+	[GPU_TUNING_KEY_TARGET_FPS] = "target_fps",
+	[GPU_TUNING_KEY_NUM_SAMPLES_UP] = "num_samples_up",
+	[GPU_TUNING_KEY_NUM_SAMPLES_DOWN] = "num_samples_down",
+	[GPU_TUNING_KEY_STRICT_FRAME] = "strict_frame",
+	[GPU_TUNING_KEY_NON_LINEAR_RAMP_UP] = "non_linear_ramp_up",
+	[GPU_TUNING_KEY_NON_LINEAR_RAMP_DOWN] = "non_linear_ramp_down",
+	[GPU_TUNING_KEY_MOD_PERCENT] = "mod_percent",
+	[GPU_TUNING_KEY_BUS_MIN_FREQUENCY] = "bus_min_freq_mhz",
+	[GPU_TUNING_KEY_BUS_MAX_FREQUENCY] = "bus_max_freq_mhz",
+	[GPU_TUNING_KEY_MIN_AB_MBPS] = NULL,
+	[GPU_TUNING_KEY_MAX_AB_MBPS] = NULL,
+	[GPU_TUNING_KEY_MAX] = NULL
+};
+
 #define DCVS_SYSFS_RO(_name) \
 	static struct kobj_attribute dcvs_attr_##_name = \
 			__ATTR(_name, 0444, _name##_show, NULL)
@@ -1801,10 +1876,113 @@ static ssize_t aggregated_max_gpuclk_show(struct kobject *kobj, struct kobj_attr
 	return scnprintf(buf, PAGE_SIZE, "%d\n", pwr->pwrlevels[pwr->aggr_max_pwrlevel].gpu_freq);
 }
 
+static ssize_t dcvs_tunables_default_show(struct kobject *kobj, struct kobj_attribute *attr,
+		char *buf)
+{
+	struct adreno_hwsched *hwsched = container_of(kobj, struct adreno_hwsched, dcvs_kobj);
+	ssize_t len = 0;
+	const char *str = "Active";
+	u32 i;
+
+	for (i = 0; i < GPU_TUNING_KEY_MAX; i++) {
+		if (dcvs_tunables_strings[i])
+			len += scnprintf(buf + len, PAGE_SIZE - len,
+				"%30s: %10d          Status: %s\n",
+				dcvs_tunables_strings[i],
+				hwsched->default_dcvs_tunables[i], str);
+	}
+
+	return len;
+}
+
+static ssize_t dcvs_tunables_cur_show(struct kobject *kobj, struct kobj_attribute *attr,
+		char *buf)
+{
+	struct adreno_hwsched *hwsched = container_of(kobj, struct adreno_hwsched, dcvs_kobj);
+	struct adreno_device *adreno_dev = container_of(hwsched, struct adreno_device, hwsched);
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	u32 cur_dcvs_tunables[GPU_TUNING_KEY_MAX];
+	ssize_t len = 0;
+	const char *str = "Active";
+	u32 i;
+
+	if (device->state == KGSL_STATE_ACTIVE) {
+		/* If GMU is up, send the HFI */
+		memset(cur_dcvs_tunables, 0xFF, sizeof(cur_dcvs_tunables));
+		gen8_hwsched_hfi_get_dcvs_tuning_attrs(adreno_dev, HFI_DCVS_ATTRS_AGGREGATED,
+			cur_dcvs_tunables);
+
+		for (i = 0; i < GPU_TUNING_KEY_MAX; i++) {
+			if (dcvs_tunables_strings[i])
+				len += scnprintf(buf + len, PAGE_SIZE - len,
+					"%30s: %10d          Status: %s\n",
+					dcvs_tunables_strings[i],
+					cur_dcvs_tunables[i], str);
+		}
+	} else {
+		for (i = 0; i < GPU_TUNING_KEY_MAX; i++) {
+			str = "Active";
+			if (dcvs_tunables_strings[i]) {
+				/* If there is a valid sysfs tunable value, display that */
+				if (hwsched->sysfs_dcvs_tunables[i].value !=
+					GPU_DCVS_TUNING_INVALID_VALUE) {
+					cur_dcvs_tunables[i] =
+						hwsched->sysfs_dcvs_tunables[i].value;
+					/*  Update status if sysfs tunable not yet sent to GMU */
+					if (hwsched->sysfs_dcvs_tunables[i].update)
+						str = "Pending";
+				} else {
+				/* If no valid sysfs tunable value, display default value */
+					cur_dcvs_tunables[i] = hwsched->default_dcvs_tunables[i];
+				}
+
+				len += scnprintf(buf + len, PAGE_SIZE - len,
+					"%30s: %10d          Status: %s\n",
+					dcvs_tunables_strings[i],
+					cur_dcvs_tunables[i], str);
+			}
+		}
+	}
+
+	return len;
+}
+
+static ssize_t gpu_load_show(struct kobject *kobj, struct kobj_attribute *attr,
+		char *buf)
+{
+	struct adreno_hwsched *hwsched = container_of(kobj, struct adreno_hwsched, dcvs_kobj);
+	struct adreno_device *adreno_dev = container_of(hwsched, struct adreno_device, hwsched);
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	u32 busy_perc = 0;
+
+	spin_lock(&pwr->stats_lock);
+
+	/*
+	 * Average out the samples taken since last read.  This will keep the average value in
+	 * sync with the client sampling duration.
+	 */
+	if (pwr->accum_total_time)
+		busy_perc = (u32)((pwr->accum_busy_stats * 100) / pwr->accum_total_time);
+
+	/* Reset the parameters */
+	pwr->accum_total_time = 0;
+	pwr->accum_busy_stats = 0;
+	spin_unlock(&pwr->stats_lock);
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", busy_perc);
+}
+
 DCVS_SYSFS_RO(aggregated_max_gpuclk);
+DCVS_SYSFS_RO(dcvs_tunables_default);
+DCVS_SYSFS_RO(dcvs_tunables_cur);
+DCVS_SYSFS_RO(gpu_load);
 
 static struct attribute *dcvs_attrs[] = {
 	&dcvs_attr_aggregated_max_gpuclk.attr,
+	&dcvs_attr_dcvs_tunables_default.attr,
+	&dcvs_attr_dcvs_tunables_cur.attr,
+	&dcvs_attr_gpu_load.attr,
 	NULL,
 };
 
@@ -1875,6 +2053,7 @@ int gen8_hwsched_probe(struct platform_device *pdev,
 	struct adreno_device *adreno_dev;
 	struct kgsl_device *device;
 	struct gen8_hwsched_device *gen8_hwsched_dev;
+	struct gen8_device *gen8_dev;
 	struct device *gmu_dev;
 	int ret;
 	int i;
@@ -1884,7 +2063,8 @@ int gen8_hwsched_probe(struct platform_device *pdev,
 	if (!gen8_hwsched_dev)
 		return -ENOMEM;
 
-	adreno_dev = &gen8_hwsched_dev->gen8_dev.adreno_dev;
+	gen8_dev = &gen8_hwsched_dev->gen8_dev;
+	adreno_dev = &gen8_dev->adreno_dev;
 
 	adreno_dev->hwsched_enabled = true;
 
@@ -1915,7 +2095,10 @@ int gen8_hwsched_probe(struct platform_device *pdev,
 
 	/* Initialize the dcvs tunables */
 	for (i = 0; i < GPU_TUNING_KEY_MAX; i++)
-		adreno_dev->hwsched.dcvs_tunables[i].value = GPU_DCVS_TUNING_INVALID_VALUE;
+		adreno_dev->hwsched.sysfs_dcvs_tunables[i].value = GPU_DCVS_TUNING_INVALID_VALUE;
+
+	/* Initialize the TSENSE suspend work that is done at GPU suspend */
+	INIT_WORK(&gen8_dev->tsense_work, gen8_scm_gpu_tsense_suspend_work);
 
 	gmu_dev = GMU_PDEV_DEV(device);
 	WARN_ON(kobject_init_and_add(&adreno_dev->hwsched.tunables_kobj, &ktype_tunables,

@@ -11,6 +11,7 @@
 #include "adreno_trace.h"
 #include "kgsl_eventlog.h"
 #include "kgsl_trace.h"
+#include "kgsl_pwrctrl.h"
 #include <linux/msm_kgsl.h>
 #include <linux/sched/clock.h>
 #include <soc/qcom/msm_performance.h>
@@ -1873,7 +1874,8 @@ static void do_fault_header(struct adreno_device *adreno_dev,
 	u32 ctxt_id = 0, ts = 0;
 	int rb_id = -1;
 
-	dev_err(device->dev, "Fault id:%d and GX is %s\n", fault, gx_on ? "ON" : "OFF");
+	dev_err(device->dev, "Fault id:%d and GX is %s with Curr GPU freq:%ld\n",
+			fault, gx_on ? "ON" : "OFF", kgsl_pwrctrl_active_freq(&device->pwrctrl));
 
 	if (!gx_on && !drawobj)
 		return;

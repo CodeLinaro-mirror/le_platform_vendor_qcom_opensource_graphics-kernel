@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/of.h>
 #include <linux/of_platform.h>
 
 #include "adreno.h"
+
+#define ADRENO_RBBM_INT_DEBUG_BUS_INTERRUPT0_MASK	BIT(26)
+#define ADRENO_RBBM_INT_DEBUG_BUS_INTERRUPT1_MASK	BIT(27)
+
+#define ADRENO_DEBUG_BUS_INT_MASK ((ADRENO_RBBM_INT_DEBUG_BUS_INTERRUPT0_MASK) | \
+	(ADRENO_RBBM_INT_DEBUG_BUS_INTERRUPT1_MASK))
 
 #define TO_ADRENO_CORESIGHT_ATTR(_attr) \
 	container_of(_attr, struct adreno_coresight_attr, attr)
@@ -88,6 +94,17 @@ static void adreno_coresight_disable(struct coresight_device *csdev,
 	if (!adreno_csdev->enabled) {
 		kgsl_mutex_unlock(&device->mutex);
 		return;
+	}
+
+	adreno_dev->coresight_en_cnt--;
+
+	/* GMU takes care of DBGC interrupt mask for HWSCHED */
+	if (!adreno_dev->coresight_en_cnt) {
+		if (adreno_dev->hwsched_enabled)
+			gmu_core_set_vrb_register(device->gmu_core.vrb,
+				VRB_DBGC_FAULT_ENABLE, 0);
+		else
+			adreno_dev->irq_mask &= ~ADRENO_DEBUG_BUS_INT_MASK;
 	}
 
 	if (!adreno_active_count_get(adreno_dev)) {
@@ -175,6 +192,17 @@ static int _adreno_coresight_enable(struct coresight_device *csdev,
 		for (i = 0; i < coresight->count; i++)
 			coresight->registers[i].value =
 				coresight->registers[i].initial;
+
+		adreno_dev->coresight_en_cnt++;
+
+		/* GMU takes care of DBGC interrupt mask for HWSCHED */
+		if (adreno_dev->coresight_en_cnt == 1) {
+			if (adreno_dev->hwsched_enabled)
+				gmu_core_set_vrb_register(device->gmu_core.vrb,
+					VRB_DBGC_FAULT_ENABLE, 1);
+			else
+				adreno_dev->irq_mask |= ADRENO_DEBUG_BUS_INT_MASK;
+		}
 
 		ret = adreno_active_count_get(adreno_dev);
 		if (!ret) {

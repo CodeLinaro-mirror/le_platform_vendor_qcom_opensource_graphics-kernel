@@ -1389,6 +1389,8 @@ struct payload_section {
 #define GMU_UCHE_OOB_ACCESS 653
 #define GMU_UCHE_TRAP_INTR  654
 #define GMU_TSB_WRITE_ERROR 655
+/* DBGC interrupt */
+#define GMU_DBGC_INTR_ERROR 656
 
 /* GPU encountered an unknown CP error */
 #define GMU_CP_UNKNOWN_ERROR 700

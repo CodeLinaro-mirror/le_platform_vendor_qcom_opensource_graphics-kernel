@@ -2732,7 +2732,7 @@ static void populate_kgsl_fence(struct kgsl_drawobj_sync_hw_fence *hw_fence,
 	spin_lock_irqsave(&ktimeline->lock, flags);
 
 	if (dma_fence_is_signaled_locked(&kfence->fence) || !_kgsl_context_get(ktimeline->context))
-		obj->flags |= BIT(GMU_SYNCOBJ_FLAG_KGSL_FENCE_BIT);
+		obj->flags |= BIT(GMU_SYNCOBJ_FLAG_SIGNALED_BIT);
 	else
 		hw_fence->context = ktimeline->context;
 

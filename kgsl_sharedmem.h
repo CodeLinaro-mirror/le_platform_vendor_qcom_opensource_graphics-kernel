@@ -97,10 +97,10 @@ struct kgsl_memdesc {
 	struct page **pages;
 	u32 page_count;
 	/**
-	 * @lock: RW-semaphore to protect the gpuaddr from being accessed by
+	 * @lock: Spinlock to protect the gpuaddr from being accessed by
 	 * multiple entities trying to map the same SVM region at once
 	 */
-	struct rw_semaphore lock;
+	spinlock_t lock;
 	/** @shmem_filp: Pointer to the shmem file backing this memdesc */
 	struct file *shmem_filp;
 	/** @ranges: rbtree base for the interval list of vbo ranges */

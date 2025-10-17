@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2014-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/sysfs.h>
@@ -730,7 +730,7 @@ static GPU_SYSFS_ATTR(gpu_model, 0444, _gpu_model_show, NULL);
 int adreno_sysfs_init(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
-	struct device *gmu_dev = GMU_PDEV_DEV(device);
+	struct device *gmu_dev;
 	int ret;
 
 	ret = sysfs_create_files(&device->dev->kobj, _attr_list);
@@ -744,8 +744,10 @@ int adreno_sysfs_init(struct adreno_device *adreno_dev)
 	}
 
 	/* Add a soft link for gmu device */
-	WARN_ON(sysfs_create_link(&device->dev->kobj, &gmu_dev->kobj, "gmu"));
-
+	if (gmu_core_isenabled(device)) {
+		gmu_dev =  GMU_PDEV_DEV(device);
+		WARN_ON(sysfs_create_link(&device->dev->kobj, &gmu_dev->kobj, "gmu"));
+	}
 	return ret;
 }
 

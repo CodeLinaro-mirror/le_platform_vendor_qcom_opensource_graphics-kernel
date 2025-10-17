@@ -230,6 +230,8 @@ enum gmu_vrb_idx {
 	VRB_CTXRECORD_AQE_SZ = 11,
 	/* Contains the size of GMEM inside context record in KB */
 	VRB_CTXRECORD_GMEM_SZ = 12,
+	/* Contains whether to enable fault on DBGC interrupts */
+	VRB_DBGC_FAULT_ENABLE = 17,
 };
 
 /* For GMU Trace */

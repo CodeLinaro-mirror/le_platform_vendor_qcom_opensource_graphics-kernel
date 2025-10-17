@@ -2049,12 +2049,14 @@ int gen7_perfcounter_update(struct adreno_device *adreno_dev,
 	bool select_reg_present = false;
 	unsigned long irq_flags;
 	int ret = 0;
+	u32 pending_triplets = 1;
 
 	if (!ADRENO_ACQUIRE_CP_SEMAPHORE(adreno_dev, irq_flags))
 		return -EBUSY;
 
-
 	if (flags & ADRENO_PERFCOUNTER_GROUP_RESTORE) {
+		/* No of triplet to add if restoring: 1 main + 1 control otherwise: 1 control */
+		pending_triplets++;
 		for (i = 0; i < perfcntr_list_len; i++) {
 			if ((data[offset + 1] == reg->select) && (data[offset] == pipe)) {
 				select_reg_present = true;
@@ -2068,6 +2070,13 @@ int gen7_perfcounter_update(struct adreno_device *adreno_dev,
 		}
 	} else if (perfcntr_list_len) {
 		goto update;
+	}
+
+	/* Ensure there is enough space in the reglist buffer for new triplets */
+	if ((!select_reg_present) && (offset + (pending_triplets * 3)) >=
+		(adreno_dev->pwrup_reglist->size / sizeof(u32))) {
+		ret = -ENOSPC;
+		goto err;
 	}
 
 	if (kgsl_hwlock(lock)) {

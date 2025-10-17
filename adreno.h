@@ -730,6 +730,12 @@ struct adreno_device {
 	struct adreno_coresight_device cx_coresight;
 	/** @funnel_gfx:  A coresight instance for gfx funnel */
 	struct adreno_funnel_device funnel_gfx;
+	/**
+	 * @coresight_en_cnt: Retain mask if either coresight-gfx
+	 * or coresight-gfx-cx is enabled; remove only when both
+	 * are disabled
+	 */
+	u32 coresight_en_cnt;
 #endif
 
 	uint32_t gpmu_throttle_counters[ADRENO_GPMU_THROTTLE_COUNTERS];

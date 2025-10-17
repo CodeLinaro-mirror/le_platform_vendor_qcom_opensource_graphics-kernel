@@ -2507,6 +2507,20 @@ static void gen8_swfuse_violation_callback(struct adreno_device *adreno_dev, int
 	}
 }
 
+/*
+ * gen8_dbgc_intr_callback() - ISR for DBGC error interrupt
+ * @adreno_dev: Pointer to device
+ * @bit: Interrupt bit
+ */
+static void gen8_dbgc_intr_callback(struct adreno_device *adreno_dev, int bit)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+
+	dev_crit_ratelimited(device->dev, "RBBM: Debug bus interrupt: bit (%d)\n", bit);
+	adreno_irqctrl(adreno_dev, 0);
+	adreno_scheduler_fault(adreno_dev, ADRENO_HARD_FAULT);
+}
+
 static const struct adreno_irq_funcs gen8_irq_funcs[32] = {
 	ADRENO_IRQ_CALLBACK(NULL), /* 0 - RBBM_GPU_IDLE */
 	ADRENO_IRQ_CALLBACK(gen8_err_callback), /* 1 - RBBM_AHB_ERROR */
@@ -2534,8 +2548,8 @@ static const struct adreno_irq_funcs gen8_irq_funcs[32] = {
 	ADRENO_IRQ_CALLBACK(adreno_hang_int_callback), /* 23 - MISHANGDETECT */
 	ADRENO_IRQ_CALLBACK(gen8_err_callback), /* 24 - UCHE_OOB_ACCESS */
 	ADRENO_IRQ_CALLBACK(gen8_err_callback), /* 25 - UCHE_TRAP_INTR */
-	ADRENO_IRQ_CALLBACK(NULL), /* 26 - DEBBUS_INTR_0 */
-	ADRENO_IRQ_CALLBACK(NULL), /* 27 - DEBBUS_INTR_1 */
+	ADRENO_IRQ_CALLBACK(gen8_dbgc_intr_callback), /* 26 - DEBUG_BUS_INTR_0 */
+	ADRENO_IRQ_CALLBACK(gen8_dbgc_intr_callback), /* 27 - DEBUG_BUS_INTR_1 */
 	ADRENO_IRQ_CALLBACK(gen8_err_callback), /* 28 - TSBWRITEERROR */
 	ADRENO_IRQ_CALLBACK(gen8_swfuse_violation_callback), /* 29 - SWFUSEVIOLATION */
 	ADRENO_IRQ_CALLBACK(NULL), /* 30 - ISDB_CPU_IRQ */
@@ -2911,11 +2925,19 @@ int gen8_perfcounter_update(struct adreno_device *adreno_dev,
 	u16 perfcntr_list_len = lock->dynamic_list_len - gen8_dev->ext_pwrup_list_len;
 	unsigned long irq_flags;
 	int ret = 0;
+	u32 num_dependencies = 0;
+	u32 pending_triplets = 2;
 
 	if (!ADRENO_ACQUIRE_CP_SEMAPHORE(adreno_dev, irq_flags))
 		return -EBUSY;
 
 	if (flags & ADRENO_PERFCOUNTER_GROUP_RESTORE) {
+		for (i = 0; i < PERFCOUNTER_REG_DEPENDENCY_LEN && reg->reg_dependency[i]; i++)
+			num_dependencies++;
+
+		/* Number of triplets to add: 1 main + dependencies + 2 controls */
+		pending_triplets += num_dependencies + 1;
+
 		for (i = 0; i < perfcntr_list_len - 2; i++) {
 			if ((data[offset + 1] == reg->select) && (data[offset] == pipe)) {
 				start_offset = offset;
@@ -2926,6 +2948,13 @@ int gen8_perfcounter_update(struct adreno_device *adreno_dev,
 		}
 	} else if (perfcntr_list_len) {
 		goto update;
+	}
+
+	/* Ensure there is enough space in the reglist buffer for new triplets */
+	if ((start_offset == -1) && (offset + (pending_triplets * 3)) >=
+		(adreno_dev->pwrup_reglist->size / sizeof(u32))) {
+		ret = -ENOSPC;
+		goto err;
 	}
 
 	if (kgsl_hwlock(lock)) {

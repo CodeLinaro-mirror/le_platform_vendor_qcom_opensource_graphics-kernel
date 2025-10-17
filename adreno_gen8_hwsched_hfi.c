@@ -529,6 +529,9 @@ static bool log_gpu_fault(struct adreno_device *adreno_dev)
 	case GMU_CP_DDEBV_SW_FAULT_ERROR:
 		handle_sw_fault(adreno_dev, "DDE BV", KEY_CP_DDEBV_SW_FAULT);
 		break;
+	case GMU_DBGC_INTR_ERROR:
+		dev_crit_ratelimited(gmu_pdev_dev, "DBGC error interrupt\n");
+		break;
 	case GMU_CP_UNKNOWN_ERROR:
 		fallthrough;
 	default:
@@ -3148,7 +3151,7 @@ static void populate_kgsl_fence(struct kgsl_drawobj_sync_hw_fence *hw_fence,
 	spin_lock_irqsave(&ktimeline->lock, flags);
 
 	if (dma_fence_is_signaled_locked(&kfence->fence) || !_kgsl_context_get(ktimeline->context))
-		obj->flags |= BIT(GMU_SYNCOBJ_FLAG_KGSL_FENCE_BIT);
+		obj->flags |= BIT(GMU_SYNCOBJ_FLAG_SIGNALED_BIT);
 	else
 		hw_fence->context = ktimeline->context;
 

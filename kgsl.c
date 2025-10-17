@@ -4655,6 +4655,7 @@ static void kgsl_gpumem_vm_open(struct vm_area_struct *vma)
 		return;
 	}
 
+	/* Protected by the mmap lock */
 	ret = idr_alloc(&entry->memdesc.vma_idr, vma, 1, 0, GFP_KERNEL);
 	if (ret < 0)
 		CLEAR_FLAG(KGSL_MEMDESC_CAN_RECLAIM, &entry->memdesc.priv);
@@ -4694,6 +4695,7 @@ kgsl_gpumem_vm_close(struct vm_area_struct *vma)
 	if (!atomic_dec_return(&entry->map_count))
 		atomic64_sub(memdesc->size, &entry->priv->gpumem_mapped);
 
+	/* Protected by the mmap lock */
 	idr_for_each_entry(&memdesc->vma_idr, mapped_vma, vidx) {
 		if (mapped_vma == vma) {
 			idr_remove(&memdesc->vma_idr, vidx);
@@ -4770,10 +4772,10 @@ static unsigned long _gpu_set_svm_region(struct kgsl_process_private *private,
 	 * Protect access to the gpuaddr here to prevent multiple vmas from
 	 * trying to map a SVM region at the same time
 	 */
-	down_write(&entry->memdesc.lock);
+	spin_lock(&entry->memdesc.lock);
 
 	if (entry->memdesc.gpuaddr) {
-		up_write(&entry->memdesc.lock);
+		spin_unlock(&entry->memdesc.lock);
 		return (unsigned long) -EBUSY;
 	}
 
@@ -4781,12 +4783,12 @@ static unsigned long _gpu_set_svm_region(struct kgsl_process_private *private,
 		(uint64_t) size);
 
 	if (ret != 0) {
-		up_write(&entry->memdesc.lock);
+		spin_unlock(&entry->memdesc.lock);
 		return (unsigned long) ret;
 	}
 
 	entry->memdesc.gpuaddr = (uint64_t) addr;
-	up_write(&entry->memdesc.lock);
+	spin_unlock(&entry->memdesc.lock);
 
 	entry->memdesc.pagetable = private->pagetable;
 
@@ -5027,6 +5029,7 @@ static int kgsl_mmap(struct file *file, struct vm_area_struct *vma)
 		vma->vm_file = get_file(entry->memdesc.shmem_filp);
 	}
 
+	/* Protected by the mmap lock */
 	ret = idr_alloc(&entry->memdesc.vma_idr, vma, 1, 0, GFP_KERNEL);
 	if (ret < 0)
 		CLEAR_FLAG(KGSL_MEMDESC_CAN_RECLAIM, &entry->memdesc.priv);

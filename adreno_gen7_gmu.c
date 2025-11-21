@@ -1536,26 +1536,33 @@ static irqreturn_t gen7_gmu_irq_handler(int irq, void *data)
 void gen7_gmu_aop_send_acd_state(struct gen7_gmu_device *gmu, bool flag)
 {
 	struct kgsl_device *device = KGSL_DEVICE(gen7_gmu_to_adreno(gmu));
-	struct qmp_pkt msg;
 	char msg_buf[36];
 	u32 size;
 	int ret;
 
-	if (IS_ERR_OR_NULL(gmu->mailbox.channel))
+	if (IS_ERR_OR_NULL(gmu->qmp) && IS_ERR_OR_NULL(gmu->mailbox.channel))
 		return;
 
 	size = scnprintf(msg_buf, sizeof(msg_buf),
 			"{class: gpu, res: acd, val: %d}", flag);
 
 	/* mailbox controller expects 4-byte aligned buffer */
-	msg.size = ALIGN((size + 1), SZ_4);
-	msg.data = msg_buf;
+	size = ALIGN((size + 1), SZ_4);
 
-	ret = mbox_send_message(gmu->mailbox.channel, &msg);
+	if (gmu->qmp) {
+		ret = qmp_send(gmu->qmp, msg_buf, size);
+	} else {
+		struct qmp_pkt msg;
+
+		msg.size = size;
+		msg.data = msg_buf;
+
+		ret = mbox_send_message(gmu->mailbox.channel, &msg);
+	}
 
 	if (ret < 0)
 		dev_err(GMU_PDEV_DEV(device),
-			"AOP mbox send message failed: %d\n", ret);
+			"AOP send message failed: %d\n", ret);
 }
 
 #if IS_ENABLED(CONFIG_QCOM_KGSL_HIBERNATION)
@@ -1792,7 +1799,7 @@ static int gen7_gmu_acd_set(struct kgsl_device *device, bool val)
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	struct gen7_gmu_device *gmu = to_gen7_gmu(adreno_dev);
 
-	if (IS_ERR_OR_NULL(gmu->mailbox.channel))
+	if (!gmu->qmp && !gmu->mailbox.channel)
 		return -EINVAL;
 
 	/* Don't do any unneeded work if ACD is already in the correct state */
@@ -1912,25 +1919,43 @@ static int gen7_gmu_bus_set(struct adreno_device *adreno_dev, int buslevel,
 	return ret;
 }
 
-static int gen7_gmu_aop_mailbox_init(struct adreno_device *adreno_dev,
+static int gen7_gmu_aop_messaging_init(struct adreno_device *adreno_dev,
 		struct gen7_gmu_device *gmu)
 {
 	struct kgsl_mailbox *mailbox = &gmu->mailbox;
+	struct device *gmu_pdev_dev = GMU_PDEV_DEV(KGSL_DEVICE(adreno_dev));
+	int ret;
 
-	mailbox->client.dev = GMU_PDEV_DEV(KGSL_DEVICE(adreno_dev));
+	if (of_find_property(gmu_pdev_dev->of_node, "qcom,qmp", NULL)) {
+		gmu->qmp = qmp_get(gmu_pdev_dev);
+		ret = PTR_ERR_OR_ZERO(gmu->qmp);
+		if (ret) {
+			/* Clear the error pointer to ensure a clean state */
+			gmu->qmp = NULL;
+			return ret;
+		}
+		goto done;
+	}
+
+	mailbox->client.dev = gmu_pdev_dev;
 	mailbox->client.tx_block = true;
 	mailbox->client.tx_tout = 1000;
 	mailbox->client.knows_txdone = false;
 
 	mailbox->channel = mbox_request_channel(&mailbox->client, 0);
-	if (IS_ERR(mailbox->channel))
-		return PTR_ERR(mailbox->channel);
+	ret = PTR_ERR_OR_ZERO(mailbox->channel);
+	if (ret) {
+		mailbox->channel = NULL;
+		return ret;
+	}
 
+done:
 	adreno_dev->acd_enabled = true;
+
 	return 0;
 }
 
-static void gen7_gmu_acd_probe(struct kgsl_device *device,
+static int gen7_gmu_acd_probe(struct kgsl_device *device,
 		struct gen7_gmu_device *gmu, struct device_node *node)
 {
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
@@ -1941,7 +1966,7 @@ static void gen7_gmu_acd_probe(struct kgsl_device *device,
 	int ret, i, cmd_idx = 0;
 
 	if (!ADRENO_FEATURE(adreno_dev, ADRENO_ACD))
-		return;
+		return 0;
 
 	cmd->hdr = CREATE_MSG_HDR(H2F_MSG_ACD_TBL, HFI_MSG_CMD);
 
@@ -1963,14 +1988,22 @@ static void gen7_gmu_acd_probe(struct kgsl_device *device,
 	}
 
 	if (!cmd->enable_by_level)
-		return;
+		return 0;
 
 	cmd->num_levels = cmd_idx;
 
-	ret = gen7_gmu_aop_mailbox_init(adreno_dev, gmu);
+	ret = gen7_gmu_aop_messaging_init(adreno_dev, gmu);
+
 	if (ret)
-		dev_err(GMU_PDEV_DEV(device),
-			"AOP mailbox init failed: %d\n", ret);
+		dev_err_probe(GMU_PDEV_DEV(device), ret,
+			"AOP messaging init failed\n");
+
+	/*
+	 * Only fail probe for -EPROBE_DEFER; ignore other errors to avoid
+	 * failing probe if ACD init fails.
+	 */
+
+	return ret == -EPROBE_DEFER ? ret : 0;
 }
 
 static int gen7_gmu_reg_probe(struct adreno_device *adreno_dev)
@@ -1999,7 +2032,10 @@ void gen7_gmu_remove(struct kgsl_device *device)
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	struct gen7_gmu_device *gmu = to_gen7_gmu(adreno_dev);
 
-	if (!IS_ERR_OR_NULL(gmu->mailbox.channel))
+	if (gmu->qmp)
+		qmp_put(gmu->qmp);
+
+	if (gmu->mailbox.channel)
 		mbox_free_channel(gmu->mailbox.channel);
 
 	adreno_dev->acd_enabled = false;
@@ -2107,7 +2143,9 @@ int gen7_gmu_probe(struct kgsl_device *device,
 		gmu->idle_level = GPU_HW_ACTIVE;
 	}
 
-	gen7_gmu_acd_probe(device, gmu, pdev->dev.of_node);
+	ret = gen7_gmu_acd_probe(device, gmu, pdev->dev.of_node);
+	if (ret)
+		goto error;
 
 	set_bit(GMU_ENABLED, &device->gmu_core.flags);
 
@@ -2449,6 +2487,8 @@ static int gen7_first_boot(struct adreno_device *adreno_dev)
 	device->pwrscale.devfreq_enabled = true;
 
 	device->pwrctrl.last_stat_updated = ktime_get();
+
+	set_bit(ADRENO_DEVICE_FIRST_BOOT_DONE, &adreno_dev->priv);
 
 	kgsl_pwrctrl_set_state(device, KGSL_STATE_ACTIVE);
 

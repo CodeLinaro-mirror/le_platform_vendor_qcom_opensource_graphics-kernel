@@ -745,6 +745,85 @@ static int _gmu_fp_show(void *data, u64 *val)
 
 DEFINE_DEBUGFS_ATTRIBUTE(gmu_fp_fops, _gmu_fp_show, _gmu_fp_store, "%llu\n");
 
+static int _gmuclk_get(void *data, u64 *val)
+{
+	struct kgsl_device *device = data;
+	int cur_freq = gmu_core_get_active_frequency(device);
+
+	if (cur_freq < 0)
+		return -EINVAL;
+
+	*val = (u64) cur_freq;
+	return 0;
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(_gmuclk_fops, _gmuclk_get, NULL, "%llu\n");
+
+static int _num_pwrlevels_get(void *data, u64 *val)
+{
+	struct kgsl_device *device = data;
+	int num_pwrlevels = gmu_core_get_num_pwrlevels(device);
+
+	if (num_pwrlevels < 0)
+		return -EINVAL;
+
+	*val = (u64) num_pwrlevels;
+	return 0;
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(_num_pwrlevels_fops, _num_pwrlevels_get, NULL, "%llu\n");
+
+static int _min_pwrlevel_get(void *data, u64 *val)
+{
+	struct kgsl_device *device = data;
+	int min_pwrlevel = gmu_core_get_min_pwrlevel(device);
+
+	if (min_pwrlevel < 0)
+		return -EINVAL;
+
+	*val = (u64) min_pwrlevel;
+	return 0;
+}
+
+static int _min_pwrlevel_set(void *data, u64 val)
+{
+	struct kgsl_device *device = data;
+
+	return gmu_core_set_min_pwrlevel(device, val);
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(_min_pwrlevel_fops, _min_pwrlevel_get, _min_pwrlevel_set, "%llu\n");
+
+static int _max_pwrlevel_get(void *data, u64 *val)
+{
+	struct kgsl_device *device = data;
+	int max_pwrlevel = gmu_core_get_max_pwrlevel(device);
+
+	if (max_pwrlevel < 0)
+		return -EINVAL;
+
+	*val = (u64) max_pwrlevel;
+	return 0;
+}
+
+static int _max_pwrlevel_set(void *data, u64 val)
+{
+	struct kgsl_device *device = data;
+
+	return gmu_core_set_max_pwrlevel(device, val);
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(_max_pwrlevel_fops, _max_pwrlevel_get, _max_pwrlevel_set, "%llu\n");
+
+static int gmu_available_frequencies_show(struct seq_file *s, void *unused)
+{
+	struct kgsl_device *device = s->private;
+
+	return gmu_core_list_frequencies(device, s);
+}
+
+DEFINE_SHOW_ATTRIBUTE(gmu_available_frequencies);
+
 static void _toggle_host_based_dcvs(struct adreno_device *adreno_dev, void *priv)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
@@ -867,6 +946,20 @@ void adreno_debugfs_init(struct adreno_device *adreno_dev)
 			&usesgmem_fops);
 		debugfs_create_file("skipsaverestore", 0644, adreno_dev->preemption_debugfs_dir,
 			device, &skipsaverestore_fops);
+	}
+
+	device->gmu_core.gmu_debugfs_dir = debugfs_create_dir("gmu", device->d_debugfs);
+	if (!IS_ERR_OR_NULL(device->gmu_core.gmu_debugfs_dir)) {
+		debugfs_create_file("gmuclk", 0444, device->gmu_core.gmu_debugfs_dir, device,
+			&_gmuclk_fops);
+		debugfs_create_file("num_pwrlevels", 0444, device->gmu_core.gmu_debugfs_dir, device,
+			&_num_pwrlevels_fops);
+		debugfs_create_file("min_pwrlevel", 0644, device->gmu_core.gmu_debugfs_dir, device,
+			&_min_pwrlevel_fops);
+		debugfs_create_file("max_pwrlevel", 0644, device->gmu_core.gmu_debugfs_dir, device,
+			&_max_pwrlevel_fops);
+		debugfs_create_file("gmu_available_frequencies", 0444,
+			device->gmu_core.gmu_debugfs_dir, device, &gmu_available_frequencies_fops);
 	}
 
 	if (ADRENO_FEATURE(adreno_dev, ADRENO_GMU_BASED_DCVS))

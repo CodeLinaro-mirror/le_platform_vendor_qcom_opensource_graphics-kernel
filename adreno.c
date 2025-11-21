@@ -1220,7 +1220,8 @@ static int adreno_probe_llcc(struct adreno_device *adreno_dev,
 	} else
 		adreno_dev->gpuhtw_llc_slice_enable = true;
 
-#if (KERNEL_VERSION(6, 1, 0) == LINUX_VERSION_CODE)
+#if ((KERNEL_VERSION(6, 1, 0) <= LINUX_VERSION_CODE) && \
+		(KERNEL_VERSION(6, 2, 0) > LINUX_VERSION_CODE))
 	if (adreno_is_a621(adreno_dev)) {
 		/* Get the system cache slice descriptor for GPU MV grid buffer */
 		adreno_dev->gpumv_llc_slice = llcc_slice_getd(LLCC_GPUMV);
@@ -1285,6 +1286,8 @@ const char *hfi_feature_to_string(u32 feature)
 		return "DMS";
 	case HFI_FEATURE_AQE:
 		return "AQE";
+	case HFI_FEATURE_FAST_CONTEXT_DESTROY:
+		return "FAST_CONTEXT_DESTROY";
 	}
 	return "unknown";
 }
@@ -1990,6 +1993,7 @@ static int adreno_open(struct adreno_device *adreno_dev)
 		goto err;
 
 	complete_all(&device->hwaccess_gate);
+	set_bit(ADRENO_DEVICE_FIRST_BOOT_DONE, &adreno_dev->priv);
 	kgsl_pwrctrl_change_state(device, KGSL_STATE_ACTIVE);
 	adreno_active_count_put(adreno_dev);
 
@@ -2575,6 +2579,12 @@ static int adreno_prop_u32(struct kgsl_device *device,
 		val = adreno_dev->fastblend_enabled ? 1 : 0;
 	else if (param->type == KGSL_PROP_IS_AQE_ENABLED)
 		val = ADRENO_FEATURE(adreno_dev, ADRENO_AQE) ? 1 : 0;
+	else if (param->type == KGSL_PROP_MULTIDRAW_MODE)
+		val = adreno_dev->multidraw_mode;
+	else if (param->type == KGSL_PROP_VIZ_FLUSH_DRAW_COUNT)
+		val = adreno_dev->viz_flush_draw_count;
+	else if (param->type == KGSL_PROP_VIZ_FLUSH_PRIM_COUNT)
+		val = adreno_dev->viz_flush_prim_count;
 
 	return copy_prop(param, &val, sizeof(val));
 }
@@ -2620,6 +2630,9 @@ static const struct {
 	{ KGSL_PROP_IS_FASTBLEND_ENABLED, adreno_prop_u32},
 	{ KGSL_PROP_UCHE_TRAP_BASE, adreno_prop_uche_trap_base },
 	{ KGSL_PROP_IS_AQE_ENABLED, adreno_prop_u32 },
+	{ KGSL_PROP_MULTIDRAW_MODE, adreno_prop_u32 },
+	{ KGSL_PROP_VIZ_FLUSH_DRAW_COUNT, adreno_prop_u32 },
+	{ KGSL_PROP_VIZ_FLUSH_PRIM_COUNT, adreno_prop_u32 },
 };
 
 static int adreno_getproperty(struct kgsl_device *device,
@@ -3964,11 +3977,11 @@ static void adreno_set_thermal_index(struct kgsl_device *device)
 		ops->set_thermal_index(adreno_dev);
 }
 
-static bool adreno_is_reset_recovery(struct kgsl_device *device)
+static bool adreno_is_first_boot_done(struct kgsl_device *device)
 {
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 
-	return test_bit(ADRENO_DEVICE_RESET_RECOVERY, &adreno_dev->priv);
+	return test_bit(ADRENO_DEVICE_FIRST_BOOT_DONE, &adreno_dev->priv);
 }
 
 static const struct kgsl_functable adreno_functable = {
@@ -4015,7 +4028,7 @@ static const struct kgsl_functable adreno_functable = {
 	.gmu_based_dcvs_pwr_ops = adreno_gmu_based_dcvs_pwr_ops,
 	.set_thermal_index = adreno_set_thermal_index,
 	.alloc_dcvs_profile_memory = adreno_alloc_dcvs_profile_memory,
-	.is_reset_recovery = adreno_is_reset_recovery,
+	.is_first_boot_done = adreno_is_first_boot_done,
 };
 
 static const struct component_master_ops adreno_ops = {

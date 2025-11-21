@@ -53,6 +53,7 @@ static const char * const clocks[KGSL_MAX_CLKS] = {
 	"smmu_vote",
 	"apb_pclk",
 	"hub_cx_int_clk",
+	"gpu_cc_memnoc_gfx_clk",
 };
 
 static void kgsl_pwrctrl_clk(struct kgsl_device *device, bool state,
@@ -1396,6 +1397,29 @@ int kgsl_regulator_disable_wait(struct regulator *reg, u32 timeout)
 	}
 }
 
+void kgsl_pwrctrl_disable_mx_gdsc(struct kgsl_device *device)
+{
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+
+	if (pwr->gmu_mx_pd)
+		pm_runtime_put_sync(pwr->gmu_mx_pd);
+}
+
+int kgsl_pwrctrl_enable_mx_gdsc(struct kgsl_device *device)
+{
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	int ret;
+
+	if (!pwr->gmu_mx_pd)
+		return 0;
+
+	ret = pm_runtime_resume_and_get(pwr->gmu_mx_pd);
+	if (ret)
+		dev_err(device->dev, "Failed to enable MX gdsc, error %d\n", ret);
+
+	return ret;
+}
+
 int kgsl_pwrctrl_enable_cx_gdsc(struct kgsl_device *device)
 {
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
@@ -1404,23 +1428,17 @@ int kgsl_pwrctrl_enable_cx_gdsc(struct kgsl_device *device)
 	if (!pwr->cx_regulator && !pwr->gmu_cx_pd)
 		return 0;
 
-	/*
-	 * Wait for CX GDSC collapse during hang recovery to prevent
-	 * boot up from stale state.
-	 */
-	if (device->ftbl->is_reset_recovery(device)) {
-		ret = wait_for_completion_timeout(&pwr->cx_gdsc_gate, msecs_to_jiffies(5000));
-		if (!ret) {
-			/* Dump the cx regulator consumer list */
-			if (pwr->cx_regulator) {
-				dev_err(device->dev, "GPU CX wait timeout. Dumping CX votes:\n");
-				qcom_clk_dump(NULL, pwr->cx_regulator, false);
-			} else {
-				dev_err(device->dev, "GPU CX wait timeout\n");
-			}
-			KGSL_GMU_CORE_FORCE_PANIC(device->gmu_core.gf_panic,
-				GMU_PDEV(device), 0ULL, GMU_FAULT_CX_WAIT_TIMEOUT);
+	ret = wait_for_completion_timeout(&pwr->cx_gdsc_gate, msecs_to_jiffies(5000));
+	if (!ret) {
+		/* Dump the cx regulator consumer list */
+		if (pwr->cx_regulator) {
+			dev_err(device->dev, "GPU CX wait timeout. Dumping CX votes:\n");
+			qcom_clk_dump(NULL, pwr->cx_regulator, false);
+		} else {
+			dev_err(device->dev, "GPU CX wait timeout\n");
 		}
+		KGSL_GMU_CORE_FORCE_PANIC(device->gmu_core.gf_panic,
+			GMU_PDEV(device), 0ULL, GMU_FAULT_CX_WAIT_TIMEOUT);
 	}
 
 	if (!completion_done(&pwr->cx_gdsc_gate))
@@ -1519,11 +1537,31 @@ static int enable_gdscs(struct kgsl_device *device)
 	return 0;
 }
 
+int kgsl_pwrctrl_probe_mx_gdsc(struct kgsl_device *device, struct platform_device *pdev)
+{
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+
+	if (!IS_ERR_OR_NULL(pwr->gmu_mx_pd))
+		return 0;
+
+	if (of_find_property(pdev->dev.of_node, "power-domains", NULL)) {
+		pwr->gmu_mx_pd = dev_pm_domain_attach_by_name(&pdev->dev, "gmu_mx");
+
+		if (IS_ERR_OR_NULL(pwr->gmu_mx_pd)) {
+			dev_err(device->dev,
+				"Failed to attach GMU mx power domain\n");
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
 static int kgsl_pwrctrl_probe_cx_gdsc(struct kgsl_device *device, struct platform_device *pdev)
 {
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 
-	if (of_property_read_bool(pdev->dev.of_node, "power-domains")) {
+	if (of_find_property(pdev->dev.of_node, "power-domains", NULL)) {
 		/* Get virtual device handle for CX GDSC to control it */
 		struct device *cx_pd = dev_pm_domain_attach_by_name(&pdev->dev, "cx");
 
@@ -1559,7 +1597,7 @@ static int kgsl_pwrctrl_probe_gx_gdsc(struct kgsl_device *device, struct platfor
 {
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 
-	if (of_property_read_bool(pdev->dev.of_node, "power-domains")) {
+	if (of_find_property(pdev->dev.of_node, "power-domains", NULL)) {
 		/* Get virtual device handle for GX GDSC to control it */
 		struct device *gx_pd = dev_pm_domain_attach_by_name(&pdev->dev, "gx");
 
@@ -1854,15 +1892,8 @@ static int pmqos_max_notifier_call(struct notifier_block *nb, unsigned long val,
 
 	trace_kgsl_thermal_constraint(max_freq);
 
-	/* Make sure pmqos_max_pwrlevel is updated before reading active_cnt */
-	smp_mb();
-
-	/*
-	 * Return early if the device is not active. Constraint will be applied on
-	 * subsequent boot. This will also prevent unnecessarily holding device
-	 * mutex while the device is not active.
-	 */
-	if (!atomic_read(&device->active_cnt))
+	/* Apply the constraints only if first boot is done */
+	if (!device->ftbl->is_first_boot_done(device))
 		return NOTIFY_OK;
 
 	kgsl_mutex_lock(&device->mutex);
@@ -2026,15 +2057,15 @@ int kgsl_pwrctrl_init(struct kgsl_device *device)
 
 	_isense_clk_set_rate(pwr, pwr->num_pwrlevels - 1);
 
-	if (of_property_read_bool(pdev->dev.of_node, "vddcx-supply") ||
+	if (of_find_property(pdev->dev.of_node, "vddcx-supply", NULL) ||
 		(of_property_match_string(pdev->dev.of_node, "power-domain-names", "cx") >= 0))
 		kgsl_pwrctrl_probe_cx_gdsc(device, pdev);
 
-	if (of_property_read_bool(pdev->dev.of_node, "vdd-supply") ||
+	if (of_find_property(pdev->dev.of_node, "vdd-supply", NULL) ||
 		(of_property_match_string(pdev->dev.of_node, "power-domain-names", "gx") >= 0))
 		kgsl_pwrctrl_probe_gx_gdsc(device, pdev);
 
-	if (of_property_read_bool(pdev->dev.of_node, "vdd-parent-supply")) {
+	if (of_find_property(pdev->dev.of_node, "vdd-parent-supply", NULL)) {
 		pwr->gx_regulator_parent = devm_regulator_get(&pdev->dev,
 				"vdd-parent");
 		if (IS_ERR(pwr->gx_regulator_parent)) {
@@ -2148,9 +2179,13 @@ void kgsl_pwrctrl_close(struct kgsl_device *device)
 	if (pwr->gx_pd)
 		dev_pm_domain_detach(pwr->gx_pd, false);
 
+	if (pwr->gmu_mx_pd)
+		dev_pm_domain_detach(pwr->gmu_mx_pd, false);
+
 	pwr->gmu_cx_pd = NULL;
 	pwr->cx_pd = NULL;
 	pwr->gx_pd = NULL;
+	pwr->gmu_mx_pd = NULL;
 }
 
 void kgsl_idle_check(struct work_struct *work)
@@ -2220,7 +2255,7 @@ done:
 
 void kgsl_timer(struct timer_list *t)
 {
-	struct kgsl_device *device = from_timer(device, t, idle_timer);
+	struct kgsl_device *device = kgsl_timer_container_of(device, t, idle_timer);
 
 	if (device->requested_state != KGSL_STATE_SUSPEND) {
 		kgsl_pwrctrl_request_state(device, KGSL_STATE_SLUMBER);

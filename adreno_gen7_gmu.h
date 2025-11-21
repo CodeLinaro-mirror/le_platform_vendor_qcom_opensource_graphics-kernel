@@ -7,6 +7,7 @@
 #define __ADRENO_GEN7_GMU_H
 
 #include <linux/mailbox_client.h>
+#include <linux/soc/qcom/qcom_aoss.h>
 
 #include "adreno_gen7_hfi.h"
 #include "kgsl_gmu_core.h"
@@ -39,6 +40,8 @@ struct gen7_gmu_device {
 	struct kgsl_memdesc *gpu_boot_scratch;
 	struct gen7_hfi hfi;
 	unsigned int idle_level;
+	/** @qmp: Pointer to qmp struct used for AOP messages*/
+	struct qmp *qmp;
 	struct kgsl_mailbox mailbox;
 	unsigned int log_wptr_retention;
 	/** @cm3_fault: whether gmu received a cm3 fault interrupt */
@@ -181,7 +184,7 @@ int gen7_gmu_memory_init(struct adreno_device *adreno_dev);
  * @gmu: Pointer to the gen7 gmu device
  * @flag: Boolean to enable or disable acd in aop
  *
- * This function enables or disables gpu acd feature using mailbox
+ * This function enables or disables gpu acd feature using mailbox or qmp
  */
 void gen7_gmu_aop_send_acd_state(struct gen7_gmu_device *gmu, bool flag);
 

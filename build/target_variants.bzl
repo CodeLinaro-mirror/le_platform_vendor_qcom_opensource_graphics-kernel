@@ -1,11 +1,13 @@
 targets = [
     # keep sorted
+    "art",
     "canoe",
     "lahaina",
     "monaco",
     "parrot",
     "sun",
     "vienna",
+    "bengal",
 ]
 
 la_variants = [

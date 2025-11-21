@@ -220,7 +220,7 @@ static void gen8_hwsched_set_ctxt_record_vrb(struct adreno_device *adreno_dev)
 	gmu_core_set_vrb_register(device->gmu_core.vrb, VRB_CTXRECORD_TOTAL_SZ,
 		adreno_dev->total_ctxt_record_sz >> 10);
 	gmu_core_set_vrb_register(device->gmu_core.vrb, VRB_CTXRECORD_GMEM_SZ,
-		adreno_dev->gpucore->gmem_size >> 10);
+		adreno_gmem_size(adreno_dev) >> 10);
 
 	/* Populate size of AQE context record */
 	gmu_core_set_vrb_register(device->gmu_core.vrb, VRB_CTXRECORD_AQE_SZ,
@@ -242,6 +242,10 @@ static int gen8_hwsched_gmu_first_boot(struct adreno_device *adreno_dev)
 	ret = kgsl_pwrctrl_enable_cx_gdsc(device);
 	if (ret)
 		return ret;
+
+	ret = kgsl_pwrctrl_enable_mx_gdsc(device);
+	if (ret)
+		goto cx_gdsc_off;
 
 	/* Start the GMU at the lowest available frequency level */
 	ret = gmu_core_enable_clks(device, 0);
@@ -357,6 +361,8 @@ clks_gdsc_off:
 	gmu_core_disable_clks(device);
 
 gdsc_off:
+	kgsl_pwrctrl_disable_mx_gdsc(device);
+cx_gdsc_off:
 	kgsl_pwrctrl_disable_cx_gdsc(device);
 
 	gmu_core_rdpm_cx_freq_update(device, 0);
@@ -386,6 +392,10 @@ static int gen8_hwsched_gmu_boot(struct adreno_device *adreno_dev)
 	ret = kgsl_pwrctrl_enable_cx_gdsc(device);
 	if (ret)
 		return ret;
+
+	ret = kgsl_pwrctrl_enable_mx_gdsc(device);
+	if (ret)
+		goto cx_gdsc_off;
 
 	/* Start the GMU at the lowest available frequency level */
 	ret = gmu_core_enable_clks(device, 0);
@@ -449,6 +459,8 @@ clks_gdsc_off:
 	gmu_core_disable_clks(device);
 
 gdsc_off:
+	kgsl_pwrctrl_disable_mx_gdsc(device);
+cx_gdsc_off:
 	kgsl_pwrctrl_disable_cx_gdsc(device);
 
 	gmu_core_rdpm_cx_freq_update(device, 0);
@@ -544,6 +556,8 @@ static int gen8_hwsched_gmu_power_off(struct adreno_device *adreno_dev)
 	gen8_hwsched_hfi_stop(adreno_dev);
 
 	gmu_core_disable_clks(device);
+
+	kgsl_pwrctrl_disable_mx_gdsc(device);
 
 	kgsl_pwrctrl_disable_cx_gdsc(device);
 
@@ -898,6 +912,8 @@ static int gen8_hwsched_first_boot(struct adreno_device *adreno_dev)
 		device->pwrctrl.last_stat_updated = ktime_get();
 	}
 
+	set_bit(ADRENO_DEVICE_FIRST_BOOT_DONE, &adreno_dev->priv);
+
 	kgsl_pwrctrl_set_state(device, KGSL_STATE_ACTIVE);
 
 	return 0;
@@ -1247,7 +1263,7 @@ static int gen8_hwsched_pm_suspend(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
-	int ret;
+	int ret, active_count;
 
 	if (test_bit(GMU_PRIV_PM_SUSPEND, &gmu->flags))
 		return 0;
@@ -1257,6 +1273,16 @@ static int gen8_hwsched_pm_suspend(struct adreno_device *adreno_dev)
 	ret = adreno_hwsched_drain_and_idle(adreno_dev);
 	if (ret)
 		goto err;
+
+	active_count = atomic_read(&device->active_cnt);
+
+	if (active_count > 0) {
+		ret = -ETIMEDOUT;
+		dev_err_ratelimited(GMU_PDEV_DEV(device),
+			"Aborting suspend because of active count:%d\n",
+			active_count);
+		goto err;
+	}
 
 	gen8_hwsched_power_off(adreno_dev);
 

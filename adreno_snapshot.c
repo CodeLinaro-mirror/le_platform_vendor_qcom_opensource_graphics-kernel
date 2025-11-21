@@ -1183,7 +1183,8 @@ void adreno_snapshot(struct kgsl_device *device, struct kgsl_snapshot *snapshot,
 	snapshot_frozen_objsize = 0;
 
 	snapshot->process = setup_fault_process(device, snapshot, context);
-	snapshot->process_lpac = setup_fault_process(device, snapshot, context_lpac);
+	if (context_lpac)
+		snapshot->process_lpac = setup_fault_process(device, snapshot, context_lpac);
 
 	/* Dump firmware version and few dwords */
 	adreno_snapshot_firmware(device, snapshot);

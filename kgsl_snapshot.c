@@ -834,9 +834,13 @@ out:
 }
 
 /* Dump the sysfs binary data to the user */
+#if (KERNEL_VERSION(6, 16, 0) > LINUX_VERSION_CODE)
 static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
-	struct bin_attribute *attr, char *buf, loff_t off,
-	size_t count)
+	struct bin_attribute *attr, char *buf, loff_t off, size_t count)
+#else
+static ssize_t snapshot_show(struct file *filep, struct kobject *kobj,
+	const struct bin_attribute *attr, char *buf, loff_t off, size_t count)
+#endif
 {
 	struct kgsl_device *device = kobj_to_device(kobj);
 	struct kgsl_snapshot *snapshot;
@@ -1357,7 +1361,9 @@ done:
 	 * around until someone bothers to read the snapshot file.
 	 */
 	kgsl_process_private_put(snapshot->process);
+	kgsl_process_private_put(snapshot->process_lpac);
 	snapshot->process = NULL;
+	snapshot->process_lpac = NULL;
 
 	if (snapshot->ib1base && !snapshot->ib1dumped)
 		dev_err(snapshot->device->dev,

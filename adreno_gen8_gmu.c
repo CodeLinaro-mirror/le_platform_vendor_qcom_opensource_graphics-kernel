@@ -353,7 +353,8 @@ int gen8_rscc_sleep_sequence(struct adreno_device *adreno_dev)
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
 	int ret;
-	u32 bitmask = adreno_is_gen8_2_x(adreno_dev) ? BIT(30) : BIT(16);
+	u32 bitmask = (adreno_is_gen8_2_x(adreno_dev) || adreno_is_gen8_11_0(adreno_dev)) ?
+		BIT(30) : BIT(16);
 
 	if (!test_bit(GMU_PRIV_FIRST_BOOT_DONE, &gmu->flags))
 		return 0;
@@ -1228,6 +1229,8 @@ void gen8_gmu_suspend(struct adreno_device *adreno_dev, bool force)
 
 	gmu_core_disable_clks(device);
 
+	kgsl_pwrctrl_disable_mx_gdsc(device);
+
 	kgsl_pwrctrl_disable_cx_gdsc(device);
 
 	gmu_core_rdpm_cx_freq_update(device, 0);
@@ -1554,6 +1557,10 @@ static int gen8_gmu_first_boot(struct adreno_device *adreno_dev)
 	if (ret)
 		return ret;
 
+	ret = kgsl_pwrctrl_enable_mx_gdsc(device);
+	if (ret)
+		goto cx_gdsc_off;
+
 	ret = gmu_core_enable_clks(device, 0);
 	if (ret)
 		goto gdsc_off;
@@ -1639,8 +1646,9 @@ err:
 
 clks_gdsc_off:
 	gmu_core_disable_clks(device);
-
 gdsc_off:
+	kgsl_pwrctrl_disable_mx_gdsc(device);
+cx_gdsc_off:
 	kgsl_pwrctrl_disable_cx_gdsc(device);
 
 	gmu_core_rdpm_cx_freq_update(device, 0);
@@ -1658,6 +1666,10 @@ static int gen8_gmu_boot(struct adreno_device *adreno_dev)
 	ret = kgsl_pwrctrl_enable_cx_gdsc(device);
 	if (ret)
 		return ret;
+
+	ret = kgsl_pwrctrl_enable_mx_gdsc(device);
+	if (ret)
+		goto cx_gdsc_off;
 
 	ret = gmu_core_enable_clks(device, 0);
 	if (ret)
@@ -1716,8 +1728,9 @@ err:
 
 clks_gdsc_off:
 	gmu_core_disable_clks(device);
-
 gdsc_off:
+	kgsl_pwrctrl_disable_mx_gdsc(device);
+cx_gdsc_off:
 	kgsl_pwrctrl_disable_cx_gdsc(device);
 
 	gmu_core_rdpm_cx_freq_update(device, 0);
@@ -2006,6 +2019,12 @@ int gen8_gmu_probe(struct kgsl_device *device,
 	if (ret)
 		return ret;
 
+	if (gen8_core->gmu_mx_gdsc) {
+		ret = kgsl_pwrctrl_probe_mx_gdsc(device, pdev);
+		if (ret)
+			return ret;
+	}
+
 	ret = gmu_core_clk_probe(device);
 	if (ret)
 		return ret;
@@ -2155,6 +2174,8 @@ static int gen8_gmu_power_off(struct adreno_device *adreno_dev)
 	gen8_hfi_stop(adreno_dev);
 
 	gmu_core_disable_clks(device);
+
+	kgsl_pwrctrl_disable_mx_gdsc(device);
 
 	kgsl_pwrctrl_disable_cx_gdsc(device);
 
@@ -2379,6 +2400,8 @@ static int gen8_first_boot(struct adreno_device *adreno_dev)
 	device->pwrscale.devfreq_enabled = true;
 
 	device->pwrctrl.last_stat_updated = ktime_get();
+
+	set_bit(ADRENO_DEVICE_FIRST_BOOT_DONE, &adreno_dev->priv);
 
 	kgsl_pwrctrl_set_state(device, KGSL_STATE_ACTIVE);
 

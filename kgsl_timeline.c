@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/dma-fence.h>
@@ -13,6 +13,7 @@
 #include "kgsl_device.h"
 #include "kgsl_eventlog.h"
 #include "kgsl_sharedmem.h"
+#include "kgsl_sync.h"
 #include "kgsl_timeline.h"
 #include "kgsl_trace.h"
 
@@ -191,6 +192,14 @@ static void timeline_fence_release(struct dma_fence *fence)
 	dma_fence_free(fence);
 }
 
+#if (KERNEL_VERSION(6, 17, 0) <= LINUX_VERSION_CODE)
+static bool timeline_fence_signaled(struct dma_fence *fence)
+{
+	struct kgsl_timeline_fence *f = to_timeline_fence(fence);
+
+	return !__dma_fence_is_later(fence, f->timeline->value, fence->seqno);
+}
+#else
 static bool timeline_fence_signaled(struct dma_fence *fence)
 {
 	struct kgsl_timeline_fence *f = to_timeline_fence(fence);
@@ -198,6 +207,7 @@ static bool timeline_fence_signaled(struct dma_fence *fence)
 	return !__dma_fence_is_later(fence->seqno, f->timeline->value,
 		fence->ops);
 }
+#endif
 
 static bool timeline_fence_enable_signaling(struct dma_fence *fence)
 {
@@ -235,9 +245,39 @@ static const struct dma_fence_ops timeline_fence_ops = {
 	.signaled = timeline_fence_signaled,
 	.release = timeline_fence_release,
 	.enable_signaling = timeline_fence_enable_signaling,
+
+#if (KERNEL_VERSION(6, 16, 0) > LINUX_VERSION_CODE)
 	.timeline_value_str = timeline_get_value_str,
+#endif
+
+#if (KERNEL_VERSION(6, 17, 0) > LINUX_VERSION_CODE)
 	.use_64bit_seqno = true,
+#endif
+
 };
+
+#if (KERNEL_VERSION(6, 16, 0) > LINUX_VERSION_CODE)
+void kgsl_fence_timeline_value_str(struct dma_fence *fence, char *value, size_t size)
+{
+	if (!fence || !fence->ops || !value || !size)
+		return;
+
+	if (fence->ops->timeline_value_str)
+		fence->ops->timeline_value_str(fence, value, size);
+
+}
+#else
+void kgsl_fence_timeline_value_str(struct dma_fence *fence, char *value, size_t size)
+{
+	if (!fence || !fence->ops || !value || !size)
+		return;
+
+	if (fence->ops == &timeline_fence_ops)
+		timeline_get_value_str(fence, value, size);
+	else
+		kgsl_sync_timeline_value_str(fence, value, size);
+}
+#endif
 
 static void kgsl_timeline_add_fence(struct kgsl_timeline *timeline,
 		struct kgsl_timeline_fence *fence)
@@ -321,6 +361,20 @@ unlock:
 	spin_unlock_irq(&timeline->lock);
 }
 
+#if KERNEL_VERSION(6, 17, 0) <= LINUX_VERSION_CODE
+static inline void kgsl_timeline_dma_fence_init(struct dma_fence *fence,
+		const struct dma_fence_ops *ops, spinlock_t *lock, u64 context, u64 seqno)
+{
+	dma_fence_init64(fence, ops, lock, context, seqno);
+}
+#else
+static inline void kgsl_timeline_dma_fence_init(struct dma_fence *fence,
+		const struct dma_fence_ops *ops, spinlock_t *lock, u64 context, u64 seqno)
+{
+	dma_fence_init(fence, ops, lock, context, seqno);
+}
+#endif
+
 struct dma_fence *kgsl_timeline_fence_alloc(struct kgsl_timeline *timeline,
 		u64 seqno)
 {
@@ -336,8 +390,8 @@ struct dma_fence *kgsl_timeline_fence_alloc(struct kgsl_timeline *timeline,
 		return ERR_PTR(-ENOENT);
 	}
 
-	dma_fence_init(&fence->base, &timeline_fence_ops,
-		&timeline->lock, timeline->context, seqno);
+	kgsl_timeline_dma_fence_init(&fence->base, &timeline_fence_ops, &timeline->lock,
+			timeline->context, seqno);
 
 	INIT_LIST_HEAD(&fence->node);
 

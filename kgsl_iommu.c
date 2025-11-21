@@ -2750,6 +2750,7 @@ static const char * const kgsl_iommu_clocks[] = {
 	"gcc_gpu_axi_clk",
 	"gcc_smmu_cfg_clk",
 	"gcc_gfx_tcu_clk",
+	"gpu_cc_memnoc_gfx_clk",
 };
 
 static const struct kgsl_mmu_ops kgsl_iommu_ops;
@@ -2836,7 +2837,7 @@ int kgsl_iommu_bind(struct kgsl_device *device, struct platform_device *pdev)
 	 * IOMMU device is already bound to power domain by core framework
 	 * as there is only single power domain
 	 */
-	if (of_property_read_bool(pdev->dev.of_node, "power-domains")) {
+	if (of_find_property(pdev->dev.of_node, "power-domains", NULL)) {
 		pm_runtime_enable(&pdev->dev);
 	} else {
 		struct regulator *cx_regulator = devm_regulator_get(&pdev->dev, "vddcx");

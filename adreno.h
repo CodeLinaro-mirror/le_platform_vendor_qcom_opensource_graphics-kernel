@@ -188,6 +188,8 @@
 #define ADRENO_TSENSE_DYNAMIC_PERIOD BIT(27)
 /* Enable GMU Based AB voting */
 #define ADRENO_GMU_AB BIT(28)
+/* Enable GMU Fast Context Destroy optimization */
+#define ADRENO_GMU_FAST_CONTEXT_DESTROY BIT(29)
 
 /*
  * Adreno GPU quirks - control bits for various workarounds
@@ -307,9 +309,11 @@ enum adreno_gpurev {
 	ADRENO_REV_GEN8_2_1 = ADRENO_GPUREV_VALUE(8, 2, 1),
 	ADRENO_REV_GEN8_3_0 = ADRENO_GPUREV_VALUE(8, 3, 0),
 	ADRENO_REV_GEN8_4_0 = ADRENO_GPUREV_VALUE(8, 4, 0),
+	ADRENO_REV_GEN8_5_0 = ADRENO_GPUREV_VALUE(8, 5, 0),
 	ADRENO_REV_GEN8_6_0 = ADRENO_GPUREV_VALUE(8, 6, 0),
 	ADRENO_REV_GEN8_8_0 = ADRENO_GPUREV_VALUE(8, 8, 0),
 	ADRENO_REV_GEN8_9_0 = ADRENO_GPUREV_VALUE(8, 9, 0),
+	ADRENO_REV_GEN8_11_0 = ADRENO_GPUREV_VALUE(8, 11, 0),
 };
 
 #define ADRENO_SOFT_FAULT BIT(0)
@@ -853,6 +857,12 @@ struct adreno_device {
 	bool dcvs_profile_enabled;
 	/** @aqe_ctxt_record_sz: Size of the AQE section in preemption record in bytes */
 	u64 aqe_ctxt_record_sz;
+	/** @multidraw_mode: Whether PC unroll is enabled for multidraw **/
+	u32 multidraw_mode;
+	/** @viz_flush_draw_count: Draw count to flush visibility stream **/
+	u32 viz_flush_draw_count;
+	/** @viz_flush_prim_count: Prim count to flush visibility stream **/
+	u32 viz_flush_prim_count;
 };
 
 /* Time to wait for suspend recovery gate to complete */
@@ -897,6 +907,10 @@ enum adreno_device_flags {
 	ADRENO_DEVICE_CX_TIMER_INITIALIZED = 17,
 	/** @ADRENO_DEVICE_RESET_RECOVERY: Set if the ADRENO device under goes reset recovery */
 	ADRENO_DEVICE_RESET_RECOVERY = 18,
+	/** @ADRENO_DEVICE_FIRST_BOOT_DONE: Set if the ADRENO device first boot is done */
+	ADRENO_DEVICE_FIRST_BOOT_DONE = 19,
+	/** @ADRENO_DEVICE_FAST_CONTEXT_DESTROY: Set if fast context destroy is enabled on GMU */
+	ADRENO_DEVICE_FAST_CONTEXT_DESTROY = 20,
 };
 
 /**
@@ -1409,9 +1423,11 @@ ADRENO_TARGET(gen8_2_0, ADRENO_REV_GEN8_2_0)
 ADRENO_TARGET(gen8_2_1, ADRENO_REV_GEN8_2_1)
 ADRENO_TARGET(gen8_3_0, ADRENO_REV_GEN8_3_0)
 ADRENO_TARGET(gen8_4_0, ADRENO_REV_GEN8_4_0)
+ADRENO_TARGET(gen8_5_0, ADRENO_REV_GEN8_5_0)
 ADRENO_TARGET(gen8_6_0, ADRENO_REV_GEN8_6_0)
 ADRENO_TARGET(gen8_8_0, ADRENO_REV_GEN8_8_0)
 ADRENO_TARGET(gen8_9_0, ADRENO_REV_GEN8_9_0)
+ADRENO_TARGET(gen8_11_0, ADRENO_REV_GEN8_11_0)
 
 static inline int adreno_is_gen7_9_x(struct adreno_device *adreno_dev)
 {
@@ -1440,7 +1456,7 @@ static inline int adreno_is_gen7_2_x_family(struct adreno_device *adreno_dev)
 static inline int adreno_is_gen8_2_x(struct adreno_device *adreno_dev)
 {
 	return adreno_is_gen8_2_0(adreno_dev) || adreno_is_gen8_2_1(adreno_dev) ||
-		adreno_is_gen8_9_0(adreno_dev);
+		adreno_is_gen8_5_0(adreno_dev) || adreno_is_gen8_9_0(adreno_dev);
 }
 
 static inline int adreno_is_gen8_0_x_family(struct adreno_device *adreno_dev)
@@ -1743,6 +1759,18 @@ static inline bool adreno_is_preemption_enabled(
 				struct adreno_device *adreno_dev)
 {
 	return test_bit(ADRENO_DEVICE_PREEMPTION, &adreno_dev->priv);
+}
+
+/**
+ * adreno_is_fast_context_destroy_enabled() - Check whether the GMU fast context
+ * destroy optimization is statically enabled and if the GMU supports the
+ * capability.
+ * @adreno_dev: Pointer to the adreno_device struct
+ */
+static inline bool adreno_is_fast_context_destroy_enabled(
+				struct adreno_device *adreno_dev)
+{
+	return test_bit(ADRENO_DEVICE_FAST_CONTEXT_DESTROY, &adreno_dev->priv);
 }
 
 

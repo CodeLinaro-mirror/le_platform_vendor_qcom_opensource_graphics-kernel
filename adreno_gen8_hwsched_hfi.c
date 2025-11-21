@@ -16,6 +16,7 @@
 #include "kgsl_eventlog.h"
 #include "kgsl_gmu_core.h"
 #include "kgsl_pwrctrl.h"
+#include "kgsl_timeline.h"
 #include "kgsl_util.h"
 
 #define HFI_QUEUE_MAX (HFI_QUEUE_DEFAULT_CNT)
@@ -616,8 +617,7 @@ static void set_fence_signal_bit(struct adreno_device *adreno_dev,
 	char name[KGSL_FENCE_NAME_LEN];
 	char value[32] = "unknown";
 
-	if (fence->ops->timeline_value_str)
-		fence->ops->timeline_value_str(fence, value, sizeof(value));
+	kgsl_fence_timeline_value_str(fence, value, sizeof(value));
 
 	if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags)) {
 		dev_err(GMU_PDEV_DEV(KGSL_DEVICE(adreno_dev)),
@@ -1762,6 +1762,28 @@ static int gen8_hfi_send_soft_reset_feature_ctrl(struct adreno_device *adreno_de
 	return gen8_hfi_send_feature_ctrl(adreno_dev, HFI_FEATURE_SOFT_RESET, 1, 0);
 }
 
+static int gen8_hfi_send_fast_context_destroy_feature_ctrl(struct adreno_device *adreno_dev)
+{
+	int ret;
+
+	if (!ADRENO_FEATURE(adreno_dev, ADRENO_GMU_FAST_CONTEXT_DESTROY))
+		return 0;
+
+	if (!gmu_core_capabilities_enabled(&KGSL_DEVICE(adreno_dev)->gmu_core.platform_caps,
+					   FAC_FAST_CONTEXT_DESTROY))
+		return 0;
+
+	/*
+	 * Enable the fast context destroy optimization if requested by the static
+	 * feature flag and if the capability is supported by the GMU.
+	 */
+	ret = gen8_hfi_send_feature_ctrl(adreno_dev, HFI_FEATURE_FAST_CONTEXT_DESTROY, 1, 0);
+	if (!ret)
+		set_bit(ADRENO_DEVICE_FAST_CONTEXT_DESTROY, &adreno_dev->priv);
+
+	return ret;
+}
+
 static void gen8_spin_idle_debug_lpac(struct adreno_device *adreno_dev,
 				const char *str)
 {
@@ -2263,13 +2285,32 @@ static void warmboot_init_message_record_bitmask(struct adreno_device *adreno_de
 static int gen8_hfi_send_thermal_feature_ctrl(struct adreno_device *adreno_dev)
 {
 	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
-	const struct hfi_therm_profile_ctrl *therm = gen8_core->therm_profile;
+	struct hfi_therm_profile_ctrl *therm;
+	const struct therm_tsens_en_cfg *tsens_en_cfg;
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	static struct hfi_thermaltable_cmd cmd = {0};
+	u32 tsens_en_bits;
 	int ret;
 
-	if (!test_bit(GMU_THERMAL_MITIGATION, &device->gmu_core.flags) || !therm)
+	if (!test_bit(GMU_THERMAL_MITIGATION, &device->gmu_core.flags) ||
+	    !gen8_core->therm_cfg || !gen8_core->therm_cfg->therm ||
+	    !gen8_core->therm_cfg->tsens_en_cfg)
 		return 0;
+
+	therm = gen8_core->therm_cfg->therm;
+	tsens_en_cfg = gen8_core->therm_cfg->tsens_en_cfg;
+
+	tsens_en_bits = (tsens_en_cfg->tsens_sl_cnt *
+				gen8_get_num_slices(adreno_dev)) + tsens_en_cfg->tsens_us_cnt;
+
+	/* Maximum temperature sensors supported */
+	if (tsens_en_bits >= 32) {
+		dev_crit_ratelimited(device->dev,
+				"Invalid temperature sensor count %u\n", tsens_en_bits);
+		return -EINVAL;
+	}
+	/* Set a bit for each temperature sensor */
+	therm->tsens_en = BIT(tsens_en_bits) - 1;
 
 	ret = gen8_hfi_send_feature_ctrl(adreno_dev, HFI_FEATURE_THERMAL, 1, 0);
 	if (ret)
@@ -2391,7 +2432,7 @@ static int gen8_hwsched_build_dcvs_table(struct adreno_device *adreno_dev)
 	return 0;
 }
 
-static u32 gen8_hwsched_build_gmu_scaling_table(struct adreno_device *adreno_dev)
+static int gen8_hwsched_build_gmu_scaling_table(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct gmu_core_device *gmu_core = &device->gmu_core;
@@ -2407,11 +2448,8 @@ static u32 gen8_hwsched_build_gmu_scaling_table(struct adreno_device *adreno_dev
 	u32 size_table_dwords = (sizeof(*cmd) >> 2) + size_first_entry_dwords +
 				size_second_entry_dwords;
 
-	/*
-	 * Return early if the scaling table is already generated or if the ddr threshold
-	 * to scale is not set for the target
-	 */
-	if (gmu->gmu_scaling_cmdbuf || !gmu_core->perf_ddr_bw[0])
+	/* Return early if the scaling table is already generated */
+	if (gmu->gmu_scaling_cmdbuf)
 		return 0;
 
 	/*
@@ -2494,6 +2532,7 @@ static int gen8_hfi_send_gmu_dcvs_req(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
+	struct gmu_core_device *gmu_core = &device->gmu_core;
 	struct hfi_table_cmd *cmd;
 	int ret;
 
@@ -2515,6 +2554,10 @@ static int gen8_hfi_send_gmu_dcvs_req(struct adreno_device *adreno_dev)
 	if (ret)
 		return ret;
 
+	/* Do not scale gmu if perf_ddr_bw is not configured */
+	if (!gmu_core->perf_ddr_bw[0])
+		return 0;
+
 	ret = gen8_hwsched_build_gmu_scaling_table(adreno_dev);
 	if (ret)
 		return ret;
@@ -2523,51 +2566,10 @@ static int gen8_hfi_send_gmu_dcvs_req(struct adreno_device *adreno_dev)
 	return gen8_hfi_send_generic_req(adreno_dev, cmd, MSG_HDR_GET_SIZE(cmd->hdr) << 2);
 }
 
-int gen8_hwsched_hfi_start(struct adreno_device *adreno_dev)
+static int gen8_hwsched_feature_ctrl(struct adreno_device *adreno_dev)
 {
-	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
-	struct gmu_core_device *gmu_core = &device->gmu_core;
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
-	struct pending_cmd ack = {0};
 	int ret;
-
-	reset_hfi_queues(adreno_dev);
-
-	ret = gen8_gmu_hfi_start(adreno_dev);
-	if (ret)
-		goto err;
-
-	if (gen8_hwsched_warmboot_possible(adreno_dev))
-		return gen8_hwsched_warmboot_init_gmu(adreno_dev);
-
-	if (ADRENO_FEATURE(adreno_dev, ADRENO_GMU_WARMBOOT) &&
-		(!test_bit(GMU_PRIV_FIRST_BOOT_DONE, &gmu->flags))) {
-		if (gen8_hfi_send_get_value(adreno_dev, HFI_VALUE_GMU_WARMBOOT, 0) == 1)
-			gmu_core->warmboot_enabled = true;
-	}
-
-	warmboot_init_message_record_bitmask(adreno_dev);
-
-	/* Reset the variable here and set it when we successfully record the scratch */
-	clear_bit(GMU_PRIV_WARMBOOT_GMU_INIT_DONE, &gmu->flags);
-	clear_bit(GMU_PRIV_WARMBOOT_GPU_BOOT_DONE, &gmu->flags);
-
-	ret = gen8_hwsched_hfi_send_warmboot_cmd(adreno_dev, gmu->gmu_init_scratch,
-		HFI_WARMBOOT_SET_SCRATCH, false, &ack);
-	if (ret)
-		goto err;
-
-	ret = gen8_hfi_send_gpu_perf_table(adreno_dev);
-	if (ret)
-		goto err;
-
-	ret = gen8_hfi_send_generic_req(adreno_dev, &gmu->hfi.bw_table, sizeof(gmu->hfi.bw_table));
-	if (ret)
-		goto err;
-
-	ret = gen8_hfi_send_gmu_dcvs_req(adreno_dev);
-	if (ret)
-		goto err;
 
 	ret = gen8_hfi_send_acd_feature_ctrl(adreno_dev);
 	if (ret)
@@ -2656,11 +2658,69 @@ int gen8_hwsched_hfi_start(struct adreno_device *adreno_dev)
 	if (ret)
 		goto err;
 
+	ret = gen8_hfi_send_fast_context_destroy_feature_ctrl(adreno_dev);
+	if (ret)
+		goto err;
+
 	if (adreno_dev->dcvs_profile_enabled) {
 		ret = gen8_hfi_send_feature_ctrl(adreno_dev, HFI_FEATURE_DCVS_PROFILE, 1, 0);
 		if (ret)
 			goto err;
 	}
+
+err:
+	return ret;
+}
+
+int gen8_hwsched_hfi_start(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct gmu_core_device *gmu_core = &device->gmu_core;
+	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
+	struct pending_cmd ack = {0};
+	int ret;
+
+	reset_hfi_queues(adreno_dev);
+
+	ret = gen8_gmu_hfi_start(adreno_dev);
+	if (ret)
+		goto err;
+
+	if (gen8_hwsched_warmboot_possible(adreno_dev))
+		return gen8_hwsched_warmboot_init_gmu(adreno_dev);
+
+	if (ADRENO_FEATURE(adreno_dev, ADRENO_GMU_WARMBOOT) &&
+		(!test_bit(GMU_PRIV_FIRST_BOOT_DONE, &gmu->flags))) {
+		if (gen8_hfi_send_get_value(adreno_dev, HFI_VALUE_GMU_WARMBOOT, 0) == 1)
+			gmu_core->warmboot_enabled = true;
+	}
+
+	warmboot_init_message_record_bitmask(adreno_dev);
+
+	/* Reset the variable here and set it when we successfully record the scratch */
+	clear_bit(GMU_PRIV_WARMBOOT_GMU_INIT_DONE, &gmu->flags);
+	clear_bit(GMU_PRIV_WARMBOOT_GPU_BOOT_DONE, &gmu->flags);
+
+	ret = gen8_hwsched_hfi_send_warmboot_cmd(adreno_dev, gmu->gmu_init_scratch,
+		HFI_WARMBOOT_SET_SCRATCH, false, &ack);
+	if (ret)
+		goto err;
+
+	ret = gen8_hfi_send_gpu_perf_table(adreno_dev);
+	if (ret)
+		goto err;
+
+	ret = gen8_hfi_send_generic_req(adreno_dev, &gmu->hfi.bw_table, sizeof(gmu->hfi.bw_table));
+	if (ret)
+		goto err;
+
+	ret = gen8_hfi_send_gmu_dcvs_req(adreno_dev);
+	if (ret)
+		goto err;
+
+	ret = gen8_hwsched_feature_ctrl(adreno_dev);
+	if (ret)
+		goto err;
 
 	ret = send_start_msg(adreno_dev);
 	if (ret)
@@ -2881,7 +2941,7 @@ static void gen8_hwsched_hw_fence_timeout(struct work_struct *work)
 
 static void gen8_hwsched_hw_fence_timer(struct timer_list *t)
 {
-	struct gen8_hwsched_hfi *hfi = from_timer(hfi, t, hw_fence_timer);
+	struct gen8_hwsched_hfi *hfi = kgsl_timer_container_of(hfi, t, hw_fence_timer);
 
 	kgsl_schedule_work(&hfi->hw_fence_ws);
 }
@@ -3139,6 +3199,24 @@ static u32 get_irq_bit(struct adreno_device *adreno_dev, struct kgsl_context *co
 	return 0;
 }
 
+static bool _is_kgsl_hw_fence_signaled(struct kgsl_drawobj_sync_hw_fence *hw_fence)
+{
+	struct kgsl_sync_fence *kfence = (struct kgsl_sync_fence *)hw_fence->fence;
+	struct kgsl_sync_timeline *ktimeline = kfence->parent;
+
+	if (dma_fence_is_signaled_locked(&kfence->fence))
+		return true;
+
+	/*
+	 * If we fail to get the context refcount that means this context is detached.
+	 * In that case, treat all hardware fences from detached context as signaled.
+	 */
+	if ((!hw_fence->context) && (!_kgsl_context_get(ktimeline->context)))
+		return true;
+
+	return false;
+}
+
 static void populate_kgsl_fence(struct kgsl_drawobj_sync_hw_fence *hw_fence,
 	struct hfi_syncobj *obj)
 {
@@ -3150,7 +3228,7 @@ static void populate_kgsl_fence(struct kgsl_drawobj_sync_hw_fence *hw_fence,
 
 	spin_lock_irqsave(&ktimeline->lock, flags);
 
-	if (dma_fence_is_signaled_locked(&kfence->fence) || !_kgsl_context_get(ktimeline->context))
+	if (_is_kgsl_hw_fence_signaled(hw_fence))
 		obj->flags |= BIT(GMU_SYNCOBJ_FLAG_SIGNALED_BIT);
 	else
 		hw_fence->context = ktimeline->context;
@@ -3468,8 +3546,6 @@ static struct adreno_hw_fence_entry *allocate_hw_fence_entry(struct adreno_devic
 		return NULL;
 	}
 
-	dma_fence_get(&kfence->fence);
-
 	drawctxt->hw_fence_count++;
 	hwsched->hw_fence.pending_count++;
 
@@ -3638,7 +3714,6 @@ void gen8_hwsched_create_hw_fence(struct adreno_device *adreno_dev,
 			dev_err(GMU_PDEV_DEV(device),
 				"hw fence for ctx:%d ts:%d ret:%d may not be destroyed\n",
 				kfence->context_id, kfence->timestamp, ret);
-		kgsl_hw_fence_destroy(kfence);
 		destroy = true;
 		drawctxt->hw_fence_last_ts = hw_fence_last_ts;
 		goto done;
@@ -3948,10 +4023,35 @@ static void drain_context_hw_fence_cpu(struct adreno_device *adreno_dev,
 	gen8_hwsched_soccp_vote(adreno_dev, false);
 }
 
+/*
+ * destroy_detached_context_inflight_hw_fences - Destroy context's hardware fences that were
+ * dispatched to GMU
+ */
+static void destroy_detached_context_inflight_hw_fences(struct adreno_device *adreno_dev,
+	struct adreno_context *drawctxt)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct adreno_hw_fence_entry *entry, *tmp;
+
+	/* We don't need the drawctxt lock because this context has been detached */
+	list_for_each_entry_safe(entry, tmp, &drawctxt->hw_fence_inflight_list, node) {
+		struct gmu_context_queue_header *hdr =  drawctxt->gmu_context_queue.hostptr;
+
+		if ((timestamp_cmp((u32)entry->cmd.ts, hdr->out_fence_ts) > 0)) {
+			dev_err_ratelimited(GMU_PDEV_DEV(device),
+				"destroying detached ctx:%d unsignaled hw fence ts:%d retired:%d\n",
+				drawctxt->base.id, (u32)entry->cmd.ts, hdr->out_fence_ts);
+		}
+		adreno_hwsched_remove_hw_fence_entry(adreno_dev, entry);
+	}
+}
+
 static void drain_context_hw_fences(struct adreno_device *adreno_dev,
 	struct adreno_context *drawctxt)
 {
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
+
+	destroy_detached_context_inflight_hw_fences(adreno_dev, drawctxt);
 
 	if (list_empty(&drawctxt->hw_fence_list))
 		return;
@@ -4052,7 +4152,7 @@ static int send_context_unregister_hfi(struct adreno_device *adreno_dev,
 	}
 
 	ret = adreno_hwsched_ctxt_unregister_wait_completion(adreno_dev,
-			gmu_pdev_dev, &pending_ack,
+			gmu_pdev_dev, context, &pending_ack,
 			gen8_hwsched_process_msgq, &cmd);
 	if (ret) {
 		trigger_context_unregister_fault(adreno_dev, drawctxt);
@@ -4095,6 +4195,11 @@ void gen8_hwsched_context_detach(struct adreno_context *drawctxt)
 	context->gmu_registered = false;
 
 out:
+	WARN_RATELIMIT(!list_empty(&drawctxt->hw_fence_list) ||
+		!list_empty(&drawctxt->hw_fence_inflight_list),
+		"detached ctx:%u has active hw fences\n",
+		context->id);
+
 	kgsl_mutex_unlock(&device->mutex);
 }
 

@@ -640,6 +640,9 @@ static int kgsl_of_parse_mempool(struct kgsl_page_pool *pool,
 	if (of_property_read_u32(node, "qcom,mempool-page-size", &size))
 		return -EINVAL;
 
+	if (size < PAGE_SIZE)
+		return -EINVAL;
+
 	order = get_order(size);
 
 	if (order > 8) {

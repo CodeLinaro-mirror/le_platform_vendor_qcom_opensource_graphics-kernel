@@ -679,6 +679,7 @@ static int gen8_preemption_ringbuffer_init(struct adreno_device *adreno_dev,
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	u64 ctxt_record_size = adreno_dev->total_ctxt_record_sz;
+	u64 curr_gmem_size = adreno_gmem_size(adreno_dev);
 	int ret;
 
 	/*
@@ -686,7 +687,7 @@ static int gen8_preemption_ringbuffer_init(struct adreno_device *adreno_dev,
 	 * save/restore GMEM data for RB0.
 	 */
 	if (rb->id == 0)
-		ctxt_record_size -= adreno_dev->gpucore->gmem_size;
+		ctxt_record_size -= curr_gmem_size;
 
 	ret = adreno_allocate_global(device, &rb->preemption_desc,
 		ctxt_record_size, SZ_16K, 0,

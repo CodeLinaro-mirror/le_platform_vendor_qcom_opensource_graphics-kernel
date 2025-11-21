@@ -596,6 +596,8 @@ static int a6xx_hwsched_first_boot(struct adreno_device *adreno_dev)
 
 	device->pwrctrl.last_stat_updated = ktime_get();
 
+	set_bit(ADRENO_DEVICE_FIRST_BOOT_DONE, &adreno_dev->priv);
+
 	kgsl_pwrctrl_set_state(device, KGSL_STATE_ACTIVE);
 
 	return 0;
@@ -838,7 +840,7 @@ static int a6xx_hwsched_pm_suspend(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct a6xx_gmu_device *gmu = to_a6xx_gmu(adreno_dev);
-	int ret;
+	int ret, active_count;
 
 	if (test_bit(GMU_PRIV_PM_SUSPEND, &gmu->flags))
 		return 0;
@@ -848,6 +850,16 @@ static int a6xx_hwsched_pm_suspend(struct adreno_device *adreno_dev)
 	ret = adreno_hwsched_drain_and_idle(adreno_dev);
 	if (ret)
 		goto err;
+
+	active_count = atomic_read(&device->active_cnt);
+
+	if (active_count > 0) {
+		ret = -ETIMEDOUT;
+		dev_err_ratelimited(GMU_PDEV_DEV(device),
+			"Aborting suspend because of active count:%d\n",
+			active_count);
+		goto err;
+	}
 
 	a6xx_hwsched_power_off(adreno_dev);
 

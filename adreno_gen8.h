@@ -18,6 +18,7 @@
 #define GEN8_3_0_NUM_PHYSICAL_SLICES	1
 #define GEN8_6_0_NUM_PHYSICAL_SLICES	2
 #define GEN8_9_0_NUM_PHYSICAL_SLICES	2
+#define GEN8_11_0_NUM_PHYSICAL_SLICES	3
 
 #define GET_SLICE_MASK(num_slices, value) FIELD_GET(GENMASK(num_slices, 0), (value))
 
@@ -134,6 +135,26 @@ struct gen8_limits_mit_cfg {
 };
 
 /**
+ * struct therm_tsens_en_cfg - Container for thermal tsense configuration
+ */
+struct therm_tsens_en_cfg {
+	/** @tsens_sl_cnt: Temperature sensor count per GPU slice */
+	u32 tsens_sl_cnt;
+	/** @tsens_us_cnt: Temperature sensor count per GPU unslice */
+	u32 tsens_us_cnt;
+};
+
+/**
+ * struct gen8_thermal_mit_cfg - Container for GPU thermal mitigation configuration
+ */
+struct gen8_thermal_mit_cfg {
+	/** @therm: Config for GPU thermal mitigation features */
+	struct hfi_therm_profile_ctrl *therm;
+	/** @tsens_en_cfg: Config for GPU thermal mitigation features */
+	const struct therm_tsens_en_cfg *tsens_en_cfg;
+};
+
+/**
  * struct adreno_gen8_core - gen8 specific GPU core definitions
  */
 struct adreno_gen8_core {
@@ -195,11 +216,15 @@ struct adreno_gen8_core {
 	/** @cl_no_ft_timeout_ms: Use this timeout for CL NO_FT instead of infinite */
 	u32 cl_no_ft_timeout_ms;
 	/** @therm_profile: GMU thermal mitigation profile */
-	const struct hfi_therm_profile_ctrl *therm_profile;
+	struct gen8_thermal_mit_cfg *therm_cfg;
 	/** @limits_mit_cfg: GPU limits mitigation configuration */
 	const struct gen8_limits_mit_cfg *limits_mit_cfg;
 	/** @clx_tbl: GPU CLX table */
 	const struct hfi_clx_table_v2_cmd *clx_tbl;
+	/** @gmu_mx_gdsc: This target has separate MX GDSC for the GMU */
+	bool gmu_mx_gdsc;
+	/** @three_rail_memory: This target has BX rail in addition to GX and MX */
+	bool three_rail_memory;
 };
 
 /**
@@ -754,5 +779,15 @@ static inline void gen8_populate_ctxt_record_size(struct adreno_device *adreno_d
 	adreno_dev->total_ctxt_record_sz = PAGE_ALIGN(adreno_dev->total_ctxt_record_sz);
 	adreno_dev->aqe_ctxt_record_sz = PAGE_ALIGN(adreno_dev->aqe_ctxt_record_sz);
 }
+
+/**
+ * gen8_setup_adreno_props - Set up adreno property values for future queries
+ * @adreno_dev: Handle to the adreno device
+ *
+ * This function sets up several adreno property values so that they can later
+ * be queried from userspace. This setup is performed at GPU first boot and,
+ * depending on the target, may involve reading some GPU registers.
+ */
+void gen8_setup_adreno_props(struct adreno_device *adreno_dev);
 
 #endif

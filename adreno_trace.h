@@ -1071,6 +1071,71 @@ TRACE_EVENT(adreno_gpu_vote_params,
 	)
 );
 
+TRACE_EVENT(adreno_gpu_dcvs_profile,
+	TP_PROTO(const struct trace_dcvs_profile *prof, u64 ticks),
+	TP_ARGS(prof, ticks),
+	TP_STRUCT__entry(
+		__field(u32, action)
+		__field(u32, profile)
+		__field(u64, ticks)
+		__field(int, min_gpu_freq)
+		__field(int, max_gpu_freq)
+		__field(int, target_fps)
+		__field(int, penalty_up)
+		__field(int, penalty_down)
+		__field(int, first_step_down_count)
+		__field(int, subsequent_step_down_count)
+		__field(int, num_samples_up)
+		__field(int, num_samples_down)
+		__field(int, strict_frame)
+		__field(int, non_linear_ramp_up)
+		__field(int, non_linear_ramp_down)
+		__field(int, min_bus_freq)
+		__field(int, max_bus_freq)
+	),
+	TP_fast_assign(
+		__entry->action = prof->action;
+		__entry->profile = prof->profile;
+		__entry->ticks = ticks;
+		__entry->min_gpu_freq = prof->attrs.min_gpu_freq;
+		__entry->max_gpu_freq = prof->attrs.max_gpu_freq;
+		__entry->target_fps = prof->attrs.target_fps;
+		__entry->penalty_up = prof->attrs.penalty_up;
+		__entry->penalty_down = prof->attrs.penalty_down;
+		__entry->first_step_down_count = prof->attrs.first_step_down_count;
+		__entry->subsequent_step_down_count = prof->attrs.subsequent_step_down_count;
+		__entry->num_samples_up = prof->attrs.num_samples_up;
+		__entry->num_samples_down = prof->attrs.num_samples_down;
+		__entry->strict_frame = prof->attrs.strict_frame;
+		__entry->non_linear_ramp_up = prof->attrs.non_linear_ramp_up;
+		__entry->non_linear_ramp_down = prof->attrs.non_linear_ramp_down;
+		__entry->min_bus_freq = prof->attrs.min_bus_freq;
+		__entry->max_bus_freq = prof->attrs.max_bus_freq;
+	),
+	TP_printk("action=%s profile=0x%x ticks=%llu min_gpu_freq=%d max_gpu_freq=%d target_fps=%d penalty_up=%d penalty_down=%d first_step_down_count=%d subsequent_step_down_count=%d num_samples_up=%d num_samples_down=%d strict_frame=%d non_linear_ramp_up=%d non_linear_ramp_down=%d min_bus_freq=%d max_bus_freq=%d",
+		__print_symbolic(__entry->action,
+			{ GMU_DCVS_PROFILE_REGISTER, "REGISTER" },
+			{ GMU_DCVS_PROFILE_ACTIVATE, "ACTIVATE" },
+			{ GMU_DCVS_PROFILE_DEACTIVATE, "DEACTIVATE" }),
+		__entry->profile,
+		__entry->ticks,
+		__entry->min_gpu_freq,
+		__entry->max_gpu_freq,
+		__entry->target_fps,
+		__entry->penalty_up,
+		__entry->penalty_down,
+		__entry->first_step_down_count,
+		__entry->subsequent_step_down_count,
+		__entry->num_samples_up,
+		__entry->num_samples_down,
+		__entry->strict_frame,
+		__entry->non_linear_ramp_up,
+		__entry->non_linear_ramp_down,
+		__entry->min_bus_freq,
+		__entry->max_bus_freq
+	)
+);
+
 #endif /* _ADRENO_TRACE_H */
 
 /* This part must be outside protection */

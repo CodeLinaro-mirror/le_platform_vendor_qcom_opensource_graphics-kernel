@@ -27,7 +27,7 @@ static size_t gen8_gmu_snapshot_dtcm(struct kgsl_device *device,
 		return 0;
 	}
 
-	mem_hdr->type = SNAPSHOT_GMU_MEM_BIN_BLOCK;
+	mem_hdr->type = SNAPSHOT_GMU_MEM_DTCM;
 	mem_hdr->hostaddr = 0;
 	mem_hdr->gmuaddr = gmu_core->vma[GMU_DTCM].start;
 	mem_hdr->gpuaddr = 0;
@@ -67,7 +67,7 @@ static size_t gen8_gmu_snapshot_itcm(struct kgsl_device *device,
 		return 0;
 	}
 
-	mem_hdr->type = SNAPSHOT_GMU_MEM_BIN_BLOCK;
+	mem_hdr->type = SNAPSHOT_GMU_MEM_ITCM;
 	mem_hdr->hostaddr = 0;
 	mem_hdr->gmuaddr = gmu_core->vma[GMU_ITCM].start;
 	mem_hdr->gpuaddr = 0;

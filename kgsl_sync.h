@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2012-2014,2018-2019, 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __KGSL_SYNC_H
 #define __KGSL_SYNC_H
@@ -35,6 +35,14 @@ struct kgsl_sync_timeline {
 	struct kgsl_context *context;
 };
 
+/*
+ * Set this flag for a kgsl hardware fence to indicate that the hardware fence refcount for
+ * this fence is incremented if the corresponding dma fence is not signaled at the time of
+ * creation of this hardware fence. This hardware fence refcount is put back when the
+ * corresponding dma fence is signaled.
+ */
+#define KGSL_FENCE_FLAG_SIGNAL_REFCOUNT 0
+
 /**
  * struct kgsl_sync_fence - A struct containing a fence and other data
  *				associated with it
@@ -56,6 +64,13 @@ struct kgsl_sync_fence {
 	u64 hw_fence_index;
 	/** @hw_fence_list: Global list of hw fences */
 	struct list_head hw_fence_list;
+	/**
+	 * @hw_refcount: Refcount to release the hw fence handle when hardware has signaled
+	 * this fence and the sw dma fence has also been signaled
+	 */
+	struct kref hw_refcount;
+	/** @flags: kgsl sync fence specific flags */
+	unsigned long flags;
 };
 
 /**
@@ -89,6 +104,8 @@ int kgsl_sync_timeline_create(struct kgsl_context *context);
 void kgsl_sync_timeline_detach(struct kgsl_sync_timeline *ktimeline);
 
 void kgsl_sync_timeline_put(struct kgsl_sync_timeline *ktimeline);
+
+void kgsl_sync_timeline_value_str(struct dma_fence *fence, char *str, int size);
 
 struct kgsl_sync_fence_cb *kgsl_sync_fence_async_wait(int fd, bool (*func)(void *priv), void *priv);
 
@@ -127,7 +144,7 @@ int kgsl_hw_fence_add_waiter(struct kgsl_device *device, struct dma_fence *fence
 
 bool kgsl_hw_fence_tx_slot_available(struct kgsl_device *device, u32 pending_hw_fence_count);
 
-void kgsl_hw_fence_destroy(struct kgsl_sync_fence *kfence);
+void kgsl_hw_fence_put(struct kgsl_sync_fence *kfence);
 
 void kgsl_hw_fence_trigger_cpu(struct kgsl_device *device, struct kgsl_sync_fence *kfence);
 
@@ -260,7 +277,7 @@ bool kgsl_hw_fence_tx_slot_available(struct kgsl_device *device, u32 pending_hw_
 	return false;
 }
 
-void kgsl_hw_fence_destroy(struct kgsl_sync_fence *kfence)
+void kgsl_hw_fence_put(struct kgsl_sync_fence *kfence)
 {
 
 }

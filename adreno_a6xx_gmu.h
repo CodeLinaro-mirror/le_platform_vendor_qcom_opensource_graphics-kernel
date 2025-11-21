@@ -7,6 +7,7 @@
 #define __ADRENO_A6XX_GMU_H
 
 #include <linux/mailbox_client.h>
+#include <linux/soc/qcom/qcom_aoss.h>
 
 #include "adreno_a6xx_hfi.h"
 #include "kgsl_gmu_core.h"
@@ -29,6 +30,8 @@ struct a6xx_gmu_device {
 	struct kgsl_memdesc *gmu_log;
 	struct a6xx_hfi hfi;
 	unsigned int idle_level;
+	/** @qmp: Pointer to qmp struct used for AOP messages*/
+	struct qmp *qmp;
 	struct kgsl_mailbox mailbox;
 	bool preallocations;
 	unsigned int log_wptr_retention;
@@ -177,7 +180,7 @@ int a6xx_gmu_memory_init(struct adreno_device *adreno_dev);
  * @gmu: Pointer to the a6xx gmu device
  * @flag: Boolean to enable or disable acd in aop
  *
- * This function enables or disables gpu acd feature using mailbox
+ * This function enables or disables gpu acd feature using mailbox or qmp
  */
 void a6xx_gmu_aop_send_acd_state(struct a6xx_gmu_device *gmu, bool flag);
 

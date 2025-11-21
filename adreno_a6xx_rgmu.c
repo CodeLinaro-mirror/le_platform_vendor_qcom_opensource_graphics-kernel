@@ -975,6 +975,8 @@ static int a6xx_first_boot(struct adreno_device *adreno_dev)
 
 	device->pwrctrl.last_stat_updated = ktime_get();
 
+	set_bit(ADRENO_DEVICE_FIRST_BOOT_DONE, &adreno_dev->priv);
+
 	kgsl_pwrctrl_set_state(device, KGSL_STATE_ACTIVE);
 
 	return 0;

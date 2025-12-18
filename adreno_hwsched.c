@@ -45,11 +45,6 @@ static struct kmem_cache *jobs_cache;
 /* Use a kmem cache to speed up allocations for inflight command objects */
 static struct kmem_cache *obj_cache;
 
-inline bool adreno_hwsched_context_queue_enabled(struct adreno_device *adreno_dev)
-{
-	return test_bit(ADRENO_HWSCHED_CONTEXT_QUEUE, &adreno_dev->hwsched.flags);
-}
-
 static inline u32 get_gmu_vma_id(u32 flags)
 {
 	return (flags & HFI_MEMFLAG_GMU_CACHEABLE) ? GMU_CACHE : GMU_NONCACHED_KERNEL;

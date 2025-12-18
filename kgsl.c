@@ -1260,7 +1260,6 @@ static struct kgsl_process_private *kgsl_process_private_new(
 
 	/* Allocate profile memory for gmu based DCVS targets */
 	device->ftbl->alloc_dcvs_profile_memory(device, private);
-	mutex_init(&private->profile.profile_mutex);
 	kgsl_process_init_sysfs(device, private);
 	kgsl_process_init_debugfs(private);
 	write_lock(&kgsl_driver.proclist_lock);

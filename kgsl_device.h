@@ -529,13 +529,11 @@ struct kgsl_context {
  * @gmu_registered: True if DCVS profile is registered with GMU
  * @user_profile_registered: True if user DCVS IOCTL profile is received
  * @md: Memory descriptor for the DCVS profile region
- * @profile_mutex: Mutex lock to protect kgsl_dcvs_profile_private
  */
 struct kgsl_dcvs_profile_private {
 	bool gmu_registered;
 	bool user_profile_registered;
 	struct kgsl_memdesc md;
-	struct mutex profile_mutex;
 };
 
 /* Process state flags */

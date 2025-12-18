@@ -360,4 +360,12 @@ int gen8_gmu_add_to_minidump(struct adreno_device *adreno_dev);
  * Returns true on active or false otherwise
  */
 bool gen8_gmu_rpmh_pwr_state_is_active(struct kgsl_device *device);
+
+/**
+ * gen8_gmu_trigger_mx_voltage_change - Trigger MX voltage change
+ * @adreno_dev: Pointer to the adreno device
+ *
+ * Returns: 0 on success or negative error on failure
+ */
+int gen8_gmu_trigger_mx_voltage_change(struct adreno_device *adreno_dev);
 #endif

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef _ADRENO_GEN7_HWSCHED_HFI_H_
@@ -70,6 +70,8 @@ struct gen7_hwsched_hfi {
 	struct list_head detached_hw_fence_list;
 	/** @defer_hw_fence_work: The work structure to send deferred hardware fences to GMU */
 	struct kthread_work defer_hw_fence_work;
+	/** @context_queue_enabled: Flag to check if context queues are enabled */
+	bool context_queue_enabled;
 };
 
 struct kgsl_drawobj_cmd;

@@ -482,7 +482,7 @@ static size_t gen8_snapshot_shader_memory(struct kgsl_device *device,
 	header->usptp = info->usptp;
 	header->pipe_id = block->pipeid;
 	header->location = block->location;
-	header->ctxt_id = 1;
+	header->ctxt_id = info->context_id;
 	header->size = block->size;
 
 	memcpy(data, gen8_crashdump_registers->hostptr + info->offset,

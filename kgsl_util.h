@@ -158,6 +158,17 @@ int kgsl_clk_set_rate(struct clk_bulk_data *clks, int num_clks,
 		const char *id, unsigned long rate);
 
 /**
+ * kgsl_clk_get_rate - Get current clock rate in Hz of given clock
+ * @clks: Pointer to an array of bulk clk data
+ * @count: Number of entries in the array
+ * @id: Name of the clock to search for
+ *
+ * Return: clock rate of the given clock
+ */
+unsigned long kgsl_clk_get_rate(struct clk_bulk_data *clks, int num_clks,
+		const char *id);
+
+/**
  * kgsl_scm_gpu_init_regs - Load secure registers through tz
  * @dev: Pointer to the GPU platform device
  * @gpu_req: Bit mask of requests to enable

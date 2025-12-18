@@ -1783,13 +1783,22 @@ done:
 	return pending_ack.results[2];
 }
 
+bool gen7_hwsched_context_queue_enabled(struct adreno_device *adreno_dev)
+{
+	struct gen7_hwsched_hfi *hwsched_hfi = to_gen7_hwsched_hfi(adreno_dev);
+
+	return hwsched_hfi->context_queue_enabled;
+}
+
 static void _context_queue_hw_fence_enable(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
 	if (GMU_VER_MINOR(device->gmu_core.ver.hfi) >= 3) {
 		if (gen7_hfi_send_get_value(adreno_dev, HFI_VALUE_CONTEXT_QUEUE, 0) == 1) {
-			set_bit(ADRENO_HWSCHED_CONTEXT_QUEUE, &adreno_dev->hwsched.flags);
+			struct gen7_hwsched_hfi *hwsched_hfi = to_gen7_hwsched_hfi(adreno_dev);
+
+			hwsched_hfi->context_queue_enabled = true;
 			adreno_hwsched_register_hw_fence(adreno_dev);
 		}
 	}
@@ -2534,7 +2543,7 @@ static int allocate_context_queues(struct adreno_device *adreno_dev,
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	int ret = 0;
 
-	if (!adreno_hwsched_context_queue_enabled(adreno_dev))
+	if (!gen7_hwsched_context_queue_enabled(adreno_dev))
 		return 0;
 
 	if (test_bit(ADRENO_HWSCHED_HW_FENCE, &adreno_dev->hwsched.flags) &&
@@ -2620,7 +2629,7 @@ static int send_context_pointers(struct adreno_device *adreno_dev,
 		cmd.user_ctxt_record_addr =
 			context->user_ctxt_record->memdesc.gpuaddr;
 
-	if (adreno_hwsched_context_queue_enabled(adreno_dev))
+	if (gen7_hwsched_context_queue_enabled(adreno_dev))
 		cmd.gmu_context_queue_addr = drawctxt->gmu_context_queue.gmuaddr;
 
 	return gen7_hfi_send_cmd_async(adreno_dev, &cmd, sizeof(cmd));
@@ -2660,7 +2669,7 @@ static int hfi_context_register(struct adreno_device *adreno_dev,
 	}
 
 	context->gmu_registered = true;
-	if (adreno_hwsched_context_queue_enabled(adreno_dev))
+	if (gen7_hwsched_context_queue_enabled(adreno_dev))
 		context->gmu_dispatch_queue = UINT_MAX;
 	else
 		context->gmu_dispatch_queue = get_dq_id(adreno_dev, context);
@@ -2708,7 +2717,7 @@ static void populate_ibs(struct adreno_device *adreno_dev,
 
 static u32 get_irq_bit(struct adreno_device *adreno_dev, struct kgsl_drawobj *drawobj)
 {
-	if (!adreno_hwsched_context_queue_enabled(adreno_dev))
+	if (!gen7_hwsched_context_queue_enabled(adreno_dev))
 		return drawobj->context->gmu_dispatch_queue;
 
 	if (adreno_is_preemption_enabled(adreno_dev))
@@ -3464,7 +3473,7 @@ skipib:
 	cmd->hdr = CREATE_MSG_HDR(H2F_MSG_ISSUE_CMD, HFI_MSG_CMD);
 	cmd->hdr = MSG_HDR_SET_SEQNUM_SIZE(cmd->hdr, seqnum, cmd_sizebytes >> 2);
 
-	if (adreno_hwsched_context_queue_enabled(adreno_dev))
+	if (gen7_hwsched_context_queue_enabled(adreno_dev))
 		ret = adreno_gmu_context_queue_write(adreno_dev,
 			&drawctxt->gmu_context_queue, (u32 *)cmd, cmd_sizebytes, drawobj, &time);
 	else
@@ -3765,7 +3774,7 @@ void gen7_hwsched_context_destroy(struct adreno_device *adreno_dev,
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
-	if (!adreno_hwsched_context_queue_enabled(adreno_dev))
+	if (!gen7_hwsched_context_queue_enabled(adreno_dev))
 		return;
 
 	if (drawctxt->gmu_context_queue.gmuaddr)
@@ -3786,7 +3795,7 @@ static int register_global_ctxt(struct adreno_device *adreno_dev)
 	if (hwsched->global_ctxt_gmu_registered)
 		return 0;
 
-	if (adreno_hwsched_context_queue_enabled(adreno_dev) && !hwsched->global_ctxtq.hostptr) {
+	if (gen7_hwsched_context_queue_enabled(adreno_dev) && !hwsched->global_ctxtq.hostptr) {
 		struct gmu_context_queue_header *hdr;
 
 		ret = gmu_core_alloc_kernel_block(device, &hwsched->global_ctxtq,
@@ -3820,7 +3829,7 @@ static int register_global_ctxt(struct adreno_device *adreno_dev)
 	pcmd.sop_addr = MEMSTORE_ID_GPU_ADDR(device, KGSL_GLOBAL_CTXT_ID, soptimestamp);
 	pcmd.eop_addr = MEMSTORE_ID_GPU_ADDR(device, KGSL_GLOBAL_CTXT_ID, eoptimestamp);
 
-	if (adreno_hwsched_context_queue_enabled(adreno_dev))
+	if (gen7_hwsched_context_queue_enabled(adreno_dev))
 		pcmd.gmu_context_queue_addr = hwsched->global_ctxtq.gmuaddr;
 
 	ret = gen7_hfi_send_cmd_async(adreno_dev, &pcmd, sizeof(pcmd));
@@ -3853,7 +3862,7 @@ static int submit_global_ctxt_cmd(struct adreno_device *adreno_dev, u64 gpuaddr,
 	cmd.submit_cmd.hdr = CREATE_MSG_HDR(H2F_MSG_ISSUE_CMD, HFI_MSG_CMD);
 	cmd.submit_cmd.hdr = MSG_HDR_SET_SEQNUM_SIZE(cmd.submit_cmd.hdr, seqnum, cmd_size >> 2);
 
-	if (adreno_hwsched_context_queue_enabled(adreno_dev))
+	if (gen7_hwsched_context_queue_enabled(adreno_dev))
 		ret = adreno_gmu_context_queue_write(adreno_dev,
 			  &hwsched->global_ctxtq, (u32 *)&cmd, cmd_size, NULL, NULL);
 	else

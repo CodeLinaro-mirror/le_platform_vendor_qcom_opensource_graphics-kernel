@@ -230,9 +230,6 @@ static int snapshot_context_queue(int id, void *ptr, void *data)
 void adreno_hwsched_snapshot_context_queue(struct kgsl_device *device,
 	struct kgsl_snapshot *snapshot)
 {
-	if (!adreno_hwsched_context_queue_enabled(ADRENO_DEVICE(device)))
-		return;
-
 	read_lock(&device->context_lock);
 	idr_for_each(&device->context_idr, snapshot_context_queue, snapshot);
 	read_unlock(&device->context_lock);

@@ -3120,10 +3120,13 @@ static int hfi_context_register(struct adreno_device *adreno_dev,
 		return ret;
 	}
 
-	/* Register DCVS profile after SLUMBER if UMD profile present */
+	/*
+	 * Register DCVS profile after each SLUMBER wake, or when the
+	 * profile IOCTL ran during SLUMBER.
+	 */
 	if ((adreno_dev->dcvs_profile_enabled) &&
 			(proc_priv->profile.user_profile_registered) &&
-			(proc_priv->profile.gmu_registered))
+			(!proc_priv->profile.gmu_registered))
 		gen8_hwsched_set_dcvs_profile(adreno_dev, proc_priv);
 
 	ret = send_context_pointers(adreno_dev, context);
@@ -3875,6 +3878,8 @@ int gen8_hwsched_submit_drawobj(struct adreno_device *adreno_dev, struct kgsl_dr
 	if (test_and_clear_bit(CMDOBJ_NOP_SUBMISSION, &cmdobj->priv))
 		cmd->flags |= CMDBATCH_NOP_SUBMISSION;
 
+	if (drawobj->flags & KGSL_DRAWOBJ_USES_MALU)
+		cmd->flags |= CMDBATCH_USES_MALU;
 skipib:
 	adreno_drawobj_set_constraint(KGSL_DEVICE(adreno_dev), drawobj);
 
@@ -4467,10 +4472,8 @@ int gen8_hwsched_set_dcvs_profile(struct adreno_device *adreno_dev,
 	cmd.attrs_addr = md.gmuaddr;
 
 	ret = gen8_hfi_send_cmd_async(adreno_dev, &cmd, sizeof(cmd));
-	if (!ret) {
+	if (!ret)
 		proc_priv->profile.gmu_registered = true;
-		proc_priv->profile.user_profile_registered = true;
-	}
 
 	return ret;
 }

@@ -227,6 +227,21 @@ static void gen8_hwsched_set_ctxt_record_vrb(struct adreno_device *adreno_dev)
 		adreno_dev->aqe_ctxt_record_sz >> 10);
 }
 
+static void _enable_malu_submissions(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
+
+	if (!gen8_core->malu)
+		return;
+
+	/* Make sure GMU FW also supports mALU */
+	if (gen8_hwsched_hfi_get_value(adreno_dev, HFI_VALUE_MALU, 0) == 1)
+		set_bit(ADRENO_DEVICE_ALLOW_MALU_WORKLOAD, &adreno_dev->priv);
+	else
+		dev_err_once(GMU_PDEV_DEV(device), "FW doesn't support mALU\n");
+}
+
 static int gen8_hwsched_gmu_first_boot(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
@@ -253,6 +268,10 @@ static int gen8_hwsched_gmu_first_boot(struct adreno_device *adreno_dev)
 		goto gdsc_off;
 
 	ret = gen8_scm_gpu_init_cx_regs(adreno_dev);
+	if (ret)
+		goto clks_gdsc_off;
+
+	ret = gen8_gmu_trigger_mx_voltage_change(adreno_dev);
 	if (ret)
 		goto clks_gdsc_off;
 
@@ -331,6 +350,8 @@ static int gen8_hwsched_gmu_first_boot(struct adreno_device *adreno_dev)
 		/* If gmu_ab feature flag is enabled but GMU doesn't support it, set it to false */
 		adreno_dev->gmu_ab = false;
 	}
+
+	_enable_malu_submissions(adreno_dev);
 
 	icc_set_bw(pwr->icc_path, 0, 0);
 
@@ -1999,7 +2020,26 @@ static ssize_t gpu_load_show(struct kobject *kobj, struct kobj_attribute *attr,
 	return scnprintf(buf, PAGE_SIZE, "%u\n", busy_perc);
 }
 
+static ssize_t gpu_maxclk_constraints_show(struct kobject *kobj, struct kobj_attribute *attr,
+		char *buf)
+{
+	struct adreno_hwsched *hwsched = container_of(kobj, struct adreno_hwsched, dcvs_kobj);
+	struct adreno_device *adreno_dev = container_of(hwsched, struct adreno_device, hwsched);
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	u32 thermal_max_pwrlevel = max_t(u32, READ_ONCE(pwr->thermal_pwrlevel),
+							READ_ONCE(pwr->pmqos_max_pwrlevel));
+	u32 aggregated_max_pwrlevel = max_t(u32, thermal_max_pwrlevel, pwr->aggr_max_pwrlevel);
+
+	return scnprintf(buf, PAGE_SIZE,
+			"gpuclk: %lu\naggregated_max_gpuclk: %u\nthermal_gpuclk: %u\n",
+			kgsl_pwrctrl_active_freq(&device->pwrctrl),
+			pwr->pwrlevels[aggregated_max_pwrlevel].gpu_freq,
+			pwr->pwrlevels[thermal_max_pwrlevel].gpu_freq);
+}
+
 DCVS_SYSFS_RO(aggregated_max_gpuclk);
+DCVS_SYSFS_RO(gpu_maxclk_constraints);
 DCVS_SYSFS_RO(dcvs_tunables_default);
 DCVS_SYSFS_RO(dcvs_tunables_cur);
 DCVS_SYSFS_RO(gpu_load);
@@ -2009,6 +2049,7 @@ static struct attribute *dcvs_attrs[] = {
 	&dcvs_attr_dcvs_tunables_default.attr,
 	&dcvs_attr_dcvs_tunables_cur.attr,
 	&dcvs_attr_gpu_load.attr,
+	&dcvs_attr_gpu_maxclk_constraints.attr,
 	NULL,
 };
 

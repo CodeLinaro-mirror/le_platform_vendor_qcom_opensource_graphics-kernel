@@ -48,9 +48,21 @@ gki_perf_variants = [
     "perf"
 ]
 
-def get_all_la_variants():
+le_targets = [
+    # keep sorted
+    "vienna-le",
+]
+
+le_variants = [
+    # keep sorted
+    "debug-defconfig",
+    "defconfig",
+]
+
+def get_all_variants():
     tv = [ (t, v) for t in targets for v in la_variants ]
     tv = tv + [ (t, v) for t in gki_targets for v in gki_variants ]
     tv = tv + [ (t, v) for t in gki_perf_targets for v in gki_perf_variants ]
+    tv = tv + [ (t, v) for t in le_targets for v in le_variants ]
 
     return tv

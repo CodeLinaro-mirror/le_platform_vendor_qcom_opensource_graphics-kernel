@@ -145,7 +145,7 @@ void gen7_hwsched_snapshot(struct adreno_device *adreno_dev,
 
 	}
 
-	if (adreno_hwsched_context_queue_enabled(adreno_dev))
+	if (gen7_hwsched_context_queue_enabled(adreno_dev))
 		adreno_hwsched_snapshot_context_queue(device, snapshot);
 }
 

@@ -296,6 +296,7 @@ enum adreno_gpurev {
 	ADRENO_REV_GEN7_2_1 = ADRENO_GPUREV_VALUE(7, 2, 1),
 	ADRENO_REV_GEN7_3_0 = ADRENO_GPUREV_VALUE(7, 3, 0),
 	ADRENO_REV_GEN7_4_0 = ADRENO_GPUREV_VALUE(7, 4, 0),
+	ADRENO_REV_GEN7_5_0 = ADRENO_GPUREV_VALUE(7, 5, 0),
 	ADRENO_REV_GEN7_6_0 = ADRENO_GPUREV_VALUE(7, 6, 0),
 	ADRENO_REV_GEN7_9_0 = ADRENO_GPUREV_VALUE(7, 9, 0),
 	ADRENO_REV_GEN7_9_1 = ADRENO_GPUREV_VALUE(7, 9, 1),
@@ -911,6 +912,8 @@ enum adreno_device_flags {
 	ADRENO_DEVICE_FIRST_BOOT_DONE = 19,
 	/** @ADRENO_DEVICE_FAST_CONTEXT_DESTROY: Set if fast context destroy is enabled on GMU */
 	ADRENO_DEVICE_FAST_CONTEXT_DESTROY = 20,
+	/** @ADRENO_DEVICE_ALLOW_MALU_WORKLOAD: mALU workload is supported by GMU and GPU */
+	ADRENO_DEVICE_ALLOW_MALU_WORKLOAD = 21,
 };
 
 /**
@@ -1410,6 +1413,7 @@ ADRENO_TARGET(gen7_2_0, ADRENO_REV_GEN7_2_0)
 ADRENO_TARGET(gen7_2_1, ADRENO_REV_GEN7_2_1)
 ADRENO_TARGET(gen7_3_0, ADRENO_REV_GEN7_3_0)
 ADRENO_TARGET(gen7_4_0, ADRENO_REV_GEN7_4_0)
+ADRENO_TARGET(gen7_5_0, ADRENO_REV_GEN7_5_0)
 ADRENO_TARGET(gen7_6_0, ADRENO_REV_GEN7_6_0)
 ADRENO_TARGET(gen7_9_0, ADRENO_REV_GEN7_9_0)
 ADRENO_TARGET(gen7_9_1, ADRENO_REV_GEN7_9_1)
@@ -1448,9 +1452,9 @@ static inline int adreno_is_gen7_14_0_family(struct adreno_device *adreno_dev)
 static inline int adreno_is_gen7_2_x_family(struct adreno_device *adreno_dev)
 {
 	return adreno_is_gen7_2_0(adreno_dev) || adreno_is_gen7_2_1(adreno_dev) ||
-		adreno_is_gen7_6_0(adreno_dev) || adreno_is_gen7_9_x(adreno_dev) ||
-		adreno_is_gen7_14_0_family(adreno_dev) || adreno_is_gen7_11_0(adreno_dev) ||
-		adreno_is_gen7_15_0(adreno_dev);
+		adreno_is_gen7_5_0(adreno_dev) || adreno_is_gen7_6_0(adreno_dev) ||
+		adreno_is_gen7_9_x(adreno_dev) || adreno_is_gen7_14_0_family(adreno_dev) ||
+		adreno_is_gen7_11_0(adreno_dev) || adreno_is_gen7_15_0(adreno_dev);
 }
 
 static inline int adreno_is_gen8_2_x(struct adreno_device *adreno_dev)
@@ -1910,7 +1914,7 @@ static inline void adreno_perfcntr_active_oob_put(
 static inline int adreno_wait_for_halt_ack(struct kgsl_device *device,
 	int ack_reg, unsigned int mask)
 {
-	u32 val;
+	u32 val = 0;
 	int ret = kgsl_regmap_read_poll_timeout(&device->regmap, ack_reg,
 		val, (val & mask) == mask, 100, 100 * 1000);
 

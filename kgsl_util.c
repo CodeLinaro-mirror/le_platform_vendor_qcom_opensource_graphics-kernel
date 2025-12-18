@@ -66,6 +66,18 @@ int kgsl_regulator_set_voltage(struct device *dev,
 	return ret;
 }
 
+unsigned long kgsl_clk_get_rate(struct clk_bulk_data *clks, int num_clks,
+		const char *id)
+{
+	struct clk *clk;
+
+	clk = kgsl_of_clk_by_name(clks, num_clks, id);
+	if (!clk)
+		return 0;
+
+	return clk_get_rate(clk);
+}
+
 int kgsl_clk_set_rate(struct clk_bulk_data *clks, int num_clks,
 		const char *id, unsigned long rate)
 {

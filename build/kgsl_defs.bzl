@@ -1,6 +1,6 @@
 load("//build/kernel/kleaf:kernel.bzl", "ddk_module", "ddk_headers", "kernel_module_group")
 load("//build/bazel_common_rules/dist:dist.bzl", "copy_to_dist_dir")
-load(":build/target_variants.bzl", "get_all_la_variants")
+load(":build/target_variants.bzl", "get_all_variants")
 
 msm_kgsl_includes = [
     "include/linux/msm_kgsl.h",
@@ -111,7 +111,7 @@ def external_deps(target, variant):
             "//vendor/qcom/opensource/synx-kernel:synx_headers"
             ]
 
-    if target in [ "monaco", "parrot", "vienna", "lahaina", "art", "bengal" ]:
+    if target in [ "monaco", "parrot", "vienna", "vienna-le", "lahaina", "art", "bengal" ]:
         deplist = deplist + [
             "//vendor/qcom/opensource/mm-drivers/hw_fence:hw_fence_headers"
             ]
@@ -219,8 +219,9 @@ def define_target_modules():
         ddk_headers(
             name = "kgsl_uapi_headers",
             hdrs = native.glob(["include/uapi/linux/*.h"]),
+            includes = ["include/uapi/linux"],
             visibility = ["//visibility:public"]
         )
 
-        for target, variant in get_all_la_variants():
+        for target, variant in get_all_variants():
                 define_target_variant_module(target, variant)

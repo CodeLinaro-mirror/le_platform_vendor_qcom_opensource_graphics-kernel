@@ -542,9 +542,10 @@ static void kgsl_device_snapshot_atomic(struct kgsl_device *device)
 	if (device->snapshot && device->force_panic)
 		return;
 
-	if (WARN(!kgsl_state_is_awake(device),
-		"snapshot: device is powered off\n"))
+	if (!kgsl_state_is_awake(device)) {
+		dev_err(device->dev, "snapshot: device is powered off\n");
 		return;
+	}
 
 	if (device->snapshot_memory_atomic.ptr)
 		goto snapshot;
@@ -562,8 +563,8 @@ static void kgsl_device_snapshot_atomic(struct kgsl_device *device)
 					device->snapshot_memory_atomic.size, GFP_ATOMIC);
 
 		/* If we fail to allocate more than 1MB fall back to 1MB */
-		if (WARN_ON((!device->snapshot_memory_atomic.ptr) &&
-			device->snapshot_memory_atomic.size > SZ_1M)) {
+		if ((!device->snapshot_memory_atomic.ptr) &&
+			device->snapshot_memory_atomic.size > SZ_1M) {
 			device->snapshot_memory_atomic.size = SZ_1M;
 			device->snapshot_memory_atomic.ptr = devm_kzalloc(&device->pdev->dev,
 					device->snapshot_memory_atomic.size, GFP_ATOMIC);

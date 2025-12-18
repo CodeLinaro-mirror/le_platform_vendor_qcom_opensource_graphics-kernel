@@ -201,7 +201,6 @@ enum adreno_hwsched_flags {
 	ADRENO_HWSCHED_POWER = 0,
 	ADRENO_HWSCHED_ACTIVE,
 	ADRENO_HWSCHED_CTX_BAD_LEGACY,
-	ADRENO_HWSCHED_CONTEXT_QUEUE,
 	ADRENO_HWSCHED_HW_FENCE,
 	ADRENO_HWSCHED_FORCE_RETIRE_GMU,
 	ADRENO_HWSCHED_GPU_SOFT_RESET,
@@ -270,8 +269,6 @@ int adreno_hwsched_drain_and_idle(struct adreno_device *adreno_dev);
 
 void adreno_hwsched_retire_cmdobj(struct adreno_hwsched *hwsched,
 	struct kgsl_drawobj_cmd *cmdobj);
-
-bool adreno_hwsched_context_queue_enabled(struct adreno_device *adreno_dev);
 
 /**
  * adreno_hwsched_register_hw_fence - Register GPU as a hardware fence client

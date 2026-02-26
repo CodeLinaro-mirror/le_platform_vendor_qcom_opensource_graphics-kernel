@@ -23,9 +23,13 @@
 #if IS_ENABLED(CONFIG_QCOM_SCM_ADDON)
 #include <linux/firmware/qcom/qcom_scm_addon.h>
 #endif
-#include <asm/cacheflush.h>
 
+#if (KERNEL_VERSION(6, 19, 0) <= LINUX_VERSION_CODE)
+#include <linux/devfreq-governor.h>
+#else
 #include "governor.h"
+#endif
+
 #include "msm_adreno_devfreq.h"
 
 static DEFINE_SPINLOCK(tz_lock);
@@ -60,6 +64,8 @@ static DEFINE_SPINLOCK(suspend_lock);
 #define TZ_V2_INIT_CA_ID_64        0xC
 #define TZ_V2_UPDATE_WITH_CA_ID_64 0xD
 
+#define TZ_DCVS_TUNING_ID          0xE
+
 #define TAG "msm_adreno_tz: "
 
 static u64 suspend_time;
@@ -69,7 +75,7 @@ static unsigned long acc_total, acc_relative_busy;
 /*
  * Returns GPU suspend time in millisecond.
  */
-static u64 suspend_time_ms(void)
+u64 suspend_time_ms(void)
 {
 	u64 suspend_sampling_time;
 	u64 time_diff = 0;
@@ -92,7 +98,7 @@ static ssize_t gpu_load_show(struct device *dev,
 	/*
 	 * Average out the samples taken since last read
 	 * This will keep the average value in sync with
-	 * with the client sampling duration.
+	 * the client sampling duration.
 	 */
 	spin_lock(&sample_lock);
 	if (acc_total)
@@ -169,7 +175,7 @@ static const struct device_attribute *adreno_tz_attr_list[] = {
 		NULL
 };
 
-static void compute_work_load(struct devfreq_dev_status *stats,
+void compute_work_load(struct devfreq_dev_status *stats,
 		struct devfreq_msm_adreno_tz_data *priv,
 		struct devfreq *devfreq)
 {

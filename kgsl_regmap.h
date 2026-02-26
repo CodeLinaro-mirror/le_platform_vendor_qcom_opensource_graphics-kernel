@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef KGSL_REGMAP_H
@@ -49,9 +49,11 @@ struct kgsl_regmap {
 	 */
 	struct resource *base;
 	/** @region: Array of regions for this regmap */
-	struct kgsl_regmap_region region[4];
+	struct kgsl_regmap_region region[5];
 	/** @count: Number of active regions in @region */
 	int count;
+	/** @use_relaxed: To use relaxed variant of IO access API */
+	bool use_relaxed;
 };
 
 /**
@@ -87,6 +89,7 @@ int kgsl_regmap_init(struct platform_device *pdev, struct kgsl_regmap *regmap,
  * @regmap: The regmap to add the region to
  * @pdev: Pointer to the platform device that owns @name
  * @name: Name of the resource to map
+ * @index: Index of the resource to map
  * @ops: Pointer to the regmap ops for this region
  * @priv: Private data to pass to the regmap ops
  *
@@ -99,7 +102,7 @@ int kgsl_regmap_init(struct platform_device *pdev, struct kgsl_regmap *regmap,
  * Return: 0 on success or negative error on failure.
  */
 int kgsl_regmap_add_region(struct kgsl_regmap *regmap, struct platform_device *pdev,
-		const char *name, const struct kgsl_regmap_ops *ops, void *priv);
+		const char *name, int index, const struct kgsl_regmap_ops *ops, void *priv);
 
 /**
  * kgsl_regmap_valid_offset - return true if the offset is valid

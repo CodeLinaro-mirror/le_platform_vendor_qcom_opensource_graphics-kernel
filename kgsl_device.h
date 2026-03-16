@@ -351,6 +351,10 @@ struct kgsl_device {
 	u32 speed_bin;
 	/** @debug_bus_bin: Debug bus bin for the GPU device if applicable */
 	u32 debug_bus_bin;
+	/** @debugbus_en: Debug bus debug capability */
+	u32 debugbus_en;
+	/** @gpu_niden_en: GPU NIDEN debug capability */
+	u32 gpu_niden_en;
 	/** @soc_code: Identifier containing product and feature code */
 	u32 soc_code;
 	/** @gmu_fault: Set when a gmu or rgmu fault is encountered */

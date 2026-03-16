@@ -539,7 +539,7 @@ static void a6xx_deassert_gbif_halt(struct adreno_device *adreno_dev)
 
 	kgsl_regwrite(device, A6XX_GBIF_HALT, 0x0);
 
-	if (adreno_is_a619_holi(adreno_dev))
+	if (adreno_is_a619_holi(adreno_dev) || adreno_is_a619_malabar(adreno_dev))
 		kgsl_regwrite(device, A6XX_RBBM_GPR0_CNTL, 0x0);
 	else
 		kgsl_regwrite(device, A6XX_RBBM_GBIF_HALT, 0x0);
@@ -1411,7 +1411,7 @@ static int a6xx_clear_pending_transactions(struct adreno_device *adreno_dev)
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	int ret;
 
-	if (adreno_is_a619_holi(adreno_dev)) {
+	if (adreno_is_a619_holi(adreno_dev) || adreno_is_a619_malabar(adreno_dev)) {
 		kgsl_regwrite(device, A6XX_RBBM_GPR0_CNTL, 0x1e0);
 		ret = adreno_wait_for_halt_ack(device,
 			A6XX_RBBM_VBIF_GX_RESET_STATUS, 0xf0);

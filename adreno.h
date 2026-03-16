@@ -315,6 +315,7 @@ enum adreno_gpurev {
 	ADRENO_REV_GEN8_8_0 = ADRENO_GPUREV_VALUE(8, 8, 0),
 	ADRENO_REV_GEN8_9_0 = ADRENO_GPUREV_VALUE(8, 9, 0),
 	ADRENO_REV_GEN8_11_0 = ADRENO_GPUREV_VALUE(8, 11, 0),
+	ADRENO_REV_GEN8_17_0 = ADRENO_GPUREV_VALUE(8, 17, 0),
 };
 
 #define ADRENO_SOFT_FAULT BIT(0)
@@ -1367,6 +1368,12 @@ static inline int adreno_is_a619_holi(struct adreno_device *adreno_dev)
 		"qcom,adreno-gpu-a619-holi");
 }
 
+static inline int adreno_is_a619_malabar(struct adreno_device *adreno_dev)
+{
+	return of_device_is_compatible(adreno_dev->dev.pdev->dev.of_node,
+		"qcom,adreno-gpu-a619-malabar");
+}
+
 static inline int adreno_is_a620(struct adreno_device *adreno_dev)
 {
 	unsigned int rev = ADRENO_GPUREV(adreno_dev);
@@ -1432,6 +1439,7 @@ ADRENO_TARGET(gen8_6_0, ADRENO_REV_GEN8_6_0)
 ADRENO_TARGET(gen8_8_0, ADRENO_REV_GEN8_8_0)
 ADRENO_TARGET(gen8_9_0, ADRENO_REV_GEN8_9_0)
 ADRENO_TARGET(gen8_11_0, ADRENO_REV_GEN8_11_0)
+ADRENO_TARGET(gen8_17_0, ADRENO_REV_GEN8_17_0)
 
 static inline int adreno_is_gen7_9_x(struct adreno_device *adreno_dev)
 {
@@ -1467,6 +1475,12 @@ static inline int adreno_is_gen8_0_x_family(struct adreno_device *adreno_dev)
 {
 	return adreno_is_gen8_0_0(adreno_dev) || adreno_is_gen8_0_1(adreno_dev) ||
 		adreno_is_gen8_4_0(adreno_dev) || adreno_is_gen8_6_0(adreno_dev);
+}
+
+static inline int adreno_is_gen8_3_0_family(struct adreno_device *adreno_dev)
+{
+	return adreno_is_gen8_3_0(adreno_dev) || adreno_is_gen8_8_0(adreno_dev) ||
+		adreno_is_gen8_17_0(adreno_dev);
 }
 
 /* Gen7 targets which does not support concurrent binning */

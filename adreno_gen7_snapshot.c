@@ -1402,7 +1402,7 @@ static void gen7_snapshot_debugbus(struct adreno_device *adreno_dev,
 	int i;
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
-	if (device->debug_bus_bin)
+	if (device->debug_bus_bin && !device->debugbus_en && !device->gpu_niden_en)
 		return;
 
 	kgsl_regwrite(device, GEN7_DBGC_CFG_DBGBUS_CNTLT,

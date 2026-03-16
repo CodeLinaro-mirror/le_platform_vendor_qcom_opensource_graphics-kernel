@@ -339,6 +339,7 @@ static const u32 gen8_ifpc_pwrup_reglist[] = {
 	GEN8_SP_CHICKEN_BITS_2,
 	GEN8_SP_CHICKEN_BITS_3,
 	GEN8_SP_PERFCTR_SHADER_MASK,
+	GEN8_SP_HLSQ_DBG_ECO_CNTL,
 	GEN8_CP_PROTECT_REG_GLOBAL,
 	GEN8_CP_PROTECT_REG_GLOBAL + 1,
 	GEN8_CP_PROTECT_REG_GLOBAL + 2,
@@ -397,11 +398,14 @@ static const u32 gen8_2_0_ifpc_pwrup_reglist[] = {
 	GEN8_SP_NC_MODE_CNTL,
 	GEN8_SP_CHICKEN_BITS,
 	GEN8_SP_SS_CHICKEN_BITS_0,
+	GEN8_SP_CHICKEN_BITS_1,
 	GEN8_SP_CHICKEN_BITS_2,
 	GEN8_SP_CHICKEN_BITS_3,
 	GEN8_SP_CHICKEN_BITS_4,
 	GEN8_SP_PERFCTR_SHADER_MASK,
+	GEN8_RBBM_SLICE_PERFCTR_CNTL,
 	GEN8_RBBM_SLICE_INTERFACE_HANG_INT_CNTL,
+	GEN8_SP_HLSQ_DBG_ECO_CNTL,
 	GEN8_SP_HLSQ_DBG_ECO_CNTL_1,
 	GEN8_SP_HLSQ_DBG_ECO_CNTL_2,
 	GEN8_SP_HLSQ_DBG_ECO_CNTL_3,
@@ -714,12 +718,14 @@ static const struct gen8_pwrup_extlist gen8_11_0_pwrup_extlist[] = {
 	{ GEN8_PC_CHICKEN_BITS_2, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_CHICKEN_BITS_3, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_CHICKEN_BITS_4, BIT(PIPE_BV) | BIT(PIPE_BR) },
+	{ GEN8_PC_CHICKEN_BITS_5, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_RB_CCU_CNTL, BIT(PIPE_BR) },
 	{ GEN8_RB_CCU_DBG_ECO_CNTL, BIT(PIPE_BR)},
 	{ GEN8_RB_CCU_NC_MODE_CNTL, BIT(PIPE_BR) },
 	{ GEN8_RB_CMP_NC_MODE_CNTL, BIT(PIPE_BR) },
 	{ GEN8_RB_CONTEXT_SWITCH_GMEM_SAVE_RESTORE, BIT(PIPE_BR) },
 	{ GEN8_RB_DBG_ECO_CNTL, BIT(PIPE_BV) | BIT(PIPE_BR) },
+	{ GEN8_RB_RBP_CNTL, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_RB_RESOLVE_PREFETCH_CNTL, BIT(PIPE_BR) },
 	{ GEN8_RB_CMP_DBG_ECO_CNTL, BIT(PIPE_BR) },
 	{ GEN8_RB_GC_GMEM_PROTECT, BIT(PIPE_BR) },
@@ -762,7 +768,7 @@ struct gen8_nonctxt_overrides gen8_nc_overrides[] = {
 	{ GEN8_PC_CHICKEN_BITS_2, BIT(PIPE_BV) | BIT(PIPE_BR), 0, 0, 0, },
 	{ GEN8_PC_CHICKEN_BITS_3, BIT(PIPE_BV) | BIT(PIPE_BR), 0, 0, 0, },
 	{ GEN8_PC_CHICKEN_BITS_4, BIT(PIPE_BV) | BIT(PIPE_BR), 0, 0, 0, },
-	{ GEN8_PC_CHICKEN_BITS_5, BIT(PIPE_BV) | BIT(PIPE_BR), 0, 0, 3, },
+	{ GEN8_PC_CHICKEN_BITS_5, BIT(PIPE_BV) | BIT(PIPE_BR), 0, 0, 0, },
 	{ GEN8_PC_DBG_ECO_CNTL, BIT(PIPE_BV) | BIT(PIPE_BR), 0, 0, 3, },
 	{ GEN8_VFD_DBG_ECO_CNTL, BIT(PIPE_BV) | BIT(PIPE_BR), 0, 0, 0, },
 	{ GEN8_VFD_CB_BV_THRESHOLD, BIT(PIPE_BV) | BIT(PIPE_BR),  0, 0, 0, },
@@ -774,6 +780,7 @@ struct gen8_nonctxt_overrides gen8_nc_overrides[] = {
 	{ GEN8_VPC_DBG_ECO_CNTL_2, BIT(PIPE_BV) | BIT(PIPE_BR), 0, 0, 3, },
 	{ GEN8_VPC_DBG_ECO_CNTL_3, BIT(PIPE_BV) | BIT(PIPE_BR), 0, 0, 3, },
 	{ GEN8_VPC_FLATSHADE_MODE_CNTL, BIT(PIPE_BV) | BIT(PIPE_BR), 0, 0, 0, },
+	{ GEN8_RBBM_SLICE_PERFCTR_CNTL, BIT(PIPE_NONE), 0, 0, 1, },
 	{ GEN8_VSC_VISIBILITY_FLUSH_CNTL, BIT(PIPE_NONE), 0, 0, 0, },
 	{ GEN8_SP_DBG_ECO_CNTL, BIT(PIPE_NONE), 0, 0, 1, },
 	{ GEN8_SP_NC_MODE_CNTL, BIT(PIPE_NONE), 0, 0, 0, },
@@ -1169,7 +1176,7 @@ void gen8_get_gpu_slice_info(struct adreno_device *adreno_dev)
 		 * of bits set in the slice mask.
 		 */
 		adreno_dev->chipid |= FIELD_PREP(GENMASK(7, 4), hweight32(slice_mask));
-	} else if (adreno_is_gen8_3_0(adreno_dev) || adreno_is_gen8_8_0(adreno_dev))
+	} else if (adreno_is_gen8_3_0_family(adreno_dev))
 		slice_mask = GENMASK(GEN8_3_0_NUM_PHYSICAL_SLICES - 1, 0);
 	else if (adreno_is_gen8_6_0(adreno_dev))
 		slice_mask = GENMASK(GEN8_6_0_NUM_PHYSICAL_SLICES - 1, 0);
@@ -1484,7 +1491,7 @@ void gen8_patch_pwrup_reglist(struct adreno_device *adreno_dev)
 	u32 first_slice = gen8_first_slice(adreno_dev);
 
 	/* Static IFPC restore only registers */
-	if (adreno_is_gen8_3_0(adreno_dev) || adreno_is_gen8_8_0(adreno_dev)) {
+	if (adreno_is_gen8_3_0_family(adreno_dev)) {
 		reglist[items].regs = gen8_3_0_ifpc_pwrup_reglist;
 		reglist[items].count = ARRAY_SIZE(gen8_3_0_ifpc_pwrup_reglist);
 	} else if (adreno_is_gen8_2_x(adreno_dev)) {
@@ -1501,7 +1508,7 @@ void gen8_patch_pwrup_reglist(struct adreno_device *adreno_dev)
 	items++;
 
 	/* Static IFPC + preemption registers */
-	if (adreno_is_gen8_3_0(adreno_dev) || adreno_is_gen8_8_0(adreno_dev)) {
+	if (adreno_is_gen8_3_0_family(adreno_dev)) {
 		reglist[items].regs = gen8_3_0_pwrup_reglist;
 		reglist[items].count = ARRAY_SIZE(gen8_3_0_pwrup_reglist);
 	} else if (adreno_is_gen8_2_x(adreno_dev)) {
@@ -1987,6 +1994,8 @@ int gen8_start(struct adreno_device *adreno_dev)
 	_llc_gpuhtw_slice_activate(adreno_dev);
 
 	for (pipe_id = PIPE_BR; pipe_id <= PIPE_DDE_BV; pipe_id++) {
+		u32 val = CP_SW_FAULT_STATUS_MASK_PIPE;
+
 		if ((pipe_id == PIPE_LPAC) && !ADRENO_FEATURE(adreno_dev, ADRENO_LPAC))
 			continue;
 		if (((pipe_id == PIPE_AQE0) || (pipe_id == PIPE_AQE1)) &&
@@ -1996,8 +2005,14 @@ int gen8_start(struct adreno_device *adreno_dev)
 		gen8_regwrite_aperture(device, GEN8_CP_APRIV_CNTL_PIPE,
 			(pipe_id == PIPE_BR ? GEN8_BR_APRIV_DEFAULT : GEN8_APRIV_DEFAULT),
 			pipe_id, 0, 0);
+
+		/* Disable the CP_SW_RTWROVF bit for BV pipe to prevent false interrupt from CP */
+		if (adreno_is_gen8_11_0(adreno_dev) && (pipe_id == PIPE_BV))
+			val &= ~(BIT(CP_SW_RTWROVF));
+
 		gen8_regwrite_aperture(device, GEN8_CP_INTERRUPT_STATUS_MASK_PIPE,
-			CP_SW_FAULT_STATUS_MASK_PIPE, pipe_id, 0, 0);
+			val, pipe_id, 0, 0);
+
 		gen8_regwrite_aperture(device, GEN8_CP_HW_FAULT_STATUS_MASK_PIPE,
 			CP_HW_FAULT_STATUS_MASK_PIPE, pipe_id, 0, 0);
 	}

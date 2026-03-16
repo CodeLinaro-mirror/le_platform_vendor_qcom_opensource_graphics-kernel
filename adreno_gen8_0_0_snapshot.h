@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef __ADRENO_GEN8_0_0_SNAPSHOT_H
@@ -48,7 +48,7 @@ static struct gen8_shader_block gen8_0_0_shader_blocks[] = {
 	{ HLSQ_SLICE_TOP_META, 0x0048, 1, uSPTP0, PIPE_BV, HLSQ_STATE, UNSLICE, 1},
 	{ HLSQ_SLICE_TOP_META, 0x0020, 1, uSPTP0, PIPE_LPAC, HLSQ_STATE, UNSLICE, 1},
 	{ HLSQ_L2STC_TAG_RAM, 0x0200, 1, uSPTP0, PIPE_BR, HLSQ_STATE, UNSLICE, 1},
-	{ HLSQ_L2STC_INFO_CMD, 0x0474, 1, uSPTP0, PIPE_BR, HLSQ_STATE, UNSLICE, 1},
+	{ HLSQ_L2STC_INFO_CMD, 0x0800, 1, uSPTP0, PIPE_BR, HLSQ_STATE, UNSLICE, 1},
 	{ HLSQ_CVS_BE_CTXT_BUF_RAM_TAG, 0x0100, 1, uSPTP0, PIPE_BR, HLSQ_STATE, UNSLICE, 1},
 	{ HLSQ_CVS_BE_CTXT_BUF_RAM_TAG, 0x0100, 1, uSPTP0, PIPE_BV, HLSQ_STATE, UNSLICE, 1},
 	{ HLSQ_CPS_BE_CTXT_BUF_RAM_TAG, 0x0100, 1, uSPTP0, PIPE_BR, HLSQ_STATE, UNSLICE, 1},

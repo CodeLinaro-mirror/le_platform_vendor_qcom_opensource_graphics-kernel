@@ -6,6 +6,7 @@
 
 #include <linux/debugfs.h>
 #include <linux/highmem.h>
+#include <linux/mm.h>
 #include <linux/of.h>
 #include <linux/scatterlist.h>
 #include <linux/version.h>
@@ -15,6 +16,7 @@
 #include "kgsl_pool.h"
 #include "kgsl_sharedmem.h"
 #include "kgsl_trace.h"
+#include "kgsl_util.h"
 
 #ifdef CONFIG_QCOM_KGSL_SORT_POOL
 
@@ -451,14 +453,13 @@ int kgsl_pool_alloc_page(int *page_size, struct page **pages,
 	int order = get_order(*page_size);
 	int pool_idx;
 	size_t size = 0;
+	gfp_t gfp_mask = (kgsl_gfp_mask(order) | __GFP_ZERO);
 
 	if ((pages == NULL) || pages_len < (*page_size >> PAGE_SHIFT))
 		return -EINVAL;
 
 	/* If the pool is not configured get pages from the system */
 	if (!kgsl_num_pools) {
-		gfp_t gfp_mask = kgsl_gfp_mask(order);
-
 		page = alloc_pages(gfp_mask, order);
 		if (page == NULL) {
 			/* Retry with lower order pages */
@@ -470,6 +471,7 @@ int kgsl_pool_alloc_page(int *page_size, struct page **pages,
 				return -ENOMEM;
 		}
 		trace_kgsl_pool_alloc_page_system(order);
+		kgsl_page_sync(dev, page, PAGE_SIZE << order, DMA_TO_DEVICE);
 		goto done;
 	}
 
@@ -484,12 +486,11 @@ int kgsl_pool_alloc_page(int *page_size, struct page **pages,
 			 * Fall back to direct allocation in case
 			 * pool with zero order is not present
 			 */
-			gfp_t gfp_mask = kgsl_gfp_mask(order);
-
 			page = alloc_pages(gfp_mask, order);
 			if (page == NULL)
 				return -ENOMEM;
 			trace_kgsl_pool_alloc_page_system(order);
+			kgsl_page_sync(dev, page, PAGE_SIZE << order, DMA_TO_DEVICE);
 			goto done;
 		}
 	}
@@ -499,8 +500,6 @@ int kgsl_pool_alloc_page(int *page_size, struct page **pages,
 
 	/* Allocate a new page if not allocated from pool */
 	if (page == NULL) {
-		gfp_t gfp_mask = kgsl_gfp_mask(order);
-
 		page = alloc_pages(gfp_mask, order);
 
 		if (!page) {
@@ -513,13 +512,15 @@ int kgsl_pool_alloc_page(int *page_size, struct page **pages,
 				return -ENOMEM;
 		}
 		trace_kgsl_pool_alloc_page_system(order);
+		kgsl_page_sync(dev, page, PAGE_SIZE << order, DMA_TO_DEVICE);
+		goto done;
 	}
 
-done:
 	kgsl_zero_page(page, order, dev);
 
+done:
 	for (j = 0; j < (*page_size >> PAGE_SHIFT); j++) {
-		p = nth_page(page, j);
+		p = kgsl_nth_page(page, j);
 		pages[pcount] = p;
 		pcount++;
 	}

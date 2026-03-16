@@ -98,17 +98,24 @@ static const struct vm_operations_struct kgsl_gpumem_vm_ops;
 
 #if (KERNEL_VERSION(6, 10, 0) > LINUX_VERSION_CODE)
 static unsigned long kgsl_mm_get_unmapped_area(struct mm_struct *mm, struct file *file,
-		     unsigned long addr, unsigned long len,
-		     unsigned long pgoff, unsigned long flags)
+			unsigned long addr, unsigned long len,
+			unsigned long pgoff, unsigned long flags)
 {
 	return mm->get_unmapped_area(file, addr, len, pgoff, flags);
 }
-#else
+#elif (KERNEL_VERSION(6, 19, 0) > LINUX_VERSION_CODE)
 static unsigned long kgsl_mm_get_unmapped_area(struct mm_struct *mm, struct file *file,
-		     unsigned long addr, unsigned long len,
-		     unsigned long pgoff, unsigned long flags)
+			unsigned long addr, unsigned long len,
+			unsigned long pgoff, unsigned long flags)
 {
 	return mm_get_unmapped_area(mm, file, addr, len, pgoff, flags);
+}
+#else
+static unsigned long kgsl_mm_get_unmapped_area(struct mm_struct *mm, struct file *file,
+			unsigned long addr, unsigned long len,
+			unsigned long pgoff, unsigned long flags)
+{
+	return mm_get_unmapped_area(file, addr, len, pgoff, flags);
 }
 #endif
 
@@ -394,13 +401,13 @@ static void kgsl_destroy_anon(struct kgsl_memdesc *memdesc)
 			 * were writable by the GPU.
 			 */
 			if (!(memdesc->flags & KGSL_MEMFLAGS_GPUREADONLY))
-				set_page_dirty_lock(nth_page(page, j));
+				set_page_dirty_lock(kgsl_nth_page(page, j));
 
 			/*
 			 * Put the page reference taken using get_user_pages
 			 * during memdesc_sg_virt.
 			 */
-			put_page(nth_page(page, j));
+			put_page(kgsl_nth_page(page, j));
 		}
 	}
 
@@ -985,10 +992,6 @@ static void kgsl_destroy_process_private(struct kref *kref)
 			struct kgsl_process_private, refcount);
 	struct kgsl_device *device = KGSL_MMU_DEVICE(private->pagetable->mmu);
 
-	if (private->profile.md.gmuaddr)
-		gmu_core_free_block(device, &private->profile.md);
-
-	kgsl_put_work_period(private->period);
 	/*
 	 * While removing sysfs entries, kernfs_mutex is held by sysfs apis. Since
 	 * it is a global fs mutex, sometimes it takes longer for kgsl to get hold
@@ -997,7 +1000,6 @@ static void kgsl_destroy_process_private(struct kref *kref)
 	 * mutex to avoid wasting re-tries when kgsl is waiting for kernfs mutex.
 	 */
 	mutex_lock(&kgsl_driver.process_mutex);
-
 	debugfs_remove_recursive(private->debug_root);
 	kobject_put(&private->kobj_memtype);
 	kobject_put(&private->kobj);
@@ -1012,6 +1014,7 @@ static void kgsl_destroy_process_private(struct kref *kref)
 	write_unlock(&kgsl_driver.proclist_lock);
 	mutex_unlock(&kgsl_driver.process_mutex);
 
+	kgsl_put_work_period(private->period);
 	kfree(private->cmdline);
 	put_pid(private->pid);
 	idr_destroy(&private->mem_idr);
@@ -1020,6 +1023,16 @@ static void kgsl_destroy_process_private(struct kref *kref)
 	/* When using global pagetables, do not put global pagetable */
 	if (private->pagetable->name != KGSL_MMU_GLOBAL_PT)
 		kgsl_mmu_putpagetable(private->pagetable);
+
+
+	if (private->profile.md.gmuaddr) {
+		/*
+		 * This calls iommu_unmap(), which may take variable amount of time to
+		 * complete. So do this at the very end of process private cleanup, so that
+		 * this doesn't delay the clean up of rest of the process private resources.
+		 */
+		gmu_core_free_block(device, &private->profile.md);
+	}
 
 	kfree(private);
 }
@@ -1348,7 +1361,7 @@ static struct kgsl_process_private *kgsl_process_private_open(
 	 * private destroy is triggered but didn't complete. Retry creating
 	 * process private after sometime to allow previous destroy to complete.
 	 */
-	for (i = 0; (PTR_ERR_OR_ZERO(private) == -EEXIST) && (i < 50); i++) {
+	for (i = 0; (PTR_ERR_OR_ZERO(private) == -EEXIST) && (i < 1000); i++) {
 		usleep_range(10, 100);
 		private = _process_private_open(device);
 	}
@@ -3061,16 +3074,15 @@ static int kgsl_setup_anon_useraddr(struct kgsl_device *device, struct kgsl_page
 	entry->memdesc.ops = &kgsl_usermem_ops;
 
 	if (kgsl_memdesc_use_cpu_map(&entry->memdesc)) {
-
 		/* Register the address in the database */
 		ret = kgsl_mmu_set_svm_region(pagetable,
-			(uint64_t) hostptr, (uint64_t) size);
+			&entry->memdesc, (uint64_t) hostptr, (uint64_t) size);
 
 		/* if OOM, retry once after flushing lockless_workqueue */
 		if (ret == -ENOMEM) {
 			flush_workqueue(kgsl_driver.lockless_workqueue);
 			ret = kgsl_mmu_set_svm_region(pagetable,
-				(uint64_t) hostptr, (uint64_t) size);
+				&entry->memdesc, (uint64_t) hostptr, (uint64_t) size);
 		}
 
 		if (ret)
@@ -4767,29 +4779,11 @@ static unsigned long _gpu_set_svm_region(struct kgsl_process_private *private,
 {
 	int ret;
 
-	/*
-	 * Protect access to the gpuaddr here to prevent multiple vmas from
-	 * trying to map a SVM region at the same time
-	 */
-	spin_lock(&entry->memdesc.lock);
+	ret = kgsl_mmu_set_svm_region(private->pagetable,  &entry->memdesc,
+		(uint64_t) addr, (uint64_t) size);
 
-	if (entry->memdesc.gpuaddr) {
-		spin_unlock(&entry->memdesc.lock);
-		return (unsigned long) -EBUSY;
-	}
-
-	ret = kgsl_mmu_set_svm_region(private->pagetable, (uint64_t) addr,
-		(uint64_t) size);
-
-	if (ret != 0) {
-		spin_unlock(&entry->memdesc.lock);
+	if (ret != 0)
 		return (unsigned long) ret;
-	}
-
-	entry->memdesc.gpuaddr = (uint64_t) addr;
-	spin_unlock(&entry->memdesc.lock);
-
-	entry->memdesc.pagetable = private->pagetable;
 
 	ret = kgsl_mmu_map(private->pagetable, &entry->memdesc);
 	if (ret) {

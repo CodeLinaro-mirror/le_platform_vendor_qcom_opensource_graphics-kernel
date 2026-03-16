@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __KGSL_IOMMU_H
 #define __KGSL_IOMMU_H
@@ -26,7 +26,7 @@
  * conflict
  */
 
-#define KGSL_MEMSTORE_TOKEN_ADDRESS	(KGSL_IOMMU_SECURE_BASE32 - SZ_4K)
+#define KGSL_MEMSTORE_TOKEN_ADDRESS	(KGSL_IOMMU_SECURE_BASE32 - PAGE_SIZE)
 
 #define KGSL_IOMMU_GLOBAL_MEM_BASE(__mmu)	\
 	(test_bit(KGSL_MMU_64BIT, &(__mmu)->features) ? \

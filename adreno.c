@@ -1480,6 +1480,18 @@ int adreno_device_probe(struct platform_device *pdev,
 
 	device->debug_bus_bin = status;
 
+	status = adreno_read_fuse(pdev, "debugbus_en");
+	if (status < 0)
+		dev_err(device->dev, "failed to read debugbus_en nvmem cell\n");
+
+	device->debugbus_en = status;
+
+	status = adreno_read_fuse(pdev, "gpu_niden_en");
+	if (status < 0)
+		dev_err(device->dev, "failed to read gpu_niden_en nvmem cell\n");
+
+	device->gpu_niden_en = status;
+
 	adreno_read_soc_code(device);
 
 	status = adreno_of_get_power(adreno_dev, pdev);
@@ -2861,6 +2873,9 @@ static void adreno_alloc_dcvs_profile_memory(struct kgsl_device *device,
 		sizebytes = md->size >> 1;
 		memset(md->hostptr, KGSL_DCVS_ATTR_UNUSED, sizebytes);
 		memset(md->hostptr + sizebytes, 0, sizebytes);
+	} else {
+		/* Clear memdesc if allocation fails */
+		memset(md, 0x0, sizeof(*md));
 	}
 }
 

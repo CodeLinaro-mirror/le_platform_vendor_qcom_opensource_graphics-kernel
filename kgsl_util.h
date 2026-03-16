@@ -290,4 +290,15 @@ void isdb_write(void __iomem *base, u32 offset);
 #else
 #define kgsl_timer_container_of from_timer
 #endif
+
+#if (KERNEL_VERSION(6, 18, 0) <= LINUX_VERSION_CODE)
+/**
+ * When using kgsl_nth_page, user has to make sure the pages are contiguous.
+ * It can be checked with help of page_range_contiguous().
+ */
+#define kgsl_nth_page(page, n) ((page) + (n))
+#else
+#define kgsl_nth_page(page, n) nth_page((page), (n))
+#endif
+
 #endif

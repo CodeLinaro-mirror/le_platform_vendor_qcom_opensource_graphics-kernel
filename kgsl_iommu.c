@@ -2126,17 +2126,9 @@ static int _remove_gpuaddr(struct kgsl_pagetable *pagetable,
 }
 
 static int _insert_gpuaddr(struct kgsl_pagetable *pagetable,
-		uint64_t gpuaddr, uint64_t size)
+		uint64_t gpuaddr, uint64_t size, struct kgsl_iommu_addr_entry *new)
 {
 	struct rb_node **node, *parent = NULL;
-	struct kgsl_iommu_addr_entry *new =
-		kmem_cache_alloc(addr_entry_cache, GFP_ATOMIC);
-
-	if (new == NULL)
-		return -ENOMEM;
-
-	new->base = gpuaddr;
-	new->size = size;
 
 	node = &pagetable->rbtree.rb_node;
 
@@ -2153,7 +2145,6 @@ static int _insert_gpuaddr(struct kgsl_pagetable *pagetable,
 		else {
 			/* Duplicate entry */
 			WARN_RATELIMIT(1, "duplicate gpuaddr: 0x%llx\n", gpuaddr);
-			kmem_cache_free(addr_entry_cache, new);
 			return -EEXIST;
 		}
 	}
@@ -2363,15 +2354,33 @@ static bool iommu_addr_in_svm_ranges(struct kgsl_pagetable *pagetable,
 }
 
 static int kgsl_iommu_set_svm_region(struct kgsl_pagetable *pagetable,
-		uint64_t gpuaddr, uint64_t size)
+		struct kgsl_memdesc *memdesc, uint64_t gpuaddr, uint64_t size)
 {
 	int ret = -ENOMEM;
 	struct rb_node *node;
+	struct kgsl_iommu_addr_entry *new;
 
 	/* Make sure the requested address doesn't fall out of SVM range */
 	if (!iommu_addr_in_svm_ranges(pagetable, gpuaddr, size))
 		return -ENOMEM;
 
+	new = kmem_cache_alloc(addr_entry_cache, GFP_KERNEL);
+	if (!new)
+		return -ENOMEM;
+
+	new->base = gpuaddr;
+	new->size = size;
+
+	/*
+	 * Protect access to the gpuaddr here to prevent multiple vmas from
+	 * trying to map a SVM region at the same time
+	 */
+	spin_lock(&memdesc->lock);
+	if (memdesc->gpuaddr) {
+		spin_unlock(&memdesc->lock);
+		kmem_cache_free(addr_entry_cache, new);
+		return -EBUSY;
+	}
 	spin_lock(&pagetable->lock);
 	node = pagetable->rbtree.rb_node;
 
@@ -2391,9 +2400,21 @@ static int kgsl_iommu_set_svm_region(struct kgsl_pagetable *pagetable,
 			goto out;
 	}
 
-	ret = _insert_gpuaddr(pagetable, gpuaddr, size);
+	ret = _insert_gpuaddr(pagetable, gpuaddr, size, new);
+
 out:
 	spin_unlock(&pagetable->lock);
+
+	if (ret) {
+		spin_unlock(&memdesc->lock);
+		kmem_cache_free(addr_entry_cache, new);
+		return ret;
+	}
+
+	memdesc->gpuaddr = gpuaddr;
+	memdesc->pagetable = pagetable;
+	spin_unlock(&memdesc->lock);
+
 	return ret;
 }
 
@@ -2403,20 +2424,29 @@ static int get_gpuaddr(struct kgsl_pagetable *pagetable,
 {
 	u64 addr;
 	int ret;
+	struct kgsl_iommu_addr_entry *new = kmem_cache_alloc(addr_entry_cache, GFP_KERNEL);
+
+	if (!new)
+		return -ENOMEM;
 
 	spin_lock(&pagetable->lock);
 	addr = _get_unmapped_area(pagetable, start, end, size, align);
 	if (addr == (u64) -ENOMEM) {
 		spin_unlock(&pagetable->lock);
+		kmem_cache_free(addr_entry_cache, new);
 		return -ENOMEM;
 	}
 
-	ret = _insert_gpuaddr(pagetable, addr, size);
+	new->base = addr;
+	new->size = size;
+	ret = _insert_gpuaddr(pagetable, addr, size, new);
 	spin_unlock(&pagetable->lock);
 
 	if (ret == 0) {
 		memdesc->gpuaddr = addr;
 		memdesc->pagetable = pagetable;
+	} else {
+		kmem_cache_free(addr_entry_cache, new);
 	}
 
 	return ret;
@@ -2674,15 +2704,20 @@ static int iommu_probe_secure_context(struct kgsl_device *device,
 		return -EPERM;
 
 	node = of_find_node_by_name(parent, "gfx3d_secure");
-	if (!node)
-		return -ENOENT;
+	if (!node) {
+		ret = -ENOENT;
+		goto err;
+	}
 
 	pdev = of_find_device_by_node(node);
-	ret = of_dma_configure(&pdev->dev, node, true);
-	of_node_put(node);
+	if (!pdev) {
+		ret = -ENODEV;
+		goto err_node_put;
+	}
 
+	ret = of_dma_configure(&pdev->dev, node, true);
 	if (ret)
-		return ret;
+		goto err_device_put;
 
 	context->cb_num = -1;
 	context->name = "gfx3d_secure";
@@ -2692,29 +2727,21 @@ static int iommu_probe_secure_context(struct kgsl_device *device,
 
 	context->domain = kgsl_iommu_domain_alloc(&context->pdev->dev);
 	if (!context->domain) {
-		/* FIXME: put away the device */
-		return -ENODEV;
+		ret = -ENODEV;
+		goto err_device_put;
 	}
 
 	ret = qcom_iommu_set_secure_vmid(context->domain, secure_vmid);
 	if (ret) {
 		dev_err(&device->pdev->dev, "Unable to set the secure VMID: %d\n", ret);
-		iommu_domain_free(context->domain);
-		context->domain = NULL;
-
-		/* FIXME: put away the device */
-		return ret;
+		goto err_domain_free;
 	}
 
 	_enable_gpuhtw_llc(mmu, context->domain);
 
 	ret = iommu_attach_device(context->domain, &context->pdev->dev);
-	if (ret) {
-		iommu_domain_free(context->domain);
-		/* FIXME: Put way the device */
-		context->domain = NULL;
-		return ret;
-	}
+	if (ret)
+		goto err_domain_free;
 
 	iommu_set_fault_handler(context->domain,
 		kgsl_iommu_secure_fault_handler, mmu);
@@ -2722,18 +2749,32 @@ static int iommu_probe_secure_context(struct kgsl_device *device,
 	context->cb_num = qcom_iommu_get_context_bank_nr(context->domain);
 
 	if (context->cb_num < 0) {
-		iommu_detach_device(context->domain, &context->pdev->dev);
-		iommu_domain_free(context->domain);
-		context->domain = NULL;
-		return context->cb_num;
+		ret = context->cb_num;
+		goto err_detach_device;
 	}
 
 	mmu->securepagetable = kgsl_iommu_secure_pagetable(mmu);
 
-	if (IS_ERR(mmu->securepagetable))
-		mmu->secured = false;
+	if (!IS_ERR(mmu->securepagetable)){
+		of_node_put(node);
+		return 0;
+	}
 
-	return 0;
+/* Fall through to clean up unsecured case */
+err_detach_device:
+	iommu_detach_device(context->domain, &context->pdev->dev);
+err_domain_free:
+	iommu_domain_free(context->domain);
+	context->domain = NULL;
+err_device_put:
+	platform_device_put(pdev);
+	context->pdev = NULL;
+err_node_put:
+	of_node_put(node);
+err:
+	mmu->secured = false;
+
+	return ret;
 }
 
 static const char * const kgsl_iommu_clocks[] = {

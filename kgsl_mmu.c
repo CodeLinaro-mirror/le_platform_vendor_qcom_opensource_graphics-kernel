@@ -77,13 +77,13 @@ sysfs_show_entries(struct kobject *kobj,
 
 	pt = _get_pt_from_kobj(kobj);
 
-	if (pt) {
+	if (!IS_ERR_OR_NULL(pt)) {
 		unsigned int val = atomic_read(&pt->stats.entries);
 
 		ret += scnprintf(buf, PAGE_SIZE, "%d\n", val);
+		kref_put(&pt->refcount, kgsl_destroy_pagetable);
 	}
 
-	kref_put(&pt->refcount, kgsl_destroy_pagetable);
 	return ret;
 }
 
@@ -97,13 +97,13 @@ sysfs_show_mapped(struct kobject *kobj,
 
 	pt = _get_pt_from_kobj(kobj);
 
-	if (pt) {
+	if (!IS_ERR_OR_NULL(pt)) {
 		uint64_t val = atomic_long_read(&pt->stats.mapped);
 
 		ret += scnprintf(buf, PAGE_SIZE, "%llu\n", val);
+		kref_put(&pt->refcount, kgsl_destroy_pagetable);
 	}
 
-	kref_put(&pt->refcount, kgsl_destroy_pagetable);
 	return ret;
 }
 
@@ -117,13 +117,13 @@ sysfs_show_max_mapped(struct kobject *kobj,
 
 	pt = _get_pt_from_kobj(kobj);
 
-	if (pt) {
+	if (!IS_ERR_OR_NULL(pt)) {
 		uint64_t val = atomic_long_read(&pt->stats.max_mapped);
 
 		ret += scnprintf(buf, PAGE_SIZE, "%llu\n", val);
+		kref_put(&pt->refcount, kgsl_destroy_pagetable);
 	}
 
-	kref_put(&pt->refcount, kgsl_destroy_pagetable);
 	return ret;
 }
 
@@ -312,15 +312,16 @@ uint64_t kgsl_mmu_find_svm_region(struct kgsl_pagetable *pagetable,
 /**
  * kgsl_mmu_set_svm_region() - Check if a region is empty and reserve it if so
  * @pagetable: KGSL pagetable to search
+ * @memdesc: Pointer to memory descriptor
  * @gpuaddr: GPU address to check/reserve
  * @size: Size of the region to check/reserve
  */
-int kgsl_mmu_set_svm_region(struct kgsl_pagetable *pagetable, uint64_t gpuaddr,
-		uint64_t size)
+int kgsl_mmu_set_svm_region(struct kgsl_pagetable *pagetable,
+	struct kgsl_memdesc *memdesc, uint64_t gpuaddr, uint64_t size)
 {
 	if (PT_OP_VALID(pagetable, set_svm_region))
-		return pagetable->pt_ops->set_svm_region(pagetable, gpuaddr,
-			size);
+		return pagetable->pt_ops->set_svm_region(pagetable, memdesc,
+			gpuaddr, size);
 	return -ENOMEM;
 }
 
@@ -329,7 +330,7 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 				struct kgsl_memdesc *memdesc)
 {
 	int size;
-	struct kgsl_device *device = KGSL_MMU_DEVICE(pagetable->mmu);
+	struct kgsl_device *device = NULL;
 
 	if (!memdesc->gpuaddr)
 		return -EINVAL;
@@ -357,6 +358,7 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 
 		if (!kgsl_memdesc_is_global(memdesc)
 				&& !(memdesc->flags & KGSL_MEMFLAGS_USERMEM_ION)) {
+			device = KGSL_MMU_DEVICE(pagetable->mmu);
 			kgsl_trace_gpu_mem_total(device, size);
 		}
 
@@ -440,7 +442,7 @@ kgsl_mmu_unmap(struct kgsl_pagetable *pagetable,
 		struct kgsl_memdesc *memdesc)
 {
 	int ret = 0;
-	struct kgsl_device *device = KGSL_MMU_DEVICE(pagetable->mmu);
+	struct kgsl_device *device = NULL;
 
 	if (memdesc->size == 0)
 		return -EINVAL;
@@ -467,6 +469,7 @@ kgsl_mmu_unmap(struct kgsl_pagetable *pagetable,
 
 		if (!kgsl_memdesc_is_global(memdesc)) {
 			CLEAR_FLAG(KGSL_MEMDESC_MAPPED, &memdesc->priv);
+			device = KGSL_MMU_DEVICE(pagetable->mmu);
 			if (!(memdesc->flags & KGSL_MEMFLAGS_USERMEM_ION))
 				kgsl_trace_gpu_mem_total(device, -(size));
 		}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include "adreno.h"
@@ -1426,7 +1426,7 @@ static void a6xx_snapshot_debugbus(struct adreno_device *adreno_dev,
 	int i;
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
-	if (device->debug_bus_bin)
+	if (device->debug_bus_bin && !device->debugbus_en && !device->gpu_niden_en)
 		return;
 
 	kgsl_regwrite(device, A6XX_DBGC_CFG_DBGBUS_CNTLT,

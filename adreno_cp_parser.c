@@ -391,6 +391,8 @@ static int adreno_ib_find_objs(struct kgsl_device *device,
 	int ret = 0;
 	uint64_t rem = dwords;
 	int i;
+	int pkt_size;
+	int curr_size; /* curr_size is cmd_size (1) + pkt_size */
 	struct ib_parser_variables ib_parse_vars;
 	unsigned int *src;
 	struct adreno_ib_object *ib_obj;
@@ -428,13 +430,11 @@ static int adreno_ib_find_objs(struct kgsl_device *device,
 	if (ret)
 		goto done;
 
-	for (i = 0; rem > 0; rem--, i++) {
-		int pktsize;
-
+	for (i = 0; rem > 0;) {
 		if (pkt_is_type4(src[i]))
-			pktsize = type4_pkt_size(src[i]);
+			pkt_size = type4_pkt_size(src[i]);
 		else if (pkt_is_type7(src[i]))
-			pktsize = type7_pkt_size(src[i]);
+			pkt_size = type7_pkt_size(src[i]);
 
 		/*
 		 * If the packet isn't a type 1, type 3, type 4 or type 7 then
@@ -443,8 +443,11 @@ static int adreno_ib_find_objs(struct kgsl_device *device,
 		else
 			break;
 
-		/* Check if rem is less than pktsize before decrementing */
-		if (rem < pktsize)
+		/* calculate total size for current packet */
+		curr_size = pkt_size + 1;
+
+		/* Check if rem is less than curr_size before decrementing */
+		if (rem < curr_size)
 			break;
 
 		if (pkt_is_type7(src[i])) {
@@ -474,8 +477,8 @@ static int adreno_ib_find_objs(struct kgsl_device *device,
 			}
 		}
 
-		i += pktsize;
-		rem -= pktsize;
+		i += curr_size;
+		rem -= curr_size;
 	}
 
 done:

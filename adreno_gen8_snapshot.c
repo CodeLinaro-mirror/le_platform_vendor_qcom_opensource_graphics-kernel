@@ -191,9 +191,9 @@ const struct gen8_snapshot_block_list gen8_11_0_snapshot_block_list = {
 	.external_core_regs = gen8_11_0_external_core_regs,
 	.num_external_core_regs = ARRAY_SIZE(gen8_11_0_external_core_regs),
 	.gmu_cx_unsliced_regs = gen8_11_0_gmucx_registers,
-	.gmu_gx_regs = gen8_2_0_gmu_gx_registers,
-	.num_gmu_gx_regs = ARRAY_SIZE(gen8_2_0_gmu_gx_registers),
-	.rscc_regs = gen8_2_0_rscc_rsc_registers,
+	.gmu_gx_regs = gen8_11_0_gmu_gx_registers,
+	.num_gmu_gx_regs = ARRAY_SIZE(gen8_11_0_gmu_gx_registers),
+	.rscc_regs = gen8_11_0_rscc_rsc_registers,
 	.reg_list = gen8_11_0_misc_registers,
 	.cx_misc_regs = gen8_11_0_cx_misc_registers,
 	.shader_blocks = gen8_11_0_shader_blocks,
@@ -1053,7 +1053,7 @@ static size_t gen8_legacy_snapshot_cluster_dbgahb(struct kgsl_device *device,
 	header->usptp_id = info->usptp_id;
 	header->slice_id = HEADER_SLICE_ID(info->cluster->slice_region, info->slice_id);
 
-	read_sel = GEN8_SP_READ_SEL_VAL(0, info->slice_id, info->location_id,
+	read_sel = GEN8_SP_READ_SEL_VAL(info->context_id, info->slice_id, info->location_id,
 			info->pipe_id, info->statetype_id, info->usptp_id, info->sp_id);
 
 	kgsl_regwrite(device, GEN8_SP_READ_SEL, read_sel);
@@ -1186,8 +1186,8 @@ static bool gen8_snapshot_dbgahb_regs(struct kgsl_device *device,
 
 					/* Program the aperture */
 					ptr += CD_WRITE(ptr, GEN8_SP_READ_SEL, GEN8_SP_READ_SEL_VAL
-						(0, j, cluster->location_id, cluster->pipe_id,
-						cluster->statetype, usptp, sp));
+						(cluster->context_id, j, cluster->location_id,
+						cluster->pipe_id, cluster->statetype, usptp, sp));
 
 					for (; regs[0] != UINT_MAX; regs += 2) {
 						count = REG_COUNT(regs);
@@ -1658,7 +1658,7 @@ static void gen8_snapshot_cx_debugbus(struct adreno_device *adreno_dev,
 	u32 i;
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
-	if (device->debug_bus_bin)
+	if (device->debug_bus_bin && !device->debugbus_en && !device->gpu_niden_en)
 		return;
 
 	kgsl_regwrite(device, GEN8_CX_DBGC_CFG_DBGBUS_CNTLT,
@@ -1717,7 +1717,7 @@ static void gen8_snapshot_debugbus(struct adreno_device *adreno_dev,
 	u32 i;
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
-	if (device->debug_bus_bin)
+	if (device->debug_bus_bin && !device->debugbus_en && !device->gpu_niden_en)
 		return;
 
 	kgsl_regwrite(device, GEN8_DBGC_CFG_DBGBUS_CNTLT,

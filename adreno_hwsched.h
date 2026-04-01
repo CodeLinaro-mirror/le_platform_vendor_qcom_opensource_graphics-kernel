@@ -481,4 +481,55 @@ void adreno_hwsched_reset_hfi_mem(struct adreno_device *adreno_dev);
  * Return: Zero on success or negative error on failure
  */
 int adreno_hwsched_context_init(struct adreno_context *drawctxt);
+
+/**
+ * adreno_hwsched_import_external_fence - Function for importing external
+ * fences so that they can be dispatched to GMU
+ * @adreno-dev: Pointer to the adreno device
+ * @hw_fence: Pointer to the hardware fence
+ * @syncobj: Pointer to the sync object
+ * obj@: Pointer to the hfi syncobj for this fence
+ *
+ * Import an external fence so that GMU can wait for it via hw path
+ *
+ * Return: Zero on success or negative error on failure
+ */
+int adreno_hwsched_import_external_fence(struct adreno_device *adreno_dev,
+	struct kgsl_drawobj_sync_hw_fence *hw_fence, struct kgsl_drawobj_sync *syncobj,
+	struct hfi_syncobj *obj);
+
+/**
+ * adreno_hwsched_import_external_fence_legacy - Legacy function for importing external
+ * fences so that they can be dispatched to GMU
+ * @adreno-dev: Pointer to the adreno device
+ * @fence: Pointer to the dma fence
+ * @syncobj: Pointer to the sync object
+ * obj@: Pointer to the hfi syncobj for this fence
+ *
+ * Import an external fence so that GMU can wait for it via hw path
+ *
+ * Return: Zero on success or negative error on failure
+ */
+int adreno_hwsched_import_external_fence_legacy(struct adreno_device *adreno_dev,
+	struct dma_fence *fence, struct kgsl_drawobj_sync *syncobj, struct hfi_syncobj_legacy *obj);
+/**
+ * adreno_hwsched_enable_gmu_fencing - Register GPU as a synx client and hw fence client
+ * @adreno_dev: pointer to the adreno device
+ *
+ * Register with the synx driver as both synx and hw fence client to be able to trigger and wait
+ * for hardware synx handles and hardware fences. Set up the memory descriptor for mapping the
+ * synx memory to the GMU.
+ */
+void adreno_hwsched_enable_gmu_fencing(struct adreno_device *adreno_dev);
+
+/*
+ * adreno_hwsched_retire_cmdlist_obj - helper function for cleaning up cmd_list_obj
+ * @adreno_dev: Pointer to the adreno device
+ * @obj: pointer to cmd_list_obj
+ *
+ * Helper function to remove node from cmd_list.
+ *
+ */
+void adreno_hwsched_retire_cmdlist_obj(struct adreno_device *adreno_dev,
+	struct cmd_list_obj *obj);
 #endif

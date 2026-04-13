@@ -190,6 +190,10 @@
 #define ADRENO_GMU_AB BIT(28)
 /* Enable GMU Fast Context Destroy optimization */
 #define ADRENO_GMU_FAST_CONTEXT_DESTROY BIT(29)
+/* Enable AHB timeout recovery */
+#define ADRENO_AHB_TIMEOUT_RECOVERY BIT(30)
+/* Enable SPEL (System Power and Energy Limits) */
+#define ADRENO_GMU_SPEL BIT(31)
 
 /*
  * Adreno GPU quirks - control bits for various workarounds
@@ -326,16 +330,20 @@ enum adreno_gpurev {
 #define ADRENO_GMU_FAULT BIT(5)
 #define ADRENO_CTX_DETATCH_TIMEOUT_FAULT BIT(6)
 #define ADRENO_GMU_FAULT_SKIP_SNAPSHOT BIT(7)
-#define ADRENO_FAULT_TYPES 8
+#define ADRENO_AHB_TIMEOUT_FAULT BIT(8)
+#define ADRENO_FAULT_TYPES 9
 
 /**
  * Bit fields for GPU_CX_MISC_CX_AHB_*_CNTL registers
  * AHB_TXFRTIMEOUTRELEASE	[8:8]
  * AHB_TXFRTIMEOUTENABLE	[9:9]
+ * AHB_TXFRTIMEOUTRESET		[10:10]
  * AHB_RESPONDERROR		[11:11]
  * AHB_ERRORSTATUSENABLE	[12:12]
+ * AHB_ERRORSTATUSRESET		[13:13]
  */
-#define ADRENO_AHB_CNTL_DEFAULT (BIT(12) | BIT(11) | BIT(9) | BIT(8))
+#define ADRENO_AHB_CNTL_DEFAULT (BIT(12) | BIT(9) | BIT(8))
+#define ADRENO_AHB_CNTL_RESET (BIT(13) | BIT(10))
 
 enum adreno_pipe_type {
 	PIPE_NONE = 0,
@@ -441,6 +449,28 @@ struct adreno_busy_data {
 	unsigned int num_ifpc;
 	unsigned int throttle_cycles[ADRENO_GPMU_THROTTLE_COUNTERS];
 	u32 bcl_throttle;
+};
+
+/**
+ * struct adreno_sp_profiling
+ * @enabled: True if SP profiling is enabled (from debugfs)
+ * @active: True if SP profiling is active
+ * @buf_sz_bytes: Size of the debug buffer in bytes
+ * @bus_sel_a: Config value to use for the GPU_DBGC_CFG_DBGBUS_SEL_A register
+ * @bus_sel_b: Config value to use for the GPU_DBGC_CFG_DBGBUS_SEL_B register
+ * @bus_sel_c: Config value to use for the GPU_DBGC_CFG_DBGBUS_SEL_C register
+ * @bus_sel_d: Config value to use for the GPU_DBGC_CFG_DBGBUS_SEL_D register
+ * @dbg_buf: Buffer containing SP-related data for analysis
+ */
+struct adreno_sp_profiling {
+	bool enabled;
+	bool active;
+	u32 buf_sz_bytes;
+	u32 bus_sel_a;
+	u32 bus_sel_b;
+	u32 bus_sel_c;
+	u32 bus_sel_d;
+	struct kgsl_memdesc *dbg_buf;
 };
 
 /**
@@ -629,6 +659,7 @@ struct adreno_fault_proc {
  * @starved_ram_lo: Number of cycles VBIF/GBIF is stalled by DDR (Only channel 0
  * stall cycles in case of GBIF)
  * @starved_ram_lo_ch1: Number of cycles GBIF is stalled by DDR channel 1
+ * @cp_cycles_lo: Number of CP cycles spent on a context
  * @halt: Atomic variable to check whether the GPU is currently halted
  * @pending_irq_refcnt: Atomic variable to keep track of running IRQ handlers
  * @ctx_d_debugfs: Context debugfs node
@@ -686,6 +717,7 @@ struct adreno_device {
 	unsigned int ram_cycles_lo_ch1_write;
 	unsigned int starved_ram_lo;
 	unsigned int starved_ram_lo_ch1;
+	unsigned int cp_cycles_lo;
 	atomic_t halt;
 	atomic_t pending_irq_refcnt;
 	struct dentry *ctx_d_debugfs;
@@ -756,6 +788,8 @@ struct adreno_device {
 	bool gpuhtw_llc_slice_enable;
 	void *gpumv_llc_slice;
 	bool gpumv_llc_slice_enable;
+	void *gpulayers_llc_slice;
+	bool gpulayers_llc_slice_enable;
 	unsigned int zap_loaded;
 	/**
 	 * @critpkts: Memory descriptor for 5xx critical packets if applicable
@@ -800,6 +834,10 @@ struct adreno_device {
 	u32 bcl_throttle_time_us;
 	/* @preemption_debugfs_dir: Debugfs directory node for preemption related nodes */
 	struct dentry *preemption_debugfs_dir;
+	/* @sp_profiling_dir: Debugfs directory node for SP profiling related nodes */
+	struct dentry *sp_profiling_dir;
+	/* @sp_profiling: Container for SP profiling information from debugfs */
+	struct adreno_sp_profiling sp_profiling;
 	/* @hwsched_enabled: If true, hwsched is enabled */
 	bool hwsched_enabled;
 	/* @fastblend_enabled: True if fastblend feature is enabled */
@@ -924,12 +962,16 @@ enum adreno_device_flags {
  * @retired: Number of GPU ticks at the end of the drawobj
  * @ctx_start: CP_ALWAYS_ON_CONTEXT tick at start of the drawobj
  * @ctx_end: CP_ALWAYS_ON_CONTEXT tick at end of the drawobj
+ * @cycles_start: CP cycles count at start of the drawobj
+ * @cycles_end: CP cycles count at end of the drawobj
  */
 struct adreno_drawobj_profile_entry {
 	uint64_t started;
 	uint64_t retired;
 	uint64_t ctx_start;
 	uint64_t ctx_end;
+	uint64_t cycles_start;
+	uint64_t cycles_end;
 };
 
 #define ADRENO_DRAWOBJ_PROFILE_OFFSET(_index, _member) \
@@ -2018,12 +2060,13 @@ int adreno_zap_shader_load(struct adreno_device *adreno_dev,
  * @adreno_dev: Adreno GPU device handle
  * @funcs: List of callback functions
  * @status: Interrupt status
+ * @mask: IRQ mask
  *
  * Walk the bits in the interrupt status and call any applicable callbacks.
  * Return: IRQ_HANDLED if one or more interrupt callbacks were called.
  */
 irqreturn_t adreno_irq_callbacks(struct adreno_device *adreno_dev,
-		const struct adreno_irq_funcs *funcs, u32 status);
+		const struct adreno_irq_funcs *funcs, u32 status, u32 mask);
 
 
 /**
@@ -2136,8 +2179,10 @@ void adreno_preemption_timer(struct timer_list *t);
 /**
  * adreno_create_profile_buffer - Create a buffer to store profiling data
  * @adreno_dev: Adreno GPU device handle
+ *
+ * Return: 0 on success or negative on failure
  */
-void adreno_create_profile_buffer(struct adreno_device *adreno_dev);
+int adreno_create_profile_buffer(struct adreno_device *adreno_dev);
 
 /**
  * adreno_isidle - return true if the hardware is idle
@@ -2170,6 +2215,25 @@ static inline int adreno_allocate_global(struct kgsl_device *device,
 
 	*memdesc = kgsl_allocate_global(device, size, padding, flags, priv, name);
 	return PTR_ERR_OR_ZERO(*memdesc);
+}
+
+/**
+ * adreno_free_global - Helper function to free a global GPU object
+ * @device: A GPU device handle
+ * @memdesc: A pointer to a kgsl_memdesc pointer
+ * @padding: Amount of extra padding added to the VA allocation
+ *
+ * Free a global object if it hasn't already been freed.
+ *
+ * Return: 0 on success or negative on error
+ */
+static inline int adreno_free_global(struct kgsl_device *device,
+	struct kgsl_memdesc **memdesc, u32 padding)
+{
+	if (IS_ERR_OR_NULL(*memdesc))
+		return 0;
+
+	return kgsl_free_global(device, memdesc, padding);
 }
 
 static inline void adreno_set_dispatch_ops(struct adreno_device *adreno_dev,
@@ -2243,6 +2307,10 @@ static inline void adreno_llcc_slice_deactivate(struct adreno_device *adreno_dev
 
 	if (adreno_dev->gpumv_llc_slice_enable && !IS_ERR_OR_NULL(adreno_dev->gpumv_llc_slice))
 		llcc_slice_deactivate(adreno_dev->gpumv_llc_slice);
+
+	if (adreno_dev->gpulayers_llc_slice_enable &&
+		!IS_ERR_OR_NULL(adreno_dev->gpulayers_llc_slice))
+		llcc_slice_deactivate(adreno_dev->gpulayers_llc_slice);
 }
 
 /**

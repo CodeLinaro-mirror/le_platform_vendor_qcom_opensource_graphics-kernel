@@ -1734,11 +1734,11 @@ done:
 
 static int gen8_hfi_send_hw_fence_feature_ctrl(struct adreno_device *adreno_dev)
 {
-	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
-	struct device *gmu_pdev_dev = GMU_PDEV_DEV(KGSL_DEVICE(adreno_dev));
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct device *gmu_pdev_dev = GMU_PDEV_DEV(device);
 	int ret;
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &hwsched->flags))
+	if (!gmu_core_is_hw_fencing_enabled(device))
 		return 0;
 
 	ret = gen8_hfi_send_feature_ctrl(adreno_dev, HFI_FEATURE_HW_FENCE, 1, 0);
@@ -2235,7 +2235,7 @@ static int gen8_hwsched_setup_default_votes(struct adreno_device *adreno_dev)
 	return gen8_hwsched_set_gmu_based_dcvs_votes(adreno_dev);
 }
 
-int gen8_hwsched_warmboot_init_gmu(struct adreno_device *adreno_dev)
+static int gen8_hwsched_warmboot_init_gmu(struct adreno_device *adreno_dev)
 {
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
 	struct pending_cmd ack = {0};
@@ -2566,6 +2566,88 @@ static int gen8_hfi_send_gmu_dcvs_req(struct adreno_device *adreno_dev)
 	return gen8_hfi_send_generic_req(adreno_dev, cmd, MSG_HDR_GET_SIZE(cmd->hdr) << 2);
 }
 
+static int gen8_allocate_pwr_proto_trace_buf(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct device *gmu_pdev_dev = GMU_PDEV_DEV(KGSL_DEVICE(adreno_dev));
+	int ret;
+
+	if (!IS_ERR_OR_NULL(device->gmu_core.pwr_proto_trace.md) ||
+			!device->gmu_core.gmu_pwr_proto_trace_buf_size)
+		return 0;
+
+	device->gmu_core.pwr_proto_trace.md = gmu_core_reserve_kernel_block(device, 0,
+				device->gmu_core.gmu_pwr_proto_trace_buf_size,
+				GMU_NONCACHED_KERNEL, 0);
+
+	if (IS_ERR_OR_NULL(device->gmu_core.pwr_proto_trace.md)) {
+		ret = PTR_ERR(device->gmu_core.pwr_proto_trace.md);
+		if (!ret)
+			ret = -ENOMEM;
+		dev_err(gmu_pdev_dev, "GMU power proto buf allocation failed: %d\n", ret);
+		device->gmu_core.pwr_proto_trace.md = NULL;
+		return ret;
+	}
+
+	gmu_core_trace_header_init(&device->gmu_core.pwr_proto_trace,
+			TRACE_LOGTYPE_POWER_BUDGETING, TRACE_MODE_FREERUN);
+
+	return gmu_core_set_vrb_register(device->gmu_core.vrb, VRB_TRC_BUF_PWR_PROTO_TRACE,
+			device->gmu_core.pwr_proto_trace.md->gmuaddr);
+}
+
+static int gen8_allocate_pwr_limits_trace_buf(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct device *gmu_pdev_dev = GMU_PDEV_DEV(KGSL_DEVICE(adreno_dev));
+	int ret;
+
+	if (device->gmu_core.pwr_limits_trace.md || !device->gmu_core.gmu_pwr_limits_trace_buf_size)
+		return 0;
+
+	device->gmu_core.pwr_limits_trace.md = gmu_core_reserve_kernel_block(device, 0,
+				device->gmu_core.gmu_pwr_limits_trace_buf_size,
+				GMU_NONCACHED_KERNEL, 0);
+
+	if (IS_ERR_OR_NULL(device->gmu_core.pwr_limits_trace.md)) {
+		ret = PTR_ERR(device->gmu_core.pwr_limits_trace.md);
+		if (!ret)
+			ret = -ENOMEM;
+		dev_err(gmu_pdev_dev, "GMU power proto buf allocation failed: %d\n", ret);
+		device->gmu_core.pwr_limits_trace.md = NULL;
+		return ret;
+	}
+
+	gmu_core_trace_header_init(&device->gmu_core.pwr_limits_trace,
+		TRACE_LOGTYPE_POWER_BUDGETING, TRACE_MODE_FREERUN);
+
+	return gmu_core_set_vrb_register(device->gmu_core.vrb, VRB_PWR_LIMITS_TRACE_BUF,
+			device->gmu_core.pwr_limits_trace.md->gmuaddr);
+}
+
+static int gen8_hfi_send_spel_feature_ctrl(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct gmu_core_device *gmu = &device->gmu_core;
+	struct kgsl_gmu_spel *spel = &gmu->spel;
+	struct hfi_pwr_budget_cmd cmd;
+	struct hfi_msg_platform msg;
+	int ret;
+
+	if (!spel->enabled)
+		return 0;
+
+	ret = CMD_MSG_HDR(msg, H2F_MSG_PLATFORM_LA);
+	if (ret)
+		return ret;
+
+	msg.sub_type = H2F_ST_MSG_PWR_BUDGET;
+	cmd.header = msg;
+	cmd.revision = 1;
+	memcpy(cmd.data, spel->config, sizeof(spel->config));
+	return gen8_hfi_send_generic_req(adreno_dev, &cmd, sizeof(cmd));
+}
+
 static int gen8_hwsched_feature_ctrl(struct adreno_device *adreno_dev)
 {
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
@@ -2632,6 +2714,10 @@ static int gen8_hwsched_feature_ctrl(struct adreno_device *adreno_dev)
 		gen8_hfi_send_set_value(adreno_dev,
 			HFI_VALUE_LOG_GROUP, 0, gmu->log_group_mask);
 
+	ret = gen8_hfi_send_spel_feature_ctrl(adreno_dev);
+	if (ret)
+		goto err;
+
 	ret = gen8_hfi_send_core_fw_start(adreno_dev);
 	if (ret)
 		goto err;
@@ -2678,6 +2764,7 @@ int gen8_hwsched_hfi_start(struct adreno_device *adreno_dev)
 	struct gmu_core_device *gmu_core = &device->gmu_core;
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
 	struct pending_cmd ack = {0};
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	int ret;
 
 	reset_hfi_queues(adreno_dev);
@@ -2705,6 +2792,20 @@ int gen8_hwsched_hfi_start(struct adreno_device *adreno_dev)
 		HFI_WARMBOOT_SET_SCRATCH, false, &ack);
 	if (ret)
 		goto err;
+
+	ret = gen8_allocate_pwr_proto_trace_buf(adreno_dev);
+	if (ret)
+		goto err;
+
+	ret = gen8_allocate_pwr_limits_trace_buf(adreno_dev);
+	if (ret)
+		goto err;
+
+	if (pwr->update_dcvs_table) {
+		ret = gen8_build_rpmh_tables(adreno_dev);
+		if (ret)
+			goto err;
+	}
 
 	ret = gen8_hfi_send_gpu_perf_table(adreno_dev);
 	if (ret)
@@ -3005,7 +3106,7 @@ static int allocate_context_queues(struct adreno_device *adreno_dev,
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	int ret = 0;
 
-	if (test_bit(ADRENO_HWSCHED_HW_FENCE, &adreno_dev->hwsched.flags) &&
+	if (gmu_core_is_hw_fencing_enabled(device) &&
 		!drawctxt->gmu_hw_fence_queue.gmuaddr) {
 		ret = gmu_core_alloc_kernel_block(
 			device, &drawctxt->gmu_hw_fence_queue,
@@ -4422,7 +4523,7 @@ int gen8_hwsched_disable_hw_fence_throttle(struct adreno_device *adreno_dev)
 	u32 ts = 0;
 	int ret = 0;
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &adreno_dev->hwsched.flags))
+	if (!gmu_core_is_hw_fencing_enabled(KGSL_DEVICE(adreno_dev)))
 		return 0;
 
 	spin_lock(&hwf->lock);

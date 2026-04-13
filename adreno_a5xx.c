@@ -205,7 +205,6 @@ static int a5xx_init(struct adreno_device *adreno_dev)
 	if (ADRENO_QUIRK(adreno_dev, ADRENO_QUIRK_CRITICAL_PACKETS))
 		a5xx_critical_packet_construct(adreno_dev);
 
-	adreno_create_profile_buffer(adreno_dev);
 	a5xx_crashdump_init(adreno_dev);
 
 	return 0;
@@ -2303,7 +2302,8 @@ static irqreturn_t a5xx_irq_handler(struct adreno_device *adreno_dev)
 		status & ~A5XX_INT_RBBM_AHB_ERROR);
 
 	/* Call the helper function for callbacks */
-	ret = adreno_irq_callbacks(adreno_dev, a5xx_irq_funcs, status);
+	ret = adreno_irq_callbacks(adreno_dev, a5xx_irq_funcs,
+		status, adreno_dev->irq_mask);
 
 	trace_kgsl_a5xx_irq_status(adreno_dev, status);
 

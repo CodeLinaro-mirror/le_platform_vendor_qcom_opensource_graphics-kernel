@@ -531,7 +531,7 @@ static vm_fault_t kgsl_paged_vmfault(struct kgsl_memdesc *memdesc,
 		return VM_FAULT_SIGBUS;
 
 	pgoff = offset >> PAGE_SHIFT;
-	spin_lock(&memdesc->lock);
+	mutex_lock(&memdesc->lock);
 
 	if (memdesc->pages[pgoff]) {
 		page = memdesc->pages[pgoff];
@@ -542,7 +542,7 @@ static vm_fault_t kgsl_paged_vmfault(struct kgsl_memdesc *memdesc,
 
 		/* We are here because page was reclaimed */
 		SET_FLAG(KGSL_MEMDESC_SKIP_RECLAIM, &memdesc->priv);
-		spin_unlock(&memdesc->lock);
+		mutex_unlock(&memdesc->lock);
 
 		page = shmem_read_mapping_page_gfp(
 			memdesc->shmem_filp->f_mapping, pgoff,
@@ -556,14 +556,14 @@ static vm_fault_t kgsl_paged_vmfault(struct kgsl_memdesc *memdesc,
 		 * Update the pages array only if the page was
 		 * not already brought back.
 		 */
-		spin_lock(&memdesc->lock);
+		mutex_lock(&memdesc->lock);
 		if (!memdesc->pages[pgoff]) {
 			memdesc->pages[pgoff] = page;
 			atomic_dec(&priv->unpinned_page_count);
 			get_page(page);
 		}
 	}
-	spin_unlock(&memdesc->lock);
+	mutex_unlock(&memdesc->lock);
 
 	ret = vmf_insert_page(vma, vmf->address, page);
 	put_page(page);
@@ -839,7 +839,7 @@ void kgsl_memdesc_init(struct kgsl_device *device,
 		kgsl_memdesc_get_align(memdesc), ilog2(PAGE_SIZE));
 	kgsl_memdesc_set_align(memdesc, align);
 
-	spin_lock_init(&memdesc->lock);
+	mutex_init(&memdesc->lock);
 	idr_init(&memdesc->vma_idr);
 }
 
@@ -1010,10 +1010,7 @@ static void _kgsl_contiguous_free(struct kgsl_memdesc *memdesc)
 			memdesc->hostptr, memdesc->physaddr,
 			memdesc->attrs);
 
-	sg_free_table(memdesc->sgt);
-	kfree(memdesc->sgt);
-
-	memdesc->sgt = NULL;
+	kgsl_memdesc_free_sgt(memdesc);
 }
 
 static void kgsl_contiguous_free(struct kgsl_memdesc *memdesc)
@@ -1133,15 +1130,21 @@ static void kgsl_shmem_fill_page(void *ptr,
 	if (IS_ERR_OR_NULL(memdesc) || order)
 		return;
 
+	mutex_lock(&memdesc->lock);
 	if (list_empty(&memdesc->shmem_page_list)) {
 		int ret = kgsl_shmem_alloc_pages(memdesc);
 
-		if (ret <= 0)
+		if (ret <= 0) {
+			mutex_unlock(&memdesc->lock);
 			return;
+		}
 	}
 
-	*folio = list_first_entry(&memdesc->shmem_page_list, struct folio, lru);
-	list_del(&(*folio)->lru);
+	if (!list_empty(&memdesc->shmem_page_list)) {
+		*folio = list_first_entry(&memdesc->shmem_page_list, struct folio, lru);
+		list_del(&(*folio)->lru);
+	}
+	mutex_unlock(&memdesc->lock);
 }
 #else
 static void kgsl_shmem_fill_page(void *ptr,
@@ -1152,15 +1155,21 @@ static void kgsl_shmem_fill_page(void *ptr,
 	if (IS_ERR_OR_NULL(memdesc))
 		return;
 
+	mutex_lock(&memdesc->lock);
 	if (list_empty(&memdesc->shmem_page_list)) {
 		int ret = kgsl_shmem_alloc_pages(memdesc);
 
-		if (ret <= 0)
+		if (ret <= 0) {
+			mutex_unlock(&memdesc->lock);
 			return;
+		}
 	}
 
-	*folio = list_first_entry(&memdesc->shmem_page_list, struct folio, lru);
-	list_del(&(*folio)->lru);
+	if (!list_empty(&memdesc->shmem_page_list)) {
+		*folio = list_first_entry(&memdesc->shmem_page_list, struct folio, lru);
+		list_del(&(*folio)->lru);
+	}
+	mutex_unlock(&memdesc->lock);
 }
 #endif
 
@@ -1301,14 +1310,21 @@ static void kgsl_free_page(struct kgsl_memdesc *memdesc, struct page *p)
 
 void kgsl_memdesc_pagelist_cleanup(struct file *shmem_filp, struct kgsl_memdesc *memdesc)
 {
+	struct page *p, *tmp;
+	LIST_HEAD(page_list);
+
 	if (!shmem_filp)
 		return;
 
-	while (!list_empty(&memdesc->shmem_page_list)) {
-		struct page *page = list_first_entry(&memdesc->shmem_page_list, struct page, lru);
+	/* Detach page list under lock, free pages outside the lock */
+	mutex_lock(&memdesc->lock);
+	list_replace_init(&memdesc->shmem_page_list, &page_list);
+	memdesc->shmem_pages = 0;
+	mutex_unlock(&memdesc->lock);
 
-		list_del(&page->lru);
-		put_page(page);
+	list_for_each_entry_safe(p, tmp, &page_list, lru) {
+		list_del(&p->lru);
+		put_page(p);
 	}
 }
 
@@ -1696,10 +1712,7 @@ static void kgsl_free_secure_system_pages(struct kgsl_memdesc *memdesc)
 		__free_pages(page, get_order(PAGE_SIZE));
 	}
 
-	sg_free_table(memdesc->sgt);
-	kfree(memdesc->sgt);
-
-	memdesc->sgt = NULL;
+	kgsl_memdesc_free_sgt(memdesc);
 }
 
 static void kgsl_free_secure_pages(struct kgsl_memdesc *memdesc)
@@ -1726,10 +1739,7 @@ static void kgsl_free_secure_pages(struct kgsl_memdesc *memdesc)
 
 	kgsl_free_pages_from_sgt(memdesc);
 
-	sg_free_table(memdesc->sgt);
-	kfree(memdesc->sgt);
-
-	memdesc->sgt = NULL;
+	kgsl_memdesc_free_sgt(memdesc);
 }
 
 void kgsl_free_secure_page(struct page *page)
@@ -1912,9 +1922,7 @@ static int kgsl_alloc_secure_pages(struct kgsl_device *device,
 	if (ret) {
 		if (ret != -EADDRNOTAVAIL)
 			kgsl_free_pages_from_sgt(memdesc);
-		sg_free_table(sgt);
-		kfree(sgt);
-		memdesc->sgt = NULL;
+		kgsl_memdesc_free_sgt(memdesc);
 		return ret;
 	}
 
@@ -2052,6 +2060,13 @@ int kgsl_allocate_kernel(struct kgsl_device *device,
 	return 0;
 }
 
+void kgsl_memdesc_free_sgt(struct kgsl_memdesc *md)
+{
+	sg_free_table(md->sgt);
+	kfree(md->sgt);
+	md->sgt = NULL;
+}
+
 int kgsl_memdesc_init_fixed(struct kgsl_device *device,
 		struct platform_device *pdev, const char *resource,
 		struct kgsl_memdesc *memdesc)
@@ -2099,6 +2114,13 @@ struct kgsl_memdesc *kgsl_allocate_global_fixed(struct kgsl_device *device,
 		return ERR_PTR(ret);
 	}
 
+	ret = kgsl_mmu_map_global(device, &gmd->memdesc, 0);
+	if (ret) {
+		kgsl_memdesc_free_sgt(&gmd->memdesc);
+		kfree(gmd);
+		return ERR_PTR(ret);
+	}
+
 	atomic_set(&gmd->memdesc.priv, KGSL_MEMDESC_GLOBAL);
 	gmd->name = name;
 
@@ -2107,7 +2129,6 @@ struct kgsl_memdesc *kgsl_allocate_global_fixed(struct kgsl_device *device,
 	 * while the caller is holding the mutex
 	 */
 	list_add_tail(&gmd->node, &device->globals);
-	kgsl_mmu_map_global(device, &gmd->memdesc, 0);
 
 	return &gmd->memdesc;
 }
@@ -2144,6 +2165,13 @@ struct kgsl_memdesc *kgsl_alloc_map_gpu_global(struct kgsl_device *device,
 	if (gpuaddr)
 		md->memdesc.gpuaddr = gpuaddr;
 
+	ret = kgsl_mmu_map_global(device, &md->memdesc, padding);
+	if (ret) {
+		kgsl_sharedmem_free(&md->memdesc);
+		kfree(md);
+		return ERR_PTR(ret);
+	}
+
 	md->name = name;
 
 	/*
@@ -2152,7 +2180,6 @@ struct kgsl_memdesc *kgsl_alloc_map_gpu_global(struct kgsl_device *device,
 	 */
 	list_add_tail(&md->node, &device->globals);
 
-	kgsl_mmu_map_global(device, &md->memdesc, padding);
 	kgsl_trace_gpu_mem_total(device, md->memdesc.size);
 
 	return &md->memdesc;
@@ -2183,6 +2210,29 @@ struct kgsl_memdesc *kgsl_allocate_global(struct kgsl_device *device,
 		u64 size, u32 padding, u64 flags, u32 priv, const char *name)
 {
 	return kgsl_alloc_map_gpu_global(device, 0, size, padding, flags, priv, name);
+}
+
+int kgsl_free_global(struct kgsl_device *device, struct kgsl_memdesc **memdesc, u32 padding)
+{
+	struct kgsl_global_memdesc *md;
+
+	if (WARN_ON(!kgsl_mutex_is_locked(&device->mutex)))
+		return -EINVAL;
+
+	kgsl_trace_gpu_mem_total(device, -((*memdesc)->size));
+	kgsl_mmu_unmap_global(device, *memdesc, padding);
+
+	list_for_each_entry(md, &device->globals, node) {
+		if (&md->memdesc == *memdesc) {
+			list_del(&md->node);
+			kgsl_sharedmem_free(&md->memdesc);
+			kfree(md);
+			*memdesc = NULL;
+			break;
+		}
+	}
+
+	return 0;
 }
 
 void kgsl_free_globals(struct kgsl_device *device)

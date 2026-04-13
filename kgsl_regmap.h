@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022, 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef KGSL_REGMAP_H
@@ -64,6 +64,18 @@ struct kgsl_regmap_list {
 	u32 offset;
 	/** val: Value to write */
 	u32 val;
+};
+
+/**
+ * struct kgsl_regmap_restore_list - Register list with save/restore support
+ */
+struct kgsl_regmap_restore_list {
+	/** @offset: Dword offset of the register to write */
+	u32 offset;
+	/** @val: New value to write */
+	u32 val;
+	/** @saved_val: Original value to restore */
+	u32 saved_val;
 };
 
 /**
@@ -148,6 +160,29 @@ void kgsl_regmap_write(struct kgsl_regmap *regmap, u32 value, u32 offset);
 
 void kgsl_regmap_multi_write(struct kgsl_regmap *regmap,
 	const struct kgsl_regmap_list *list, int count);
+
+/**
+ * kgsl_regmap_multi_save_write - Write a list of registers after saving their original values
+ * @regmap: The regmap to write to
+ * @list: Array of kgsl_regmap_restore_list items
+ * @count: Number of items in the list
+ *
+ * Write all the registers in @list to the regmap. Prior to the write, save the original values
+ * in @list.
+ */
+void kgsl_regmap_multi_save_write(struct kgsl_regmap *regmap,
+	struct kgsl_regmap_restore_list *list, size_t count);
+
+/**
+ * kgsl_regmap_multi_restore - Write a list of registers with their previously saved values
+ * @regmap: The regmap to write to
+ * @list: Array of kgsl_regmap_restore_list items
+ * @count: Number of items in the list
+ *
+ * Write all the registers in @list to the regmap using their previously saved values.
+ */
+void kgsl_regmap_multi_restore(struct kgsl_regmap *regmap,
+	struct kgsl_regmap_restore_list *list, size_t count);
 
 /**
  * kgsl_regmap_rmw - read-modify-write a register in the regmap

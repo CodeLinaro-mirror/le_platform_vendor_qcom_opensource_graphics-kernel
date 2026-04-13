@@ -593,7 +593,7 @@ int gen8_hfi_send_bcl_feature_ctrl(struct adreno_device *adreno_dev)
 	return gen8_hfi_send_feature_ctrl(adreno_dev, HFI_FEATURE_BCL, 1, adreno_dev->bcl_data);
 }
 
-int gen8_hfi_send_iff_pclx_feature_ctrl(struct adreno_device *adreno_dev)
+static int gen8_hfi_send_iff_pclx_feature_ctrl(struct adreno_device *adreno_dev)
 {
 	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
@@ -757,10 +757,12 @@ int gen8_hfi_send_gpu_perf_table(struct adreno_device *adreno_dev)
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
 	struct gen8_dcvs_table *tbl = &gmu->dcvs_table;
 	struct hfi_table_cmd *cmd = (struct hfi_table_cmd *)&cmd_buf[0];
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	u32 dword_off;
 
 	/* Already setup, so just send cmd */
-	if (cmd->hdr)
+	if (!pwr->update_dcvs_table && cmd->hdr)
 		return gen8_hfi_send_generic_req(adreno_dev, cmd,
 				MSG_HDR_GET_SIZE(cmd->hdr) << 2);
 

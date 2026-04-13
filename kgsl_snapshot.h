@@ -48,6 +48,7 @@ struct kgsl_snapshot_section_header {
 #define KGSL_SNAPSHOT_SECTION_INDEXED_REGS_V2 0x0502
 #define KGSL_SNAPSHOT_SECTION_DEBUG        0x0901
 #define KGSL_SNAPSHOT_SECTION_DEBUGBUS     0x0A01
+#define KGSL_SNAPSHOT_SECTION_DEBUGBUS_ENCRYPTED 0x0A02
 #define KGSL_SNAPSHOT_SECTION_GPU_OBJECT_V2 0x0B02
 #define KGSL_SNAPSHOT_SECTION_MEMLIST_V2   0x0E02
 #define KGSL_SNAPSHOT_SECTION_SHADER       0x1201
@@ -60,6 +61,7 @@ struct kgsl_snapshot_section_header {
 #define KGSL_SNAPSHOT_SECTION_SIDE_DEBUGBUS 0x1801
 #define KGSL_SNAPSHOT_SECTION_TRACE_BUFFER 0x1901
 #define KGSL_SNAPSHOT_SECTION_EVENTLOG     0x1A01
+#define KGSL_SNAPSHOT_SECTION_FAULTLOG     0x1B01
 
 #define KGSL_SNAPSHOT_SECTION_END          0xFFFF
 
@@ -220,8 +222,11 @@ struct kgsl_snapshot_mvc_regs_v3 {
 #define SNAPSHOT_DEBUG_GMU_HFI_VERSION 19
 #define SNAPSHOT_DEBUG_AQE_VERSION 20
 
+/* RBBM status info */
+#define SNAPSHOT_DEBUG_RBBM_STATUS 32
+
 /* Slice mask info */
-#define SNAPSHOT_DEBUG_SLICE_MASK 32
+#define SNAPSHOT_DEBUG_SLICE_MASK 8192
 
 struct kgsl_snapshot_debug {
 	int type;    /* Type identifier for the attached tata */
@@ -314,6 +319,11 @@ struct kgsl_snapshot_eventlog {
 	/** @version: Version of the event log buffer */
 	__u16 version;
 	/** @size: Size of the eventlog buffer in bytes */
+	u32 size;
+} __packed;
+
+struct kgsl_snapshot_faultlog {
+	/** @size: Size of the faultlog buffer in bytes */
 	u32 size;
 } __packed;
 

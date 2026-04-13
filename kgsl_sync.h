@@ -132,27 +132,9 @@ bool is_kgsl_fence(struct dma_fence *f);
 void kgsl_sync_timeline_signal(struct kgsl_sync_timeline *ktimeline,
 		u32 timestamp);
 
-int kgsl_hw_fence_init(struct kgsl_device *device);
-
-void kgsl_hw_fence_close(struct kgsl_device *device);
-
-void kgsl_hw_fence_populate_md(struct kgsl_device *device, struct kgsl_memdesc *md);
-
-int kgsl_hw_fence_create(struct kgsl_device *device, struct kgsl_sync_fence *kfence);
-
-int kgsl_hw_fence_add_waiter(struct kgsl_device *device, struct dma_fence *fence, u32 *hash_index);
-
-bool kgsl_hw_fence_tx_slot_available(struct kgsl_device *device, u32 pending_hw_fence_count);
-
 void kgsl_hw_fence_put(struct kgsl_sync_fence *kfence);
 
-void kgsl_hw_fence_trigger_cpu(struct kgsl_device *device, struct kgsl_sync_fence *kfence);
-
-bool kgsl_hw_fence_signaled(struct dma_fence *fence);
-
 void kgsl_get_fence_name(struct dma_fence *f, char *name, u32 max_size);
-
-int kgsl_hw_fence_soccp_vote(bool pwr_on);
 
 #else
 static inline int kgsl_add_fence_event(struct kgsl_device *device,
@@ -242,61 +224,92 @@ void kgsl_sync_timeline_signal(struct kgsl_sync_timeline *ktimeline,
 
 }
 
-int kgsl_hw_fence_soccp_vote(bool pwr_on)
-{
-	return -EINVAL;
-}
-
-int kgsl_hw_fence_init(struct kgsl_device *device)
-{
-	return -EINVAL;
-}
-
-void kgsl_hw_fence_close(struct kgsl_device *device)
-{
-
-}
-
-void kgsl_hw_fence_populate_md(struct kgsl_device *device, struct kgsl_memdesc *md)
-{
-
-}
-
-int kgsl_hw_fence_create(struct kgsl_device *device, struct kgsl_sync_fence *kfence)
-{
-	return -EINVAL;
-}
-
-int kgsl_hw_fence_add_waiter(struct kgsl_device *device, struct dma_fence *fence, u32 *hash_index)
-{
-	return -EINVAL;
-}
-
-bool kgsl_hw_fence_tx_slot_available(struct kgsl_device *device, u32 pending_hw_fence_count)
-{
-	return false;
-}
-
-void kgsl_hw_fence_put(struct kgsl_sync_fence *kfence)
-{
-
-}
-
-void kgsl_hw_fence_trigger_cpu(struct kgsl_device *device, struct kgsl_sync_fence *kfence)
-{
-
-}
-
-bool kgsl_hw_fence_signaled(struct dma_fence *fence)
-{
-	return false;
-}
-
-void kgsl_get_fence_name(struct dma_fence *f, char *name, u32 max_size)
+static inline void kgsl_hw_fence_put(struct kgsl_sync_fence *kfence)
 {
 
 }
 
 #endif /* CONFIG_SYNC_FILE */
+
+#if (IS_ENABLED(CONFIG_SYNC_FILE) && (IS_ENABLED(CONFIG_QTI_HW_FENCE) || \
+	IS_ENABLED(CONFIG_QCOM_KGSL_SYNX)))
+int kgsl_hw_fence_init(struct kgsl_device *device);
+
+void kgsl_hw_fence_close(struct kgsl_device *device);
+
+void kgsl_hw_fence_populate_md(struct kgsl_device *device, struct kgsl_memdesc *md);
+
+int kgsl_hw_fence_create(struct kgsl_device *device, struct kgsl_sync_fence *kfence);
+
+int kgsl_hw_fence_add_waiter(struct kgsl_device *device, struct dma_fence *fence, u32 *hash_index);
+
+bool kgsl_hw_fence_tx_slot_available(struct kgsl_device *device, u32 pending_hw_fence_count);
+
+void kgsl_hw_fence_trigger_cpu(struct kgsl_device *device, struct kgsl_sync_fence *kfence);
+
+bool kgsl_hw_fence_signaled(struct dma_fence *fence);
+
+void kgsl_get_fence_name(struct dma_fence *f, char *name, u32 max_size);
+
+int kgsl_hw_fence_soccp_vote(bool pwr_on);
+
+#else
+
+static inline int kgsl_hw_fence_soccp_vote(bool pwr_on)
+{
+	return -EINVAL;
+}
+
+static inline int kgsl_hw_fence_init(struct kgsl_device *device)
+{
+	return -EINVAL;
+}
+
+static inline void kgsl_hw_fence_close(struct kgsl_device *device)
+{
+
+}
+
+static inline void kgsl_hw_fence_populate_md(struct kgsl_device *device,
+		struct kgsl_memdesc *md)
+{
+
+}
+
+static inline int kgsl_hw_fence_create(struct kgsl_device *device,
+		struct kgsl_sync_fence *kfence)
+{
+	return -EINVAL;
+}
+
+static inline int kgsl_hw_fence_add_waiter(struct kgsl_device *device,
+		struct dma_fence *fence, u32 *hash_index)
+{
+	return -EINVAL;
+}
+
+static inline bool kgsl_hw_fence_tx_slot_available(struct kgsl_device *device,
+		u32 pending_hw_fence_count)
+{
+	return false;
+}
+
+static inline void kgsl_hw_fence_trigger_cpu(struct kgsl_device *device,
+		struct kgsl_sync_fence *kfence)
+{
+
+}
+
+static inline bool kgsl_hw_fence_signaled(struct dma_fence *fence)
+{
+	return false;
+}
+
+static inline bool kgsl_is_input_hw_fence(struct dma_fence *fence)
+{
+	return false;
+}
+
+#endif /* CONFIG_SYNC_FILE && (CONFIG_QTI_HW_FENCE || CONFIG_QCOM_KGSL_SYNX) */
 
 #endif /* __KGSL_SYNC_H */

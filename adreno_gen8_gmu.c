@@ -24,6 +24,9 @@
 #include "kgsl_gmu_core.h"
 #include "kgsl_util.h"
 
+#define GMU_NON_BUFFERABLE_CARVEOUT_SIZE	SZ_128M
+#define GMU_NONCACHED_KERNEL_SIZE	(SZ_512M - GMU_NON_BUFFERABLE_CARVEOUT_SIZE)
+
 static struct gmu_vma_entry gen8_gmu_vma[] = {
 	[GMU_ITCM] = {
 			.start = 0x00000000,
@@ -42,15 +45,33 @@ static struct gmu_vma_entry gen8_gmu_vma[] = {
 			.start = 0x0,
 			.size = 0x0,
 		},
+	/* GMU_NONCACHED_KERNEL: 0x60000000 - 0x77ffffff */
 	[GMU_NONCACHED_KERNEL] = {
 			.start = 0x60000000,
-			.size = SZ_512M,
+			.size = GMU_NONCACHED_KERNEL_SIZE,
 			.next_va = 0x60000000,
+		},
+	/*
+	 * GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT: 0x78000000 - 0x7fffffff
+	 * This is a carveout region that has RW buffer disabled. The base and size of
+	 * this carveout is entirely configurable in kgsl. Keep this VMA as static as
+	 * we don't yet have a usecase that would need dynamic allocations/free from
+	 * this carveout.
+	 */
+	[GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT] = {
+			.start = 0x60000000 + GMU_NONCACHED_KERNEL_SIZE,
+			.size = GMU_NON_BUFFERABLE_CARVEOUT_SIZE,
+			.next_va = 0x60000000 + GMU_NONCACHED_KERNEL_SIZE,
 		},
 	[GMU_NONCACHED_KERNEL_EXTENDED] = {
 			.start = 0xc0000000,
 			.size = SZ_512M,
 			.next_va = 0xc0000000,
+		},
+	[GMU_MEM_TYPE_MAX] = {
+			.start = UINT_MAX,
+			.size = UINT_MAX,
+			.next_va = UINT_MAX,
 		},
 };
 
@@ -272,7 +293,8 @@ int gen8_gmu_device_start(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
-	gmu_core_reset_trace_header(&device->gmu_core.trace);
+	gmu_core_reset_trace_header(&device->gmu_core.trace,
+			TRACE_LOGTYPE_HWSCHED, TRACE_MODE_DROP);
 
 	gmu_ao_sync_event(adreno_dev);
 
@@ -642,19 +664,28 @@ static int gen8_complete_rpmh_votes(struct gen8_gmu_device *gmu,
 #define GX_CLK_OFF		BIT(1)
 #define MALU_GDSC_POWER_OFF	BIT(9)
 #define MALU_CLK_OFF		BIT(10)
+#define CX_MISC_GX_GDSC_POWER_OFF	BIT(3)
+#define CX_MISC_GX_CLK_OFF		BIT(4)
+
 #define is_on(val)		(!(val & (GX_GDSC_POWER_OFF | GX_CLK_OFF)))
+#define is_cx_misc_gx_on(val)	(!(val & (CX_MISC_GX_GDSC_POWER_OFF | CX_MISC_GX_CLK_OFF)))
 #define is_malu_on(val)		(!(val & (MALU_GDSC_POWER_OFF | MALU_CLK_OFF)))
 
 bool gen8_gmu_gx_is_on(struct adreno_device *adreno_dev)
 {
-	u32 val;
+	u32 val = 0;
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
-	gmu_core_regread(KGSL_DEVICE(adreno_dev),
-			GEN8_GMUCX_GFX_PWR_CLK_STATUS, &val);
+	if (adreno_is_gen8_11_0(adreno_dev)) {
+		kgsl_regread(device, GEN8_GPU_CX_MISC_GFX_PWR_CLK_STATUS, &val);
+		return is_cx_misc_gx_on(val);
+	}
+
+	gmu_core_regread(device, GEN8_GMUCX_GFX_PWR_CLK_STATUS, &val);
 	return is_on(val);
 }
 
-bool gen8_gmu_malu_is_on(struct adreno_device *adreno_dev)
+static bool gen8_gmu_malu_is_on(struct adreno_device *adreno_dev)
 {
 	u32 val;
 
@@ -1759,6 +1790,62 @@ cx_gdsc_off:
 	return ret;
 }
 
+int gen8_gmu_set_non_bufferable_carveout(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	int ret;
+
+	if (test_bit(GMU_NON_BUFFERABLE_CARVEOUT, &device->gmu_core.flags))
+		return 0;
+
+	if (!gmu_core_capabilities_enabled(&device->gmu_core.common_caps,
+		FCC_MPU_NON_BUFFERABLE_CARVEOUT))
+		return 0;
+
+	if (!gen8_gmu_vma[GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT].start ||
+		!gen8_gmu_vma[GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT].size) {
+		dev_err(GMU_PDEV_DEV(device),
+			"Non bufferable carveout base:%x and size:%x are not initialized\n",
+			gen8_gmu_vma[GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT].start,
+			gen8_gmu_vma[GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT].size);
+		return -EINVAL;
+	}
+
+	if (!IS_ALIGNED(gen8_gmu_vma[GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT].start,
+		gen8_gmu_vma[GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT].size)) {
+		dev_err(GMU_PDEV_DEV(device),
+			"Non bufferable carveout base:%x and size:%x are not aligned\n",
+			gen8_gmu_vma[GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT].start,
+			gen8_gmu_vma[GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT].size);
+		return -EINVAL;
+	}
+
+	/*
+	 * Setting these values in the VRB allows GMU to disable RW buffer for this carveout range.
+	 * As GMU only has a limited number of entries in the MPU table, this helps because GMU
+	 * ends up using a single MPU table entry for all mem alloc mappings that need RW buffer
+	 * disabled.
+	 */
+	ret = gmu_core_set_vrb_register(device->gmu_core.vrb, VRB_NON_BUFFERABLE_CARVEOUT_BASE,
+		gen8_gmu_vma[GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT].start);
+	if (ret)
+		return ret;
+
+	ret = gmu_core_set_vrb_register(device->gmu_core.vrb, VRB_NON_BUFFERABLE_CARVEOUT_SIZE,
+		gen8_gmu_vma[GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT].size);
+	if (ret)
+		return ret;
+
+	/*
+	 * Both kgsl and GMU FW support the carveout so set this flag to allow mem alloc mappings
+	 * which have HFI_MEMFLAG_GMU_NON_BUFFERABLE flag get mapped to
+	 * GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT region
+	 */
+	set_bit(GMU_NON_BUFFERABLE_CARVEOUT, &device->gmu_core.flags);
+
+	return 0;
+}
+
 static int gen8_gmu_boot(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
@@ -1919,6 +2006,23 @@ static u64 gen8_bcl_sid_get(struct kgsl_device *device, u32 sid_id)
 	}
 }
 
+static u32 gen8_gmu_pwr_trace_trigger_get(struct kgsl_device *device)
+{
+	u32 val;
+
+	gmu_core_regread(device, GEN8_GMUAO_SPARE_CNTL, &val);
+
+	return val;
+}
+
+static u32 gen8_gmu_pwr_trace_trigger_set(struct kgsl_device *device, u32 val)
+{
+	gmu_core_regwrite(device, GEN8_GMUAO_SPARE_CNTL, val);
+	gmu_core_regwrite(device, GEN8_GMUCX_GENERIC_GMU_IRQ_TRIGGER, 0x1);
+
+	return 0;
+}
+
 static const struct gmu_dev_ops gen8_gmudev = {
 	.oob_set = gen8_gmu_oob_set,
 	.oob_clear = gen8_gmu_oob_clear,
@@ -1932,6 +2036,8 @@ static const struct gmu_dev_ops gen8_gmudev = {
 	.bcl_sid_get = gen8_bcl_sid_get,
 	.send_nmi = gen8_gmu_send_nmi,
 	.minbw_idle_level_set = gen8_minbw_idle_level_set,
+	.gmu_pwr_trace_trigger_set = gen8_gmu_pwr_trace_trigger_set,
+	.gmu_pwr_trace_trigger_get = gen8_gmu_pwr_trace_trigger_get,
 };
 
 static int gen8_gmu_bus_set(struct adreno_device *adreno_dev, int buslevel,
@@ -2424,6 +2530,8 @@ static int gen8_boot(struct adreno_device *adreno_dev)
 	return ret;
 }
 
+#define CP_ALWAYS_COUNT 1
+
 static int gen8_first_boot(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
@@ -2469,10 +2577,14 @@ static int gen8_first_boot(struct adreno_device *adreno_dev)
 
 	adreno_get_bus_counters(adreno_dev);
 
+	ret = adreno_perfcounter_kernel_get(adreno_dev,
+		KGSL_PERFCOUNTER_GROUP_CP, CP_ALWAYS_COUNT,
+		&adreno_dev->cp_cycles_lo, NULL);
+	if (ret)
+		return ret;
+
 	adreno_dev->cooperative_reset = ADRENO_FEATURE(adreno_dev,
 						 ADRENO_COOP_RESET);
-
-	adreno_create_profile_buffer(adreno_dev);
 
 	set_bit(GMU_PRIV_FIRST_BOOT_DONE, &gmu->flags);
 	set_bit(GMU_PRIV_GPU_STARTED, &gmu->flags);

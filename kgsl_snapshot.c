@@ -10,6 +10,7 @@
 #include <linux/slab.h>
 #include <linux/utsname.h>
 #include <linux/vmalloc.h>
+#include <linux/kmsg_dump.h>
 
 #include "adreno_cp_parser.h"
 #include "kgsl_device.h"
@@ -621,6 +622,28 @@ snapshot:
 			atomic_snapshot_phy_addr(device), snapshot->size);
 }
 
+#define FAULTLOG_SIZE SZ_64K
+size_t kgsl_snapshot_faultlog_buffer(struct kgsl_device *device,
+		u8 *buf, size_t remain, void *priv)
+{
+	struct kgsl_snapshot_faultlog *hdr =
+		(struct kgsl_snapshot_faultlog *)buf;
+	u32 *data = (u32 *)(buf + sizeof(*hdr));
+	struct kmsg_dump_iter k_iter;
+	size_t len_out = 0;
+
+	if (remain < (FAULTLOG_SIZE + sizeof(*hdr))) {
+		SNAPSHOT_ERR_NOMEM(device, "FAULTLOG");
+		return 0;
+	}
+
+	kmsg_dump_rewind(&k_iter);
+	kmsg_dump_get_buffer(&k_iter, false, (void *)data, FAULTLOG_SIZE, &len_out);
+
+	hdr->size = ALIGN(len_out, SZ_4);
+
+	return (hdr->size + sizeof(*hdr));
+}
 /**
  * kgsl_device_snapshot() - construct a device snapshot
  * @device: device to snapshot
@@ -702,6 +725,8 @@ void kgsl_device_snapshot(struct kgsl_device *device,
 	kgsl_snapshot_add_section(device, KGSL_SNAPSHOT_SECTION_EVENTLOG,
 		snapshot, kgsl_snapshot_eventlog_buffer, NULL);
 
+	kgsl_snapshot_add_section(device, KGSL_SNAPSHOT_SECTION_FAULTLOG,
+		snapshot, kgsl_snapshot_faultlog_buffer, NULL);
 	/*
 	 * The timestamp is the seconds since boot so it is easier to match to
 	 * the kernel log

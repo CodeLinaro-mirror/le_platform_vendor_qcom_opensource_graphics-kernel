@@ -917,6 +917,8 @@ done:
 
 }
 
+#define CP_ALWAYS_COUNT 0
+
 static int a6xx_first_boot(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
@@ -954,7 +956,11 @@ static int a6xx_first_boot(struct adreno_device *adreno_dev)
 
 	adreno_get_bus_counters(adreno_dev);
 
-	adreno_create_profile_buffer(adreno_dev);
+	ret = adreno_perfcounter_kernel_get(adreno_dev,
+		KGSL_PERFCOUNTER_GROUP_CP, CP_ALWAYS_COUNT,
+		&adreno_dev->cp_cycles_lo, NULL);
+	if (ret)
+		return ret;
 
 	set_bit(RGMU_PRIV_FIRST_BOOT_DONE, &rgmu->flags);
 	set_bit(RGMU_PRIV_GPU_STARTED, &rgmu->flags);

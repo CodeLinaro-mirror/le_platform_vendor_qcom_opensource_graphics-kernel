@@ -17,16 +17,16 @@ const struct dma_fence_ops kgsl_sync_fence_ops;
 static const struct dma_fence_ops kgsl_syncsource_fence_ops;
 
 /* Only allow a single log in a second */
-static DEFINE_RATELIMIT_STATE(_rs, HZ, 1);
+static __maybe_unused DEFINE_RATELIMIT_STATE(_rs, HZ, 1);
 
 /* List of hardware fences that haven't been destroyed */
 struct list_head hw_fence_list;
 /* Spinlock to protect access to hw_fence_list */
 spinlock_t hw_fence_list_lock;
 
-static void destroy_all_hw_fences(void);
+static void _hw_fence_destroy(struct kgsl_sync_fence *kfence);
 
-static inline void add_hw_fence(struct kgsl_sync_fence *kfence)
+static __maybe_unused void add_hw_fence(struct kgsl_sync_fence *kfence)
 {
 	struct dma_fence *fence = &kfence->fence;
 	unsigned long flags;
@@ -52,7 +52,21 @@ static inline void add_hw_fence(struct kgsl_sync_fence *kfence)
 	spin_unlock_irqrestore(fence->lock, flags);
 }
 
-#ifdef CONFIG_QCOM_KGSL_SYNX
+static __maybe_unused void destroy_all_hw_fences(void)
+{
+	struct kgsl_sync_fence *kfence, *next;
+
+	spin_lock(&hw_fence_list_lock);
+
+	list_for_each_entry_safe(kfence, next, &hw_fence_list, hw_fence_list) {
+		_hw_fence_destroy(kfence);
+		list_del_init(&kfence->hw_fence_list);
+	}
+
+	spin_unlock(&hw_fence_list_lock);
+}
+
+#if (IS_ENABLED(CONFIG_QCOM_KGSL_SYNX))
 
 #include <synx_api.h>
 #include <synx_interop.h>
@@ -186,7 +200,7 @@ bool kgsl_hw_fence_tx_slot_available(struct kgsl_device *device, u32 pending_hw_
 	return false;
 }
 
-void _hw_fence_destroy(struct kgsl_sync_fence *kfence)
+static void _hw_fence_destroy(struct kgsl_sync_fence *kfence)
 {
 	synx_release(kgsl_synx.handle, kfence->hw_fence_index);
 
@@ -217,7 +231,7 @@ static bool kgsl_is_input_hw_fence(struct dma_fence *fence)
 		test_bit(SYNX_NATIVE_FENCE_FLAG_ENABLED_BIT, &fence->flags) || is_kgsl_fence(fence);
 }
 
-#else
+#elif IS_ENABLED(CONFIG_QTI_HW_FENCE)
 
 #if (KERNEL_VERSION(6, 3, 0) <= LINUX_VERSION_CODE)
 #include <msm_hw_fence.h>
@@ -335,7 +349,7 @@ bool kgsl_hw_fence_tx_slot_available(struct kgsl_device *device, u32 pending_hw_
 	return false;
 }
 
-void _hw_fence_destroy(struct kgsl_sync_fence *kfence)
+static void _hw_fence_destroy(struct kgsl_sync_fence *kfence)
 {
 	msm_hw_fence_destroy(kgsl_msm_hw_fence.handle, &kfence->fence);
 }
@@ -364,6 +378,13 @@ bool kgsl_hw_fence_signaled(struct dma_fence *fence)
 static bool kgsl_is_input_hw_fence(struct dma_fence *fence)
 {
 	return test_bit(MSM_HW_FENCE_FLAG_ENABLED_BIT, &fence->flags);
+}
+
+#else
+
+static void _hw_fence_destroy(struct kgsl_sync_fence *kfence)
+{
+
 }
 
 #endif
@@ -817,20 +838,6 @@ void kgsl_hw_fence_put(struct kgsl_sync_fence *kfence)
 {
 	if (kfence)
 		kref_put(&kfence->hw_refcount, kgsl_hw_fence_destroy);
-}
-
-static void destroy_all_hw_fences(void)
-{
-	struct kgsl_sync_fence *kfence, *next;
-
-	spin_lock(&hw_fence_list_lock);
-
-	list_for_each_entry_safe(kfence, next, &hw_fence_list, hw_fence_list) {
-		_hw_fence_destroy(kfence);
-		list_del_init(&kfence->hw_fence_list);
-	}
-
-	spin_unlock(&hw_fence_list_lock);
 }
 
 static void kgsl_count_hw_fences(struct kgsl_drawobj_sync_event *event, struct dma_fence *fence)

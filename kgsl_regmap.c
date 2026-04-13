@@ -193,6 +193,88 @@ void kgsl_regmap_multi_write(struct kgsl_regmap *regmap,
 	}
 }
 
+void kgsl_regmap_multi_save_write(struct kgsl_regmap *regmap,
+		struct kgsl_regmap_restore_list *list, size_t count)
+{
+	struct kgsl_regmap_region *region, *prev = NULL;
+	int i;
+
+	/* Make sure all previous reads / writes are done before starting the list */
+	mb();
+
+	for (i = 0; i < count; i++) {
+		region = kgsl_regmap_get_region(regmap, list[i].offset);
+
+		if (WARN(!region, "Out of bounds register write offset: 0x%x\n",
+			list[i].offset))
+			continue;
+
+		/*
+		 * The registers might be in different regions. If a region has
+		 * a preaccess function we need to call it at least once before
+		 * writing registers but we don't want to call it every time if
+		 * we can avoid it. "cache" the current region and don't call
+		 * pre-access if it is the same region from the previous access.
+		 * This isn't perfect but it should cut down on some unneeded
+		 * cpu cycles
+		 */
+
+		if (region != prev && region->ops && region->ops->preaccess)
+			region->ops->preaccess(region);
+
+		prev = region;
+
+		if (regmap->use_relaxed) {
+			list[i].saved_val = readl_relaxed(region_addr(region, list[i].offset));
+			/* Make sure the read posted and all pending writes are done */
+			mb();
+			writel_relaxed(list[i].val, region_addr(region, list[i].offset));
+		} else {
+			list[i].saved_val = readl(region_addr(region, list[i].offset));
+			/* Make sure the read posted and all pending writes are done */
+			mb();
+			writel(list[i].val, region_addr(region, list[i].offset));
+		}
+		trace_kgsl_regwrite(list[i].offset, list[i].val);
+	}
+}
+
+void kgsl_regmap_multi_restore(struct kgsl_regmap *regmap,
+		struct kgsl_regmap_restore_list *list, size_t count)
+{
+	struct kgsl_regmap_region *region, *prev = NULL;
+	int i;
+
+	/* Make sure all previous writes are done before starting the list */
+	wmb();
+
+	for (i = 0; i < count; i++) {
+		region = kgsl_regmap_get_region(regmap, list[i].offset);
+
+		if (WARN(!region, "Out of bounds register write offset: 0x%x\n",
+			list[i].offset))
+			continue;
+
+		/*
+		 * The registers might be in different regions. If a region has
+		 * a preaccess function we need to call it at least once before
+		 * writing registers but we don't want to call it every time if
+		 * we can avoid it. "cache" the current region and don't call
+		 * pre-access if it is the same region from the previous access.
+		 * This isn't perfect but it should cut down on some unneeded
+		 * cpu cycles
+		 */
+
+		if (region != prev && region->ops && region->ops->preaccess)
+			region->ops->preaccess(region);
+
+		prev = region;
+
+		writel_relaxed(list[i].saved_val, region_addr(region, list[i].offset));
+		trace_kgsl_regwrite(list[i].offset, list[i].saved_val);
+	}
+}
+
 void kgsl_regmap_rmw(struct kgsl_regmap *regmap, u32 offset, u32 mask,
 		u32 or)
 {

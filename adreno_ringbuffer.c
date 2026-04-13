@@ -315,8 +315,7 @@ int adreno_ringbuffer_submitcmd(struct adreno_device *adreno_dev,
 	}
 
 	/* Enable kernel profiling */
-	if (test_bit(CMDOBJ_PROFILE, &cmdobj->priv))
-		flags |= F_KERNEL_PROFILE;
+	flags |= F_KERNEL_PROFILE;
 
 	/* Add a WFI to the end of the submission */
 	if (test_bit(CMDOBJ_WFI, &cmdobj->priv))

@@ -58,6 +58,11 @@ static struct gmu_vma_entry a6xx_gmu_vma_legacy[] = {
 			.size = SZ_512M,
 			.next_va = 0x60000000
 		},
+	[GMU_MEM_TYPE_MAX] = {
+			.start = UINT_MAX,
+			.size = UINT_MAX,
+			.next_va = UINT_MAX
+		},
 };
 
 static struct gmu_vma_entry a6xx_gmu_vma[] = {
@@ -82,6 +87,11 @@ static struct gmu_vma_entry a6xx_gmu_vma[] = {
 			.start = 0x60000000,
 			.size = SZ_512M,
 			.next_va = 0x60000000
+		},
+	[GMU_MEM_TYPE_MAX] = {
+			.start = UINT_MAX,
+			.size = UINT_MAX,
+			.next_va = UINT_MAX
 		},
 };
 
@@ -625,7 +635,8 @@ int a6xx_gmu_device_start(struct adreno_device *adreno_dev)
 	u32 val = 0x00000100;
 	u32 mask = 0x000001FF;
 
-	gmu_core_reset_trace_header(&device->gmu_core.trace);
+	gmu_core_reset_trace_header(&device->gmu_core.trace,
+		TRACE_LOGTYPE_HWSCHED, TRACE_MODE_DROP);
 	gmu_ao_sync_event(adreno_dev);
 
 	/* Check for 0xBABEFACE on legacy targets */
@@ -3021,6 +3032,8 @@ static int a6xx_boot(struct adreno_device *adreno_dev)
 	return ret;
 }
 
+#define CP_ALWAYS_COUNT 0
+
 static int a6xx_first_boot(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
@@ -3066,10 +3079,14 @@ static int a6xx_first_boot(struct adreno_device *adreno_dev)
 
 	adreno_get_bus_counters(adreno_dev);
 
+	ret = adreno_perfcounter_kernel_get(adreno_dev,
+		KGSL_PERFCOUNTER_GROUP_CP, CP_ALWAYS_COUNT,
+		&adreno_dev->cp_cycles_lo, NULL);
+	if (ret)
+		return ret;
+
 	adreno_dev->cooperative_reset = ADRENO_FEATURE(adreno_dev,
 						 ADRENO_COOP_RESET);
-
-	adreno_create_profile_buffer(adreno_dev);
 
 	set_bit(GMU_PRIV_FIRST_BOOT_DONE, &gmu->flags);
 	set_bit(GMU_PRIV_GPU_STARTED, &gmu->flags);

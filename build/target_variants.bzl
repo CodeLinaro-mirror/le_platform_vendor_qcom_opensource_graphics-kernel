@@ -2,6 +2,7 @@ targets = [
     # keep sorted
     "art",
     "bengal",
+    "bluey",
     "canoe",
     "chora",
     "lahaina",
@@ -43,6 +44,7 @@ gki_variants = [
 gki_perf_targets = [
     # keep sorted
     "gen3auto",
+    "hamoa",
     "pineapple",
     "seraph",
 ]

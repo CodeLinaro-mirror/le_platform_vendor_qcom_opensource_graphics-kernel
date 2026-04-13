@@ -231,8 +231,6 @@ static int a6xx_nogmu_init(struct adreno_device *adreno_dev)
 	if (ret && ret != -ENODEV)
 		dev_err(device->dev, "Couldn't map the GMU wrapper registers\n");
 
-	adreno_create_profile_buffer(adreno_dev);
-
 	return a6xx_init(adreno_dev);
 }
 
@@ -545,7 +543,7 @@ static void a6xx_deassert_gbif_halt(struct adreno_device *adreno_dev)
 		kgsl_regwrite(device, A6XX_RBBM_GBIF_HALT, 0x0);
 }
 
-bool a6xx_gx_is_on(struct adreno_device *adreno_dev)
+static bool a6xx_gx_is_on(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
@@ -1050,20 +1048,24 @@ static int _preemption_init(struct adreno_device *adreno_dev,
 		struct adreno_ringbuffer *rb, unsigned int *cmds,
 		struct kgsl_context *context)
 {
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	unsigned int *cmds_orig = cmds;
 
 	/* Turn CP protection OFF on legacy targets */
 	if (!ADRENO_FEATURE(adreno_dev, ADRENO_APRIV))
 		cmds += cp_protected_mode(adreno_dev, cmds, 0);
 
-	*cmds++ = cp_type7_packet(CP_SET_PSEUDO_REGISTER, 6);
+	*cmds++ = cp_type7_packet(CP_SET_PSEUDO_REGISTER,
+			kgsl_mmu_is_secured(&device->mmu) ? 6 : 3);
 	*cmds++ = SET_PSEUDO_PRIV_NON_SECURE_SAVE_ADDR;
 	cmds += cp_gpuaddr(adreno_dev, cmds,
 			rb->preemption_desc->gpuaddr);
 
-	*cmds++ = SET_PSEUDO_PRIV_SECURE_SAVE_ADDR;
-	cmds += cp_gpuaddr(adreno_dev, cmds,
-		rb->secure_preemption_desc->gpuaddr);
+	if (kgsl_mmu_is_secured(&device->mmu)) {
+		*cmds++ = SET_PSEUDO_PRIV_SECURE_SAVE_ADDR;
+		cmds += cp_gpuaddr(adreno_dev, cmds,
+			rb->secure_preemption_desc->gpuaddr);
+	}
 
 	/* Turn CP protection back ON */
 	if (!ADRENO_FEATURE(adreno_dev, ADRENO_APRIV))
@@ -1277,7 +1279,7 @@ static bool a619_holi_hw_isidle(struct adreno_device *adreno_dev)
 	return a6xx_irq_pending(adreno_dev) ? false : true;
 }
 
-bool a6xx_hw_isidle(struct adreno_device *adreno_dev)
+static bool a6xx_hw_isidle(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	unsigned int reg;
@@ -1892,7 +1894,8 @@ static irqreturn_t a6xx_hwsched_irq_handler(struct adreno_device *adreno_dev)
 
 	kgsl_regwrite(device, A6XX_RBBM_INT_CLEAR_CMD, status);
 
-	ret = adreno_irq_callbacks(adreno_dev, a6xx_irq_funcs, status);
+	ret = adreno_irq_callbacks(adreno_dev, a6xx_irq_funcs,
+		status, adreno_dev->irq_mask);
 
 	trace_kgsl_a5xx_irq_status(adreno_dev, status);
 
@@ -1925,7 +1928,8 @@ static irqreturn_t a6xx_irq_handler(struct adreno_device *adreno_dev)
 
 	kgsl_regwrite(device, A6XX_RBBM_INT_CLEAR_CMD, status);
 
-	ret = adreno_irq_callbacks(adreno_dev, a6xx_irq_funcs, status);
+	ret = adreno_irq_callbacks(adreno_dev, a6xx_irq_funcs,
+		status, adreno_dev->irq_mask);
 
 	trace_kgsl_a5xx_irq_status(adreno_dev, status);
 

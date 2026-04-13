@@ -212,10 +212,11 @@ static void kgsl_memfree_purge(struct kgsl_pagetable *pagetable,
 			entry->size = gpuaddr - entry->gpuaddr;
 		} else if (gpuaddr <= entry->gpuaddr) {
 			if (gpuaddr + size > entry->gpuaddr &&
-				gpuaddr + size < entry->gpuaddr + entry->size)
+				gpuaddr + size < entry->gpuaddr + entry->size) {
 				/* Truncate the beginning of the entry */
+				entry->size -= (gpuaddr + size - entry->gpuaddr);
 				entry->gpuaddr = gpuaddr + size;
-			else if (gpuaddr + size >= entry->gpuaddr + entry->size)
+			} else if (gpuaddr + size >= entry->gpuaddr + entry->size)
 				/* Remove the entire entry */
 				entry->size = 0;
 		}
@@ -411,9 +412,7 @@ static void kgsl_destroy_anon(struct kgsl_memdesc *memdesc)
 		}
 	}
 
-	sg_free_table(memdesc->sgt);
-	kfree(memdesc->sgt);
-	memdesc->sgt = NULL;
+	kgsl_memdesc_free_sgt(memdesc);
 }
 
 void
@@ -3117,6 +3116,7 @@ static long _gpuobj_map_useraddr(struct kgsl_device *device,
 		struct kgsl_gpuobj_import *param)
 {
 	struct kgsl_gpuobj_import_useraddr useraddr;
+	u64 virtaddr;
 
 	param->flags &= KGSL_MEMFLAGS_GPUREADONLY
 		| KGSL_CACHEMODE_MASK
@@ -3135,12 +3135,14 @@ static long _gpuobj_map_useraddr(struct kgsl_device *device,
 		u64_to_user_ptr(param->priv), sizeof(useraddr)))
 		return -EINVAL;
 
+	virtaddr = untagged_addr(useraddr.virtaddr);
+
 	/* Verify that the virtaddr and len are within bounds */
-	if (useraddr.virtaddr > ULONG_MAX)
+	if (virtaddr > ULONG_MAX)
 		return -EINVAL;
 
 	return kgsl_setup_useraddr(device, pagetable, entry,
-		(unsigned long) useraddr.virtaddr, 0, param->priv_len);
+		(unsigned long)virtaddr, 0, param->priv_len);
 }
 
 static bool check_and_warn_secured(struct kgsl_device *device)
@@ -3244,7 +3246,7 @@ static void kgsl_process_add_stats(struct kgsl_process_private *priv,
 		priv->stats[type].max = ret;
 }
 
-u64 kgsl_get_stats(pid_t pid)
+static u64 kgsl_get_stats(pid_t pid)
 {
 	struct kgsl_process_private *process;
 	u64 ret;
@@ -3341,7 +3343,7 @@ static long _map_usermem_addr(struct kgsl_device *device,
 	if (entry->memdesc.flags & KGSL_MEMFLAGS_SECURE)
 		return -EINVAL;
 
-	return kgsl_setup_useraddr(device, pagetable, entry, hostptr,
+	return kgsl_setup_useraddr(device, pagetable, entry, untagged_addr(hostptr),
 		offset, size);
 }
 
@@ -5043,6 +5045,30 @@ static int kgsl_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
+static void kgsl_show_fdinfo(struct seq_file *m, struct file *f)
+{
+	struct kgsl_device_private *dev_priv = f->private_data;
+	struct kgsl_process_private *private;
+	struct kgsl_device *device;
+	struct kgsl_pwrctrl *pwr;
+
+	if (!dev_priv)
+		return;
+
+	private = dev_priv->process_priv;
+	device = dev_priv->device;
+
+	if (!private || !device)
+		return;
+
+	pwr = &device->pwrctrl;
+
+	seq_printf(m, "kgsl-client-id:\t%d\n", pid_nr(private->pid));
+	seq_printf(m, "kgsl-elapsed:\t%llu ns\n", private->elapsed_ns);
+	seq_printf(m, "kgsl-cycles:\t%llu\n", private->cycles);
+	seq_printf(m, "kgsl-maxfreq:\t%d\n", pwr->pwrlevels[0].gpu_freq);
+}
+
 #define KGSL_READ_MESSAGE "OH HAI GPU\n"
 
 static ssize_t kgsl_read(struct file *filep, char __user *buf, size_t count,
@@ -5061,6 +5087,7 @@ static const struct file_operations kgsl_fops = {
 	.get_unmapped_area = kgsl_get_unmapped_area,
 	.unlocked_ioctl = kgsl_ioctl,
 	.compat_ioctl = kgsl_compat_ioctl,
+	.show_fdinfo = kgsl_show_fdinfo,
 };
 
 struct kgsl_driver kgsl_driver  = {

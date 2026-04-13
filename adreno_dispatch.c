@@ -495,13 +495,11 @@ static int sendcmd(struct adreno_device *adreno_dev,
 		set_bit(ADRENO_DISPATCHER_POWER, &dispatcher->priv);
 	}
 
-	if (test_bit(ADRENO_DEVICE_DRAWOBJ_PROFILE, &adreno_dev->priv)) {
-		set_bit(CMDOBJ_PROFILE, &cmdobj->priv);
-		cmdobj->profile_index = adreno_dev->profile_index;
-		adreno_dev->profile_index =
-			(adreno_dev->profile_index + 1) %
-			ADRENO_DRAWOBJ_PROFILE_COUNT;
-	}
+	set_bit(CMDOBJ_PROFILE, &cmdobj->priv);
+	cmdobj->profile_index = adreno_dev->profile_index;
+	adreno_dev->profile_index =
+		(adreno_dev->profile_index + 1) %
+		ADRENO_DRAWOBJ_PROFILE_COUNT;
 
 	process_rt_bus_hint(device, true);
 
@@ -2129,7 +2127,7 @@ static void _print_recovery(struct kgsl_device *device,
 
 static void cmdobj_profile_ticks(struct adreno_device *adreno_dev,
 	struct kgsl_drawobj_cmd *cmdobj, uint64_t *start, uint64_t *retire,
-	uint64_t *active)
+	uint64_t *active, uint64_t *cycles)
 {
 	void *ptr = adreno_dev->profile_buffer->hostptr;
 	struct adreno_drawobj_profile_entry *entry;
@@ -2141,6 +2139,7 @@ static void cmdobj_profile_ticks(struct adreno_device *adreno_dev,
 	rmb();
 	*start = entry->started;
 	*retire = entry->retired;
+	*cycles = entry->cycles_end - entry->cycles_start;
 	if (ADRENO_GPUREV(adreno_dev) < 600)
 		*active = entry->retired - entry->started;
 	else
@@ -2155,16 +2154,23 @@ static void retire_cmdobj(struct adreno_device *adreno_dev,
 	struct adreno_context *drawctxt = ADRENO_CONTEXT(drawobj->context);
 	struct adreno_ringbuffer *rb = drawctxt->rb;
 	struct kgsl_context *context = drawobj->context;
-	uint64_t start = 0, end = 0, active = 0;
+	uint64_t start = 0, end = 0, active = 0, cycles = 0;
 	struct retire_info info = {0};
+	u64 elapsed;
 
 	if (cmdobj->fault_recovery != 0) {
 		set_bit(ADRENO_CONTEXT_FAULT, &drawobj->context->priv);
 		_print_recovery(KGSL_DEVICE(adreno_dev), cmdobj);
 	}
 
-	if (test_bit(CMDOBJ_PROFILE, &cmdobj->priv))
-		cmdobj_profile_ticks(adreno_dev, cmdobj, &start, &end, &active);
+	cmdobj_profile_ticks(adreno_dev, cmdobj, &start, &end, &active, &cycles);
+
+	/* time ( ns ) =  ((ticks * (1000000000ns)) / 19200000Hz) */
+	elapsed = active * ((u64)10000);
+	do_div(elapsed, ((u64)192));
+	context->proc_priv->elapsed_ns += elapsed;
+
+	context->proc_priv->cycles += cycles;
 
 	info.inflight = (int)dispatcher->inflight;
 	info.rb_id = rb->id;

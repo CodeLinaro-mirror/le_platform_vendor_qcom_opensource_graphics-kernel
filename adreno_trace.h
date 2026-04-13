@@ -1137,6 +1137,36 @@ TRACE_EVENT(adreno_gpu_dcvs_profile,
 	)
 );
 
+TRACE_EVENT(adreno_hwsched_mem_alloc,
+	TP_PROTO(u32 mem_kind, u32 flags, u32 gmuaddr, u64 gpuaddr, u32 size, u32 handle,
+		u32 gmu_va_align, u32 gmu_sz_align),
+	TP_ARGS(mem_kind, flags, gmuaddr, gpuaddr, size, handle, gmu_va_align, gmu_sz_align),
+	TP_STRUCT__entry(
+		__field(u32, mem_kind)
+		__field(u32, flags)
+		__field(u32, gmuaddr)
+		__field(u64, gpuaddr)
+		__field(u32, size)
+		__field(u32, handle)
+		__field(u32, gmu_va_align)
+		__field(u32, gmu_sz_align)
+	),
+	TP_fast_assign(
+		__entry->mem_kind = mem_kind;
+		__entry->flags = flags;
+		__entry->gmuaddr = gmuaddr;
+		__entry->gpuaddr = gpuaddr;
+		__entry->size = size;
+		__entry->handle = handle;
+		__entry->gmu_va_align = gmu_va_align;
+		__entry->gmu_sz_align = gmu_sz_align;
+	),
+	TP_printk("mem_kind=%u flags=0x%x gmuaddr=0x%x gpuaddr=0x%llx size=0x%x handle=%u gmu_va_align=0x%x gmu_sz_align=0x%x",
+		__entry->mem_kind, __entry->flags, __entry->gmuaddr, __entry->gpuaddr,
+		__entry->size, __entry->handle, __entry->gmu_va_align, __entry->gmu_sz_align
+	)
+);
+
 #endif /* _ADRENO_TRACE_H */
 
 /* This part must be outside protection */

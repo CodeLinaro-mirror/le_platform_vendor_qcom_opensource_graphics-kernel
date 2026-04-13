@@ -368,4 +368,15 @@ bool gen8_gmu_rpmh_pwr_state_is_active(struct kgsl_device *device);
  * Returns: 0 on success or negative error on failure
  */
 int gen8_gmu_trigger_mx_voltage_change(struct adreno_device *adreno_dev);
+
+/**
+ * gen8_gmu_set_non_bufferable_carveout - Set the non bufferable carveout region
+ * @adreno_dev: Pointer to the adreno device
+ *
+ * This function checks if GMU FW supports the non bufferable carveout and if
+ * it does, then it sets up the VA range for this carveout
+ *
+ * Return: 0 on success or negative error otherwise
+ */
+int gen8_gmu_set_non_bufferable_carveout(struct adreno_device *adreno_dev);
 #endif

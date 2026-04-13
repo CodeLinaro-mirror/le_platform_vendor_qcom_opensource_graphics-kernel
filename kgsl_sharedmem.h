@@ -97,10 +97,10 @@ struct kgsl_memdesc {
 	struct page **pages;
 	u32 page_count;
 	/**
-	 * @lock: Spinlock to protect the gpuaddr from being accessed by
+	 * @lock: Mutex to protect the gpuaddr from being accessed by
 	 * multiple entities trying to map the same SVM region at once
 	 */
-	spinlock_t lock;
+	struct mutex lock;
 	/** @shmem_filp: Pointer to the shmem file backing this memdesc */
 	struct file *shmem_filp;
 	/** @ranges: rbtree base for the interval list of vbo ranges */
@@ -329,6 +329,20 @@ struct kgsl_memdesc *kgsl_alloc_map_gpu_global(struct kgsl_device *device,
  */
 struct kgsl_memdesc *kgsl_allocate_global(struct kgsl_device *device,
 		u64 size, u32 padding, u64 flags, u32 priv, const char *name);
+
+/**
+ * kgsl_free_global - Free a global GPU memory object
+ * @device: A GPU device handle
+ * @memdesc: A pointer to a kgsl_memdesc pointer
+ * @padding: Amount of extra padding added to the VA allocation
+ *
+ * Free a global GPU object by unmapping it from the kernel address space
+ * and removing it from the list of global buffers. Nullify the pointer
+ * provided in @memdesc.
+ *
+ * Return: 0 on success or negative error on failure
+ */
+int kgsl_free_global(struct kgsl_device *device, struct kgsl_memdesc **memdesc, u32 padding);
 
 /**
  * kgsl_allocate_global_fixed - Allocate a global GPU memory object from a fixed
@@ -632,6 +646,8 @@ struct kgsl_sharedmem_bind_op {
 	void (*callback)(struct kgsl_sharedmem_bind_op *op);
 	void *data;
 	struct work_struct work;
+	/* @defer_free_work: Work structure to defer freeing of the bind op resources */
+	struct work_struct defer_free_work;
 	struct completion comp;
 	struct kref ref;
 };
@@ -736,5 +752,11 @@ int kgsl_alloc_shmem_page(struct kgsl_memdesc *memdesc, struct file *shmem_file,
  * @memdesc: Pointer to the memdesc
  */
 void kgsl_memdesc_pagelist_cleanup(struct file *shmem_filp, struct kgsl_memdesc *memdesc);
+
+/**
+ * kgsl_memdesc_free_sgt - Clean up the memdesc's sg table
+ * @memdesc: Pointer to the memdesc
+ */
+void kgsl_memdesc_free_sgt(struct kgsl_memdesc *md);
 
 #endif /* __KGSL_SHAREDMEM_H */

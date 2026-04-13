@@ -22,7 +22,7 @@ static void _wakeup_hw_fence_waiters(struct adreno_device *adreno_dev, u32 fault
 	struct adreno_hwsched_hw_fence *hwf = &adreno_dev->hwsched.hw_fence;
 	bool lock = !in_interrupt();
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &adreno_dev->hwsched.flags))
+	if (!gmu_core_is_hw_fencing_enabled(KGSL_DEVICE(adreno_dev)))
 		return;
 
 	/*
@@ -824,12 +824,11 @@ static void drain_hw_fences_cpu(struct adreno_device *adreno_dev)
  */
 static int check_inflight_hw_fences(struct adreno_device *adreno_dev)
 {
-	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct kgsl_context *context;
 	int id, ret = 0;
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &hwsched->flags))
+	if (!gmu_core_is_hw_fencing_enabled(device))
 		return 0;
 
 	read_lock(&device->context_lock);
@@ -913,7 +912,7 @@ static void check_hw_fence_unack_count(struct adreno_device *adreno_dev)
 	struct adreno_hwsched_hw_fence *hwf = &adreno_dev->hwsched.hw_fence;
 	u32 unack_count;
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &adreno_dev->hwsched.flags))
+	if (!gmu_core_is_hw_fencing_enabled(device))
 		return;
 
 	gen7_hwsched_process_msgq(adreno_dev);

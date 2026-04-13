@@ -639,6 +639,10 @@ struct kgsl_process_private {
 	u32 pf_type_counts[KGSL_IOMMU_PAGEFAULT_TYPES];
 	/** @profile: Container for the DCVS profile */
 	struct kgsl_dcvs_profile_private profile;
+	/* @elapsed_ns: The total time GPU was busy for this context in ns */
+	u64 elapsed_ns;
+	/* @cycles: The total GPU cycles elapsed for this context */
+	u64 cycles;
 };
 
 struct kgsl_device_private {

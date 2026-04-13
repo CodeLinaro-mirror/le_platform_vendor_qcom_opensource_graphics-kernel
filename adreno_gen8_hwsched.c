@@ -22,7 +22,7 @@ static void _wakeup_hw_fence_waiters(struct adreno_device *adreno_dev, u32 fault
 	struct adreno_hwsched_hw_fence *hwf = &adreno_dev->hwsched.hw_fence;
 	bool lock = !in_interrupt();
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &adreno_dev->hwsched.flags))
+	if (!gmu_core_is_hw_fencing_enabled(KGSL_DEVICE(adreno_dev)))
 		return;
 
 	/*
@@ -181,7 +181,7 @@ void gen8_hwsched_soccp_vote(struct adreno_device *adreno_dev, bool pwr_on)
 	struct device *gmu_pdev_dev = GMU_PDEV_DEV(device);
 	struct adreno_hwsched_hw_fence *hwf = &adreno_dev->hwsched.hw_fence;
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &adreno_dev->hwsched.flags))
+	if (!gmu_core_is_hw_fencing_enabled(device))
 		return;
 
 	if (!gmu_core_soccp_vote(device, pwr_on))
@@ -240,6 +240,74 @@ static void _enable_malu_submissions(struct adreno_device *adreno_dev)
 		set_bit(ADRENO_DEVICE_ALLOW_MALU_WORKLOAD, &adreno_dev->priv);
 	else
 		dev_err_once(GMU_PDEV_DEV(device), "FW doesn't support mALU\n");
+}
+
+static void gen8_hwsched_init_spel_config(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct gmu_core_device *gmu = &device->gmu_core;
+	struct kgsl_gmu_spel *spel = &gmu->spel;
+
+	memset(spel->config, 0, sizeof(spel->config));
+	spel->config[0] |= FIELD_PREP(GMU_PWR_BUDGET_DYN_EN, 1);
+	spel->config[0] |= FIELD_PREP(GMU_PWR_BUDGET_LKG_EN, 1);
+	spel->config[0] |= FIELD_PREP(GMU_PWR_BUDGET_SHORT_EN, 1);
+	spel->config[0] |= FIELD_PREP(GMU_PWR_BUDGET_LONG_EN, 1);
+	spel->config[0] |= FIELD_PREP(GMU_PWR_BUDGET_LONG_PWR_BUDGET_ENFORCE, 1);
+	spel->config[0] |= FIELD_PREP(GMU_PWR_BUDGET_TELEMETRY_EN, 1);
+	spel->config[0] |= FIELD_PREP(GMU_PWR_BUDGET_SHORT_DESIRED_PWR_EN, 1);
+	spel->config[0] |= FIELD_PREP(GMU_PWR_BUDGET_LONG_DESIRED_PWR_EN, 1);
+	spel->config[0] |= FIELD_PREP(GMU_PWR_BUDGET_CDYN_HIST_EN, 1);
+	spel->config[0] |= FIELD_PREP(GMU_PWR_BUDGET_MIN_PERF_LEVEL, 1);
+}
+
+/* Register offsets within the SPEL_APPS_CONFIG region */
+#define SPEL_GPU_COLDBOOT_REQ 0x280
+#define SPEL_GPU_COLDBOOT_ACK 0x284
+static void gen8_hwsched_spel_handshake(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct gmu_core_device *gmu = &device->gmu_core;
+	struct kgsl_gmu_spel *spel = &gmu->spel;
+	struct resource *res;
+	__iomem void *spel_virt;
+	u32 value;
+	int ret;
+
+	if (!ADRENO_FEATURE(adreno_dev, ADRENO_GMU_SPEL))
+		return;
+
+	res = platform_get_resource_byname(device->pdev, IORESOURCE_MEM, "spel_gfx");
+	if (res == NULL) {
+		dev_err(device->dev, "spel_gfx resource not found\n");
+		return;
+	}
+
+	spel_virt = ioremap(res->start, resource_size(res));
+	if (!spel_virt) {
+		dev_err(device->dev, "spel_gfx ioremap failed\n");
+		return;
+	}
+
+	/* Trigger an interrupt to AOP, causing it to configure limits-related registers in GPU */
+	writel_relaxed(0x1, spel_virt + SPEL_GPU_COLDBOOT_REQ);
+
+	/* Make sure the write goes through before polling */
+	mb();
+
+	/* Poll for an ACK (indicating AOP has completed its config) with a timeout of 1 msec */
+	ret = readl_poll_timeout(spel_virt + SPEL_GPU_COLDBOOT_ACK,
+				value, (value == 0x1), 10, 1000);
+
+	iounmap(spel_virt);
+
+	if (ret) {
+		dev_err(device->dev, "SPEL handshake failed: %d\n", ret);
+		return;
+	}
+
+	gen8_hwsched_init_spel_config(adreno_dev);
+	spel->enabled = true;
 }
 
 static int gen8_hwsched_gmu_first_boot(struct adreno_device *adreno_dev)
@@ -303,6 +371,10 @@ static int gen8_hwsched_gmu_first_boot(struct adreno_device *adreno_dev)
 	if (ret)
 		goto clks_gdsc_off;
 
+	ret = gen8_gmu_set_non_bufferable_carveout(adreno_dev);
+	if (ret)
+		goto clks_gdsc_off;
+
 	_get_hw_fence_entries(adreno_dev);
 
 	gen8_gmu_register_config(adreno_dev);
@@ -336,6 +408,9 @@ static int gen8_hwsched_gmu_first_boot(struct adreno_device *adreno_dev)
 		goto err;
 
 	gen8_get_gpu_feature_info(adreno_dev);
+
+	/* Set up SPEL handshake with AOP */
+	gen8_hwsched_spel_handshake(adreno_dev);
 
 	ret = gen8_hwsched_hfi_start(adreno_dev);
 	if (ret)
@@ -977,12 +1052,11 @@ static void drain_hw_fences_cpu(struct adreno_device *adreno_dev)
  */
 static int check_inflight_hw_fences(struct adreno_device *adreno_dev)
 {
-	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct kgsl_context *context;
 	int id, ret = 0;
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &hwsched->flags))
+	if (!gmu_core_is_hw_fencing_enabled(device))
 		return 0;
 
 	read_lock(&device->context_lock);
@@ -1068,7 +1142,7 @@ static void check_hw_fence_unack_count(struct adreno_device *adreno_dev)
 	struct adreno_hwsched_hw_fence *hwf = &adreno_dev->hwsched.hw_fence;
 	u32 unack_count;
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &adreno_dev->hwsched.flags))
+	if (!gmu_core_is_hw_fencing_enabled(device))
 		return;
 
 	gen8_hwsched_process_msgq(adreno_dev);
@@ -1622,6 +1696,9 @@ int gen8_hwsched_reset_replay(struct adreno_device *adreno_dev)
 	 */
 	gmu_core_mark_for_coldboot(KGSL_DEVICE(adreno_dev));
 
+	if (adreno_gpu_fault(adreno_dev) & ADRENO_AHB_TIMEOUT_FAULT)
+		gen8_ahb_timeout_reset(KGSL_DEVICE(adreno_dev));
+
 	ret = gen8_hwsched_boot(adreno_dev);
 	if (ret)
 		goto done;
@@ -1635,7 +1712,7 @@ done:
 	return ret;
 }
 
-ssize_t gen8_hwsched_preempt_info_get(struct adreno_device *adreno_dev, char *buf)
+static ssize_t gen8_hwsched_preempt_info_get(struct adreno_device *adreno_dev, char *buf)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	u32 preempt_count_l0, preempt_count_l1a, preempt_count_l1b;

@@ -45,9 +45,15 @@ static struct kmem_cache *jobs_cache;
 /* Use a kmem cache to speed up allocations for inflight command objects */
 static struct kmem_cache *obj_cache;
 
-static inline u32 get_gmu_vma_id(u32 flags)
+static inline u32 get_gmu_vma_id(struct kgsl_device *device, u32 flags)
 {
-	return (flags & HFI_MEMFLAG_GMU_CACHEABLE) ? GMU_CACHE : GMU_NONCACHED_KERNEL;
+	if (flags & HFI_MEMFLAG_GMU_CACHEABLE)
+		return GMU_CACHE;
+	else if ((flags & HFI_MEMFLAG_GMU_NON_BUFFERABLE) &&
+		test_bit(GMU_NON_BUFFERABLE_CARVEOUT, &device->gmu_core.flags))
+		return GMU_NONCACHED_KERNEL_NON_BUFFERABLE_CARVEOUT;
+
+	return GMU_NONCACHED_KERNEL;
 }
 
 static void setup_gfx_flags_priv(u32 desc_flags, u64 *flags, u32 *priv)
@@ -81,7 +87,7 @@ static int reserve_preempt_record_va(struct adreno_device *adreno_dev,
 
 	if (!entry->md->gmuaddr)
 		ret = gmu_core_reserve_gmuaddr(device, entry->md,
-			get_gmu_vma_id(desc->flags), desc->align);
+			get_gmu_vma_id(device, desc->flags), desc->align);
 
 	return ret;
 }
@@ -120,7 +126,7 @@ static int alloc_map_preempt_record(struct adreno_device *adreno_dev,
 
 	return gmu_core_map_gmu(KGSL_DEVICE(adreno_dev), *md,
 			entry->md->gmuaddr + offset,
-			get_gmu_vma_id(desc->flags),
+			get_gmu_vma_id(KGSL_DEVICE(adreno_dev), desc->flags),
 			gmu_core_get_attrs(desc->flags), desc->align);
 }
 
@@ -236,13 +242,13 @@ static struct hfi_mem_alloc_entry *get_mem_alloc_entry(
 		if (desc->mem_kind == HFI_MEMKIND_MMIO_IPC_CORE)
 			entry->md = gmu_core_reserve_kernel_block_fixed(device, 0,
 					desc->size,
-					get_gmu_vma_id(desc->flags),
+					get_gmu_vma_id(device, desc->flags),
 					"qcom,ipc-core", gmu_core_get_attrs(desc->flags),
 					desc->align);
 		else
 			entry->md = gmu_core_reserve_kernel_block(device, 0,
 					desc->size,
-					get_gmu_vma_id(desc->flags),
+					get_gmu_vma_id(device, desc->flags),
 					desc->align);
 
 		if (IS_ERR(entry->md)) {
@@ -340,6 +346,10 @@ int adreno_hwsched_process_mem_alloc(struct adreno_device *adreno_dev,
 	 * successful
 	 */
 	mad->host_mem_handle = mad->gmu_mem_handle;
+
+	trace_adreno_hwsched_mem_alloc(mad->mem_kind, mad->flags, mad->gmu_addr, mad->gpu_addr,
+		mad->size, mad->gmu_mem_handle, hfi_get_gmu_va_alignment(mad->align),
+		hfi_get_gmu_sz_alignment(mad->align));
 
 	return 0;
 }
@@ -470,8 +480,6 @@ static void _pop_drawobj(struct adreno_context *drawctxt)
 static int _retire_syncobj(struct adreno_device *adreno_dev,
 	struct kgsl_drawobj_sync *syncobj, struct adreno_context *drawctxt)
 {
-	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
-
 	if (!kgsl_drawobj_events_pending(syncobj)) {
 		_pop_drawobj(drawctxt);
 		kgsl_drawobj_destroy(DRAWOBJ(syncobj));
@@ -482,7 +490,7 @@ static int _retire_syncobj(struct adreno_device *adreno_dev,
 	 * If hardware fences are enabled, and this SYNCOBJ is backed by hardware fences,
 	 * send it to the GMU
 	 */
-	if (test_bit(ADRENO_HWSCHED_HW_FENCE, &hwsched->flags) &&
+	if (gmu_core_is_hw_fencing_enabled(KGSL_DEVICE(adreno_dev)) &&
 		test_bit(KGSL_SYNCOBJ_HW, &syncobj->flags))
 		return 1;
 
@@ -549,8 +557,6 @@ static void _retire_timestamp(struct kgsl_drawobj *drawobj)
 static int _retire_markerobj(struct adreno_device *adreno_dev, struct kgsl_drawobj_cmd *cmdobj,
 	struct adreno_context *drawctxt)
 {
-	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
-
 	if (_marker_expired(cmdobj)) {
 		set_bit(CMDOBJ_MARKER_EXPIRED, &cmdobj->priv);
 		/*
@@ -558,7 +564,7 @@ static int _retire_markerobj(struct adreno_device *adreno_dev, struct kgsl_drawo
 		 * this MARKER object. Hence, send it to the target specific layers to trigger
 		 * the hardware fences.
 		 */
-		if (test_bit(ADRENO_HWSCHED_HW_FENCE, &hwsched->flags)) {
+		if (gmu_core_is_hw_fencing_enabled(KGSL_DEVICE(adreno_dev))) {
 			_retire_timestamp_only(DRAWOBJ(cmdobj));
 			return 1;
 		}
@@ -1679,7 +1685,7 @@ static unsigned int _preempt_count_show(struct adreno_device *adreno_dev)
 	return count;
 }
 
-ssize_t _preempt_info_show(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t _preempt_info_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(dev_get_drvdata(dev));
 	const struct adreno_hwsched_ops *hwsched_ops = adreno_dev->hwsched.hwsched_ops;
@@ -1719,8 +1725,9 @@ static const struct attribute *_hwsched_attr_list[] = {
 void adreno_hwsched_deregister_hw_fence(struct adreno_device *adreno_dev)
 {
 	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &hwsched->flags))
+	if (!gmu_core_is_hw_fencing_enabled(device))
 		return;
 
 	kgsl_hw_fence_close(KGSL_DEVICE(adreno_dev));
@@ -1732,7 +1739,7 @@ void adreno_hwsched_deregister_hw_fence(struct adreno_device *adreno_dev)
 
 	kmem_cache_destroy(hwsched->hw_fence_cache);
 
-	clear_bit(ADRENO_HWSCHED_HW_FENCE, &hwsched->flags);
+	clear_bit(GMU_HWSCHED_HW_FENCE, &device->gmu_core.flags);
 }
 
 static void adreno_hwsched_dispatcher_close(struct adreno_device *adreno_dev)
@@ -2437,7 +2444,7 @@ static void adreno_hwsched_create_hw_fence(struct adreno_device *adreno_dev,
 	const struct adreno_hwsched_ops *hwsched_ops =
 				adreno_dev->hwsched.hwsched_ops;
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &adreno_dev->hwsched.flags))
+	if (!gmu_core_is_hw_fencing_enabled(KGSL_DEVICE(adreno_dev)))
 		return;
 
 	/* Do not create a hardware backed fence, if this context is bad or going away */
@@ -2753,7 +2760,7 @@ void adreno_hwsched_register_hw_fence(struct adreno_device *adreno_dev)
 	if (!ADRENO_FEATURE(adreno_dev, ADRENO_HW_FENCE))
 		return;
 
-	if (test_bit(ADRENO_HWSCHED_HW_FENCE, &hwsched->flags))
+	if (gmu_core_is_hw_fencing_enabled(device))
 		return;
 
 	if (kgsl_hw_fence_init(device))
@@ -2778,7 +2785,7 @@ void adreno_hwsched_register_hw_fence(struct adreno_device *adreno_dev)
 
 	hwsched->hw_fence_cache = KMEM_CACHE(adreno_hw_fence_entry, 0);
 
-	set_bit(ADRENO_HWSCHED_HW_FENCE, &hwsched->flags);
+	set_bit(GMU_HWSCHED_HW_FENCE, &device->gmu_core.flags);
 }
 
 int adreno_hwsched_wait_ack_completion(struct adreno_device *adreno_dev,
@@ -3269,7 +3276,7 @@ static void _retire_inflight_hw_fences(struct adreno_device *adreno_dev,
 	struct adreno_context *drawctxt = ADRENO_CONTEXT(context);
 	struct adreno_hw_fence_entry *entry, *tmp;
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &adreno_dev->hwsched.flags))
+	if (!gmu_core_is_hw_fencing_enabled(KGSL_DEVICE(adreno_dev)))
 		return;
 
 	spin_lock(&drawctxt->lock);

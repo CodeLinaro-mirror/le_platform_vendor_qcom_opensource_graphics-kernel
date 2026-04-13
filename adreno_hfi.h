@@ -338,8 +338,8 @@ static const char * const hfi_memkind_strings[] = {
 /* Buffer is read-write for GMU PTEs. A 0 indicates read-only */
 #define HFI_MEMFLAG_GMU_WRITEABLE	BIT(5)
 
-/* Buffer is located in GMU's non-cached bufferable VA range */
-#define HFI_MEMFLAG_GMU_BUFFERABLE	BIT(6)
+/* Buffer needs to be mapped to GMU's non-cached non bufferable VA range */
+#define HFI_MEMFLAG_GMU_NON_BUFFERABLE	BIT(6)
 
 /* Buffer is located in GMU's cacheable VA range */
 #define HFI_MEMFLAG_GMU_CACHEABLE	BIT(7)
@@ -1213,6 +1213,7 @@ struct hfi_scale_gmu_cmd {
 /* Platform specific H2F subtype message for GMU */
 enum h2f_platform_action {
 	H2F_ST_MSG_PROFILE_REGISTER,
+	H2F_ST_MSG_PWR_BUDGET,
 };
 
 /* H2F */
@@ -1225,6 +1226,99 @@ struct hfi_profile_register {
 	u32 gmu_addr;
 	/** @attrs_addr: Address of the KGSL shared profile attrs */
 	u32 attrs_addr;
+} __packed;
+
+/**
+ * Power budget configuration
+ * DATA[0]
+ *     [31:26] FORCED_TELEMETRY_WINDOW   - Forced Telemetry window size {yy,zzzz} which represents
+ *                                         (1.yy)*(2^(zzzz))*(20 XO clocks). If non-zero, use only
+ *                                         the forced value.
+ *     [25:20] MIN_PERF_LEVEL            - Min perf level to be used by control loop. Perf level 1
+ *                                         used by default if this field is 0 or > number of levels
+ *                                         in perf table
+ *     [19:18] SHORT_DCE_MARGIN_SCALE_EN - 1: GPU will use linearly scaled DCE error margins in
+ *                                            short-term budgeting.
+ *                                         0: (Default) GPU will do no linear margin scaling
+ *     [17:16] LOCAL_PMIC_LOSS_CALC_EN   - 1: GPU will estimate PMIC loss locally. Short budget
+ *                                            provided needs to include PMIC loss.
+ *                                         0: (Default) SPEL will estimate and remove PMIC loss
+ *     [15:14] CDYN_HIST_EN              - Enable Cdyn histogram for desired power
+ *     [13:12] LONG_DESIRED_PWR_EN       - Enable long desired power calculations
+ *     [11:10] SHORT_DESIRED_PWR_EN      - Enable short desired power calculations
+ *       [9:8] TELEMETRY_EN              - Enable telemetry
+ *       [7:6] LONG_PWR_BUDGET_ENFORCE   - Enforce DCVS switching
+ *       [5:4] LONG_EN                   - Enable long power budgeting
+ *       [3:2] SHORT_EN                  - Enable short power budgeting
+ *       [1:1] LKG_EN                    - Enable leakage power calculations
+ *       [0:0] DYN_EN                    - Enable dynamic power calculations
+ * DATA[1]
+ *     [31:26] DCE_CDYN_BX_SCALE         - BX power as a fraction of GX power
+ *     [25:20] DCE_CDYN_MX_SCALE         - MX power as a fraction of GX power
+ *     [19:13] MAX_BUDGET_CDYN_GFX_SHORT - GX Cdyn to be set in GMUCX_PWRLM_MAX_CDYN_GX for short
+ *                                         power limiting
+ *      [12:7] MAX_BUDGET_CDYN_GFX       - GX Cdyn for calculating long power consumed at every
+ *                                         DCVS level
+ *       [6:0] DES_PWR_ALPHA             - Alpha, out of 127, to be used for desired power EWMA
+ *                                         calculations. If 0, assume 50% alpha
+ * DATA[2]
+ *     [31:27] RESERVED_2                - Reserved field
+ *     [26:15] CDYN_ACCUM_CONFIG_0       - Value for GMUCX_CDYN_ACCUM_CONFIG_0 for Cdyn histogram.
+ *                                         If 0, 10 will be used as default value
+ *      [14:8] CDYN_HIST_ALPHA           - Alpha, out of 127, to be used for cdyn histogram EWMA
+ *                                         calculations. If 0, assume 50% alpha
+ *       [7:7] CDYN_SCALE_FACTOR_EN      - Scale the boot table Cdyn by a factor before making DCVS
+ *                                         decisions
+ *       [6:0] NUM_SAMPLES               - Number of samples in the running sum buffer
+ * DATA[3]
+ *      [31:0] RESERVED_3                - Reserved field
+ * DATA[4]
+ *      [31:0] FORCED_LONG_BUDGET        - Forced long power budget in mW. If non-zero, use only
+ *                                         the forced value
+ * DATA[5]
+ *      [31:0] FORCED_LONG_TIME_CONST    - Forced long time constant in the format {yyy,zzzzz}
+ *                                         which represents (1.yyy)*(2^(zzzzz))*(20 XO clocks)).
+ *                                         If non-zero, use only the forced value.
+ * DATA[6]
+ *      [31:0] FORCED_SHORT_BUDGET       - Forced short power budget in mW. If non-zero, use this
+ *                                         value during boot
+ */
+#define GMU_PWR_BUDGET_FORCED_TELEMETRY_WINDOW		GENMASK(31, 26)
+#define GMU_PWR_BUDGET_MIN_PERF_LEVEL			GENMASK(25, 20)
+#define GMU_PWR_BUDGET_SHORT_DCE_MARGIN_SCALE_EN	GENMASK(19, 18)
+#define GMU_PWR_BUDGET_LOCAL_PMIC_LOSS_CALC_EN		GENMASK(17, 16)
+#define GMU_PWR_BUDGET_CDYN_HIST_EN			GENMASK(15, 14)
+#define GMU_PWR_BUDGET_LONG_DESIRED_PWR_EN		GENMASK(13, 12)
+#define GMU_PWR_BUDGET_SHORT_DESIRED_PWR_EN		GENMASK(11, 10)
+#define GMU_PWR_BUDGET_TELEMETRY_EN			GENMASK(9, 8)
+#define GMU_PWR_BUDGET_LONG_PWR_BUDGET_ENFORCE		GENMASK(7, 6)
+#define GMU_PWR_BUDGET_LONG_EN				GENMASK(5, 4)
+#define GMU_PWR_BUDGET_SHORT_EN				GENMASK(3, 2)
+#define GMU_PWR_BUDGET_LKG_EN				GENMASK(1, 1)
+#define GMU_PWR_BUDGET_DYN_EN				GENMASK(0, 0)
+#define GMU_PWR_BUDGET_DCE_CDYN_BX_SCALE		GENMASK(31, 26)
+#define GMU_PWR_BUDGET_DCE_CDYN_MX_SCALE		GENMASK(25, 20)
+#define GMU_PWR_BUDGET_MAX_BUDGET_CDYN_GFX_SHORT	GENMASK(19, 13)
+#define GMU_PWR_BUDGET_MAX_BUDGET_CDYN_GFX		GENMASK(12, 7)
+#define GMU_PWR_BUDGET_DES_PWR_ALPHA			GENMASK(6, 0)
+#define GMU_PWR_BUDGET_RESERVED_2			GENMASK(31, 27)
+#define GMU_PWR_BUDGET_CDYN_ACCUM_CONFIG_0		GENMASK(26, 15)
+#define GMU_PWR_BUDGET_CDYN_HIST_ALPHA			GENMASK(14, 8)
+#define GMU_PWR_BUDGET_CDYN_SCALE_FACTOR_EN		GENMASK(7, 7)
+#define GMU_PWR_BUDGET_NUM_SAMPLES			GENMASK(6, 0)
+#define GMU_PWR_BUDGET_RESERVED_3			GENMASK(31, 0)
+#define GMU_PWR_BUDGET_FORCED_LONG_BUDGET		GENMASK(31, 0)
+#define GMU_PWR_BUDGET_FORCED_LONG_TIME_CONST		GENMASK(31, 0)
+#define GMU_PWR_BUDGET_FORCED_SHORT_BUDGET		GENMASK(31, 0)
+
+/* H2F */
+struct hfi_pwr_budget_cmd {
+	/** @header: Message header */
+	struct hfi_msg_platform header;
+	/** @revision: Revision 1 */
+	u32 revision;
+	/** @data: Power budget parameters, see GMU_PWR_BUDGET_* for details */
+	u32 data[GMU_PWR_BUDGET_DWORDS];
 } __packed;
 
 static inline int _CMD_MSG_HDR(u32 *hdr, int id, size_t size)

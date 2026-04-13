@@ -312,13 +312,9 @@ static bool vma_is_dynamic(struct kgsl_device *device, int vma_id)
 	return (vma_id == GMU_NONCACHED_KERNEL) && (!adreno_is_a6xx(ADRENO_DEVICE(device)));
 }
 
-static int insert_va(struct gmu_vma_entry *vma, u32 addr, u32 size)
+static int insert_va(struct gmu_vma_entry *vma, u32 addr, u32 size, struct gmu_vma_node *new)
 {
 	struct rb_node **node, *parent = NULL;
-	struct gmu_vma_node *new = kzalloc(sizeof(*new), GFP_NOWAIT);
-
-	if (new == NULL)
-		return -ENOMEM;
 
 	new->va = addr;
 	new->size = size;
@@ -335,7 +331,6 @@ static int insert_va(struct gmu_vma_entry *vma, u32 addr, u32 size)
 		else if (addr >= this->va + this->size)
 			node = &parent->rb_right;
 		else {
-			kfree(new);
 			return -EEXIST;
 		}
 	}
@@ -382,6 +377,10 @@ static int _map_gmu_dynamic(struct kgsl_device *device, struct kgsl_memdesc *md,
 	struct gmu_vma_node *vma_node = NULL;
 	int ret;
 	u32 size = ALIGN(md->size, hfi_get_gmu_sz_alignment(align));
+	struct gmu_vma_node *new = kzalloc(sizeof(*new), GFP_KERNEL);
+
+	if (!new)
+		return -ENOMEM;
 
 	spin_lock(&vma->lock);
 	if (!addr) {
@@ -392,15 +391,17 @@ static int _map_gmu_dynamic(struct kgsl_device *device, struct kgsl_memdesc *md,
 		addr = find_unmapped_va(vma, size, hfi_get_gmu_va_alignment(align));
 		if (addr == 0) {
 			spin_unlock(&vma->lock);
+			kfree(new);
 			dev_err(gmu_pdev_dev,
 				"Insufficient VA space size: %x\n", size);
 			return -ENOMEM;
 		}
 	}
 
-	ret = insert_va(vma, addr, size);
+	ret = insert_va(vma, addr, size, new);
 	spin_unlock(&vma->lock);
 	if (ret < 0) {
+		kfree(new);
 		dev_err(gmu_pdev_dev,
 			"Could not insert va: %x size %x\n", addr, size);
 		return ret;
@@ -418,7 +419,7 @@ static int _map_gmu_dynamic(struct kgsl_device *device, struct kgsl_memdesc *md,
 		addr, md->size, ret);
 
 	spin_lock(&vma->lock);
-	vma_node = find_va(vma, md->gmuaddr, size);
+	vma_node = find_va(vma, addr, size);
 	if (vma_node)
 		rb_erase(&vma_node->node, &vma->vma_root);
 	spin_unlock(&vma->lock);
@@ -584,9 +585,7 @@ struct kgsl_memdesc *gmu_core_reserve_kernel_block_fixed(struct kgsl_device *dev
 
 	ret = gmu_core_map_gmu(device, md, addr, vma_id, attrs, align);
 
-	sg_free_table(md->sgt);
-	kfree(md->sgt);
-	md->sgt = NULL;
+	kgsl_memdesc_free_sgt(md);
 
 	if (!ret) {
 		gmu->global_entries++;
@@ -1008,20 +1007,20 @@ bool gmu_core_is_trace_empty(struct gmu_trace_header *hdr)
 	return (readl(&hdr->read_index) == readl(&hdr->write_index)) ? true : false;
 }
 
-void gmu_core_trace_header_init(struct kgsl_gmu_trace *trace)
+void gmu_core_trace_header_init(struct kgsl_gmu_trace *trace, u32 log_type, u32 mode)
 {
 	struct gmu_trace_header *hdr = trace->md->hostptr;
 
 	hdr->threshold = TRACE_BUFFER_THRESHOLD;
 	hdr->timeout = TRACE_TIMEOUT_MSEC;
-	hdr->metadata = FIELD_PREP(GENMASK(31, 30), TRACE_MODE_DROP) |
+	hdr->metadata = FIELD_PREP(GENMASK(31, 30), mode) |
 			FIELD_PREP(GENMASK(3, 0), TRACE_HEADER_VERSION_1);
 	hdr->cookie = trace->md->gmuaddr;
 	hdr->size = trace->md->size;
-	hdr->log_type = TRACE_LOGTYPE_HWSCHED;
+	hdr->log_type = log_type;
 }
 
-void gmu_core_reset_trace_header(struct kgsl_gmu_trace *trace)
+void gmu_core_reset_trace_header(struct kgsl_gmu_trace *trace, u32 log_type, u32 mode)
 {
 	struct gmu_trace_header *hdr = trace->md->hostptr;
 
@@ -1031,7 +1030,7 @@ void gmu_core_reset_trace_header(struct kgsl_gmu_trace *trace)
 	memset(hdr, 0, sizeof(struct gmu_trace_header));
 	/* Reset sequence number to detect trace packet loss */
 	trace->seq_num = 0;
-	gmu_core_trace_header_init(trace);
+	gmu_core_trace_header_init(trace, log_type, mode);
 	trace->reset_hdr = false;
 }
 
@@ -1506,8 +1505,14 @@ int gmu_core_hwsched_memory_init(struct kgsl_device *device)
 			return ret;
 
 		/* Initialize the GMU trace buffer header */
-		gmu_core_trace_header_init(&device->gmu_core.trace);
+		gmu_core_trace_header_init(&device->gmu_core.trace,
+			TRACE_LOGTYPE_HWSCHED, TRACE_MODE_DROP);
 	}
 
 	return 0;
+}
+
+bool gmu_core_is_hw_fencing_enabled(struct kgsl_device *device)
+{
+	return test_bit(GMU_HWSCHED_HW_FENCE, &device->gmu_core.flags);
 }

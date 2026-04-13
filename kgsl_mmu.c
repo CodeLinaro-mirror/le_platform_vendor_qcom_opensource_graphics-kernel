@@ -510,13 +510,24 @@ int kgsl_mmu_reserve_global_gpuaddr(struct kgsl_device *device,
 	return -EINVAL;
 }
 
-void kgsl_mmu_map_global(struct kgsl_device *device,
+int kgsl_mmu_map_global(struct kgsl_device *device,
 		struct kgsl_memdesc *memdesc, u32 padding)
 {
 	struct kgsl_mmu *mmu = &(device->mmu);
 
 	if (MMU_OP_VALID(mmu, mmu_map_global))
-		mmu->mmu_ops->mmu_map_global(mmu, memdesc, padding);
+		return mmu->mmu_ops->mmu_map_global(mmu, memdesc, padding);
+
+	return -EINVAL;
+}
+
+void kgsl_mmu_unmap_global(struct kgsl_device *device,
+		struct kgsl_memdesc *memdesc, u32 padding)
+{
+	struct kgsl_mmu *mmu = &(device->mmu);
+
+	if (MMU_OP_VALID(mmu, mmu_unmap_global))
+		mmu->mmu_ops->mmu_unmap_global(mmu, memdesc, padding);
 }
 
 int kgsl_mmu_pagetable_get_context_bank(struct kgsl_pagetable *pagetable,

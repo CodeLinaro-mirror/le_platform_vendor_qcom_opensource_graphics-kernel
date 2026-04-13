@@ -1846,15 +1846,15 @@ done:
 
 static int gen7_hfi_send_hw_fence_feature_ctrl(struct adreno_device *adreno_dev)
 {
-	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	int ret;
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &hwsched->flags))
+	if (!gmu_core_is_hw_fencing_enabled(device))
 		return 0;
 
 	ret = gen7_hfi_send_feature_ctrl(adreno_dev, HFI_FEATURE_HW_FENCE, 1, 0);
 	if (ret && (ret == -ENOENT)) {
-		dev_err(GMU_PDEV_DEV(KGSL_DEVICE(adreno_dev)),
+		dev_err(GMU_PDEV_DEV(device),
 				"GMU doesn't support HW_FENCE feature\n");
 		adreno_hwsched_deregister_hw_fence(adreno_dev);
 		return 0;
@@ -2071,7 +2071,7 @@ int gen7_hwsched_boot_gpu(struct adreno_device *adreno_dev)
 		return gen7_hwsched_coldboot_gpu(adreno_dev);
 }
 
-int gen7_hwsched_warmboot_init_gmu(struct adreno_device *adreno_dev)
+static int gen7_hwsched_warmboot_init_gmu(struct adreno_device *adreno_dev)
 {
 	struct gen7_gmu_device *gmu = to_gen7_gmu(adreno_dev);
 	struct pending_cmd ack = {0};
@@ -2546,7 +2546,7 @@ static int allocate_context_queues(struct adreno_device *adreno_dev,
 	if (!gen7_hwsched_context_queue_enabled(adreno_dev))
 		return 0;
 
-	if (test_bit(ADRENO_HWSCHED_HW_FENCE, &adreno_dev->hwsched.flags) &&
+	if (gmu_core_is_hw_fencing_enabled(device) &&
 		!drawctxt->gmu_hw_fence_queue.gmuaddr) {
 		ret = gmu_core_alloc_kernel_block(
 			device, &drawctxt->gmu_hw_fence_queue,
@@ -3935,7 +3935,7 @@ int gen7_hwsched_disable_hw_fence_throttle(struct adreno_device *adreno_dev)
 	u32 ts = 0;
 	int ret = 0;
 
-	if (!test_bit(ADRENO_HWSCHED_HW_FENCE, &adreno_dev->hwsched.flags))
+	if (!gmu_core_is_hw_fencing_enabled(KGSL_DEVICE(adreno_dev)))
 		return 0;
 
 	spin_lock(&hwf->lock);

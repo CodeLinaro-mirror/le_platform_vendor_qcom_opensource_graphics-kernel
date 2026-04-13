@@ -327,9 +327,20 @@ struct gen8_cp_smmu_info {
 	 (1 << GEN8_INT_TSBWRITEERROR))
 
 /* GEN8 CX MISC interrupt bits */
-#define GEN8_CX_MISC_GPU_CC_IRQ	31
+#define GEN8_INT_AON_AHB_TIMEOUT	2
+#define GEN8_INT_GMU_AHB_TIMEOUT	3
+#define GEN8_INT_CP_AHB_TIMEOUT		4
+#define GEN8_INT_VBIF_SMMU_AHB_TIMEOUT	5
+#define GEN8_INT_HOST_AHB_TIMEOUT	6
+#define GEN8_INT_CX_MISC_GPU_CC		31
 
-#define GEN8_CX_MISC_INT_MASK	BIT(GEN8_CX_MISC_GPU_CC_IRQ)
+#define GEN8_CX_MISC_INT_MASK \
+	((1 << GEN8_INT_AON_AHB_TIMEOUT) | \
+	 (1 << GEN8_INT_GMU_AHB_TIMEOUT) | \
+	 (1 << GEN8_INT_CP_AHB_TIMEOUT) | \
+	 (1 << GEN8_INT_VBIF_SMMU_AHB_TIMEOUT) | \
+	 (1 << GEN8_INT_HOST_AHB_TIMEOUT) | \
+	 (1 << GEN8_INT_CX_MISC_GPU_CC))
 
 /**
  * to_gen8_core - return the gen8 specific GPU core struct
@@ -386,6 +397,14 @@ void gen8_snapshot_external_core_regs(struct kgsl_device *device,
  *
  */
 void gen8_enable_ahb_timeout_detection(struct adreno_device *adreno_dev);
+
+/**
+ * gen8_ahb_timeout_reset - Reset AHB timeout logic
+ * @device: Handle to the KGSL device
+ *
+ * Reset the AHB timeout error/timeout logic on each slave
+ */
+void gen8_ahb_timeout_reset(struct kgsl_device *device);
 
 /**
  * gen8_start - Program gen8 registers

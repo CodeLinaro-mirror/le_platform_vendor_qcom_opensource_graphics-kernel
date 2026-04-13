@@ -22,7 +22,12 @@
 #endif
 #include <linux/qtee_shmbridge.h>
 
+#if (KERNEL_VERSION(6, 19, 0) <= LINUX_VERSION_CODE)
+#include <linux/devfreq-governor.h>
+#else
 #include "governor.h"
+#endif
+
 #include "msm_adreno_devfreq.h"
 
 static DEFINE_SPINLOCK(tz_lock);

@@ -359,12 +359,11 @@ static bool kgsl_memdesc_check_range(struct kgsl_memdesc *memdesc,
 		(offset + length) <= memdesc->size);
 }
 
-static void kgsl_sharedmem_free_bind_op(struct kgsl_sharedmem_bind_op *op)
+static void _kgsl_sharedmem_free_bind_op_deferred(struct work_struct *work)
 {
+	struct kgsl_sharedmem_bind_op *op = container_of(work, struct kgsl_sharedmem_bind_op,
+		defer_free_work);
 	int i;
-
-	if (IS_ERR_OR_NULL(op))
-		return;
 
 	for (i = 0; i < op->nr_ops; i++) {
 		/* Decrement the vbo_count we added when creating the bind_op */
@@ -372,14 +371,22 @@ static void kgsl_sharedmem_free_bind_op(struct kgsl_sharedmem_bind_op *op)
 			atomic_dec(&op->ops[i].entry->vbo_count);
 
 		/* Release the reference on the child entry */
-		kgsl_mem_entry_put_deferred(op->ops[i].entry);
+		kgsl_mem_entry_put(op->ops[i].entry);
 	}
 
 	/* Release the reference on the target entry */
-	kgsl_mem_entry_put_deferred(op->target);
+	kgsl_mem_entry_put(op->target);
 
 	kvfree(op->ops);
 	kfree(op);
+}
+
+static void kgsl_sharedmem_free_bind_op(struct kgsl_sharedmem_bind_op *op)
+{
+	if (IS_ERR_OR_NULL(op))
+		return;
+
+	queue_work(kgsl_driver.lockless_workqueue, &op->defer_free_work);
 }
 
 struct kgsl_sharedmem_bind_op *
@@ -411,6 +418,8 @@ kgsl_sharedmem_create_bind_op(struct kgsl_process_private *private,
 		kgsl_mem_entry_put(target);
 		return ERR_PTR(-ENOMEM);
 	}
+
+	INIT_WORK(&op->defer_free_work, _kgsl_sharedmem_free_bind_op_deferred);
 
 	/*
 	 * Make an array for the individual operations.  Use __GFP_NOWARN and
@@ -499,8 +508,8 @@ kgsl_sharedmem_create_bind_op(struct kgsl_process_private *private,
 		 * Make sure that only secure children are mapped in secure VBOs
 		 * and vice versa
 		 */
-		if ((target->memdesc.flags & KGSL_MEMFLAGS_SECURE) !=
-		    (entry->memdesc.flags & KGSL_MEMFLAGS_SECURE)) {
+		if (kgsl_memdesc_is_secured(&target->memdesc) !=
+		    kgsl_memdesc_is_secured(&entry->memdesc)) {
 			ret = -EPERM;
 			goto err;
 		}

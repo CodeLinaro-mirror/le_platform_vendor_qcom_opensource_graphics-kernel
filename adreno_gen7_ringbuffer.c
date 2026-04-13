@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include "adreno.h"
@@ -429,20 +429,10 @@ int gen7_ringbuffer_addcmds(struct adreno_device *adreno_dev,
 	return gen7_ringbuffer_submit(rb, time);
 }
 
-static u32 gen7_get_alwayson_counter(u32 *cmds, u64 gpuaddr)
+static u32 gen7_get_counter(u32 *cmds, u64 gpuaddr, u32 offset)
 {
 	cmds[0] = cp_type7_packet(CP_REG_TO_MEM, 3);
-	cmds[1] = GEN7_CP_ALWAYS_ON_COUNTER_LO | (1 << 30) | (2 << 18);
-	cmds[2] = lower_32_bits(gpuaddr);
-	cmds[3] = upper_32_bits(gpuaddr);
-
-	return 4;
-}
-
-static u32 gen7_get_alwayson_context(u32 *cmds, u64 gpuaddr)
-{
-	cmds[0] = cp_type7_packet(CP_REG_TO_MEM, 3);
-	cmds[1] = GEN7_CP_ALWAYS_ON_CONTEXT_LO | (1 << 30) | (2 << 18);
+	cmds[1] = offset | BIT(30) | BIT(19);
 	cmds[2] = lower_32_bits(gpuaddr);
 	cmds[3] = upper_32_bits(gpuaddr);
 
@@ -462,8 +452,9 @@ static u64 gen7_get_user_profiling_ib(struct adreno_ringbuffer *rb,
 
 	offset = rb->profile_index * (PROFILE_IB_DWORDS << 2);
 	ib = rb->profile_desc->hostptr + offset;
-	dwords = gen7_get_alwayson_counter(ib,
-		cmdobj->profiling_buffer_gpuaddr + target_offset);
+	dwords = gen7_get_counter(ib,
+		cmdobj->profiling_buffer_gpuaddr + target_offset,
+		GEN7_CP_ALWAYS_ON_COUNTER_LO);
 
 	cmds[0] = cp_type7_packet(CP_INDIRECT_BUFFER_PFE, 3);
 	cmds[1] = lower_32_bits(rb->profile_desc->gpuaddr + offset);
@@ -514,18 +505,24 @@ static int gen7_drawctxt_switch(struct adreno_device *adreno_dev,
 		(cmds))
 
 #define GEN7_KERNEL_PROFILE(dev, cmdobj, cmds, field) \
-	gen7_get_alwayson_counter((cmds), \
+	gen7_get_counter((cmds), \
 		(dev)->profile_buffer->gpuaddr + \
 			ADRENO_DRAWOBJ_PROFILE_OFFSET((cmdobj)->profile_index, \
-				field))
+				field), GEN7_CP_ALWAYS_ON_COUNTER_LO)
 
 #define GEN7_KERNEL_PROFILE_CONTEXT(dev, cmdobj, cmds, field) \
-	gen7_get_alwayson_context((cmds), \
+	gen7_get_counter((cmds), \
 		(dev)->profile_buffer->gpuaddr + \
 			ADRENO_DRAWOBJ_PROFILE_OFFSET((cmdobj)->profile_index, \
-				field))
+				field), GEN7_CP_ALWAYS_ON_CONTEXT_LO)
 
-#define GEN7_COMMAND_DWORDS 60
+#define GEN7_KERNEL_PROFILE_CP_CYCLES(dev, cmdobj, cmds, field) \
+	gen7_get_counter((cmds), \
+		(dev)->profile_buffer->gpuaddr + \
+			ADRENO_DRAWOBJ_PROFILE_OFFSET((cmdobj)->profile_index, \
+				field), (dev)->cp_cycles_lo)
+
+#define GEN7_COMMAND_DWORDS 68
 
 int gen7_ringbuffer_submitcmd(struct adreno_device *adreno_dev,
 		struct kgsl_drawobj_cmd *cmdobj, u32 flags,
@@ -555,12 +552,14 @@ int gen7_ringbuffer_submitcmd(struct adreno_device *adreno_dev,
 	cmds[index++] = cp_type7_packet(CP_NOP, 1);
 	cmds[index++] = START_IB_IDENTIFIER;
 
-	/* Kernel profiling: 8 dwords */
+	/* Kernel profiling: 12 dwords */
 	if (IS_KERNEL_PROFILE(flags)) {
 		index += GEN7_KERNEL_PROFILE(adreno_dev, cmdobj, &cmds[index],
 			started);
 		index += GEN7_KERNEL_PROFILE_CONTEXT(adreno_dev, cmdobj, &cmds[index],
 			ctx_start);
+		index += GEN7_KERNEL_PROFILE_CP_CYCLES(adreno_dev, cmdobj, &cmds[index],
+			cycles_start);
 	}
 
 	/* User profiling: 4 dwords */
@@ -609,12 +608,14 @@ int gen7_ringbuffer_submitcmd(struct adreno_device *adreno_dev,
 	cmds[index++] = cp_type7_packet(CP_EVENT_WRITE, 1);
 	cmds[index++] = 25;
 
-	/* 8 dwords */
+	/* 12 dwords */
 	if (IS_KERNEL_PROFILE(flags)) {
 		index += GEN7_KERNEL_PROFILE(adreno_dev, cmdobj, &cmds[index],
 			retired);
 		index += GEN7_KERNEL_PROFILE_CONTEXT(adreno_dev, cmdobj, &cmds[index],
 			ctx_end);
+		index += GEN7_KERNEL_PROFILE_CP_CYCLES(adreno_dev, cmdobj, &cmds[index],
+			cycles_end);
 	}
 
 	/* 4 dwords */

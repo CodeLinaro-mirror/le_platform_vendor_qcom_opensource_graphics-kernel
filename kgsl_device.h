@@ -258,6 +258,8 @@ struct kgsl_device {
 
 	struct kgsl_memdesc *memstore;
 	struct kgsl_memdesc *scratch;
+	/* To share non-priv read-only data to userspace IBs */
+	struct kgsl_memdesc *scratch_nopriv_ro;
 
 	struct kgsl_mmu mmu;
 	struct gmu_core_device gmu_core;

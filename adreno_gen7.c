@@ -368,6 +368,66 @@ int gen7_init(struct adreno_device *adreno_dev)
 }
 
 #define CX_TIMER_INIT_SAMPLES 16
+
+static void gen7_cx_sw_timer_init(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct adreno_scratch_nopriv_ro *ptr;
+	u64 lowest_latency = U64_MAX;
+	unsigned long flags;
+	u64 cpu_ticks = 0;
+	u64 gpu_ticks = 0;
+	int i;
+
+	/* Disable irqs to get accurate timings */
+	local_irq_save(flags);
+
+	/* Calculate the overhead of timer reads and register writes */
+	for (i = 0; i < CX_TIMER_INIT_SAMPLES; i++) {
+		unsigned int count_lo, count_hi, _count_hi;
+		u64 tmr1, tmr2;
+
+retry:
+		kgsl_regread(device, GEN7_GMU_ALWAYS_ON_COUNTER_H, &count_hi);
+
+		/* Measure time for two reads of the CPU timer */
+		tmr1 = arch_timer_read_counter();
+		kgsl_regread(device, GEN7_GMU_ALWAYS_ON_COUNTER_L, &count_lo);
+
+		/* Barrier to make sure the IO completes before timing it */
+		mb();
+		tmr2 = arch_timer_read_counter();
+
+		kgsl_regread(device, GEN7_GMU_ALWAYS_ON_COUNTER_H, &_count_hi);
+
+		if (count_hi != _count_hi)
+			goto retry;
+
+		/* Keep track of the data points where the lowest latency was observed */
+		if ((tmr2 - tmr1) < lowest_latency) {
+			lowest_latency =  tmr2 - tmr1;
+			cpu_ticks = tmr1;
+			gpu_ticks = ((u64)count_hi << 32) | count_lo;
+		}
+
+		/* As soon as we get a very short latency (~1us), exit the loop */
+		if (lowest_latency < 20)
+			break;
+	}
+
+	local_irq_restore(flags);
+
+	if (WARN_ON_ONCE(!device->scratch_nopriv_ro))
+		return;
+
+	ptr = device->scratch_nopriv_ro->hostptr;
+
+	/* CPU time - (GPU time - latency/2) */
+	ptr->calibration_offset = cpu_ticks - (gpu_ticks - (lowest_latency / 2));
+
+	set_bit(ADRENO_DEVICE_CX_TIMER_INITIALIZED, &adreno_dev->priv);
+}
+
 void gen7_cx_timer_init(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
@@ -376,11 +436,16 @@ void gen7_cx_timer_init(struct adreno_device *adreno_dev)
 	unsigned long flags;
 
 	/*
-	 * Only gen7_9_x has the CX timer. Set it up during first boot or
-	 * after suspend resume.
+	 * Only gen7_9_x has the HW support for CX timer. Use SW timer
+	 * implementation on other Gen7 GPUs
 	 */
-	if (!adreno_is_gen7_9_x(adreno_dev) ||
-		test_bit(ADRENO_DEVICE_CX_TIMER_INITIALIZED, &adreno_dev->priv))
+	if (!adreno_is_gen7_9_x(adreno_dev)) {
+		gen7_cx_sw_timer_init(adreno_dev);
+		return;
+	}
+
+	/* Set up CX timer during first boot or after suspend resume */
+	if (test_bit(ADRENO_DEVICE_CX_TIMER_INITIALIZED, &adreno_dev->priv))
 		return;
 
 	/* Disable irqs to get accurate timings */

@@ -100,6 +100,14 @@ struct adreno_rb_shadow {
 };
 
 /**
+ * struct adreno_scratch_nopriv_ro - Layout of nopriv-readonly scratch buffer
+ */
+struct adreno_scratch_nopriv_ro {
+	/* @calibration_offset: calibration value for cpu-gpu ao counter sync */
+	u64 calibration_offset;
+};
+
+/**
  * struct gpu_work_period - App specific GPU work period stats
  */
 struct gpu_work_period {

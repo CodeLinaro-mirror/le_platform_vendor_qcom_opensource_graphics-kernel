@@ -623,7 +623,7 @@ snapshot:
 }
 
 #define FAULTLOG_SIZE SZ_64K
-size_t kgsl_snapshot_faultlog_buffer(struct kgsl_device *device,
+static size_t kgsl_snapshot_faultlog_buffer(struct kgsl_device *device,
 		u8 *buf, size_t remain, void *priv)
 {
 	struct kgsl_snapshot_faultlog *hdr =

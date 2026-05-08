@@ -1631,6 +1631,22 @@ int adreno_device_probe(struct platform_device *pdev,
 	}
 
 	adreno_profile_init(adreno_dev);
+
+	/*
+	 * SW Calibrated timer is the only user of this global buffer currently.
+	 * This is enabled on all Gen7 except Gen7_9_0 where we use the CX timer
+	 * instead
+	 */
+	if (adreno_is_gen7(adreno_dev) && !adreno_is_gen7_9_x(adreno_dev)) {
+		device->scratch_nopriv_ro = kgsl_allocate_global(device, PAGE_SIZE, 0,
+				KGSL_MEMFLAGS_GPUREADONLY, 0, "scratch-nopriv-ro");
+		status = PTR_ERR_OR_ZERO(device->scratch_nopriv_ro);
+		if (status) {
+			kgsl_mutex_unlock(&device->mutex);
+			goto dev_platform_remove;
+		}
+	}
+
 	kgsl_mutex_unlock(&device->mutex);
 
 	/* Initialize the snapshot engine */
@@ -1698,6 +1714,7 @@ int adreno_device_probe(struct platform_device *pdev,
 	return 0;
 
 dev_platform_remove:
+	device->scratch_nopriv_ro = NULL;
 	device->memstore = NULL;
 	trace_array_put(device->fence_trace_array);
 	kgsl_device_platform_remove(device);
@@ -2641,6 +2658,25 @@ static int adreno_prop_u32(struct kgsl_device *device,
 	return copy_prop(param, &val, sizeof(val));
 }
 
+static int adreno_prop_calibrated_timer(struct kgsl_device *device,
+		struct kgsl_device_getproperty *param)
+{
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	u64 val = 0;
+
+	/*
+	 * The adreno_is_gen7_9_0 and newer GPUs have HW based CX timer support
+	 * that makes the calibration offset unnecessary
+	 */
+	if (adreno_is_gen7(adreno_dev) && !adreno_is_gen7_9_x(adreno_dev)) {
+		val = device->scratch_nopriv_ro->gpuaddr +
+			offsetof(struct adreno_scratch_nopriv_ro, calibration_offset);
+		return copy_prop(param, &val, sizeof(val));
+	}
+
+	return -EOPNOTSUPP;
+}
+
 static int adreno_prop_uche_trap_base(struct kgsl_device *device,
 		struct kgsl_device_getproperty *param)
 {
@@ -2685,6 +2721,7 @@ static const struct {
 	{ KGSL_PROP_MULTIDRAW_MODE, adreno_prop_u32 },
 	{ KGSL_PROP_VIZ_FLUSH_DRAW_COUNT, adreno_prop_u32 },
 	{ KGSL_PROP_VIZ_FLUSH_PRIM_COUNT, adreno_prop_u32 },
+	{ KGSL_PROP_SW_CALIBRATED_TIMER, adreno_prop_calibrated_timer},
 };
 
 static int adreno_getproperty(struct kgsl_device *device,

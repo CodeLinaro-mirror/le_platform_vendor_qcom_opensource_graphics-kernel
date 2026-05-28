@@ -11,12 +11,17 @@
 #include <linux/of_fdt.h>
 #include <linux/of_device.h>
 #include <soc/qcom/of_common.h>
+#include <linux/version.h>
+#if (KERNEL_VERSION(6, 17, 0) <= LINUX_VERSION_CODE)
+#include <linux/soc/qcom/ubwc.h>
+#endif
 
 #include "adreno.h"
 #include "adreno_a6xx.h"
 #include "adreno_a6xx_hwsched.h"
 #include "adreno_pm4types.h"
 #include "adreno_trace.h"
+#include "kgsl_gmu_core.h"
 #include "kgsl_trace.h"
 #include "kgsl_util.h"
 
@@ -183,27 +188,60 @@ int a6xx_fenced_write(struct adreno_device *adreno_dev, u32 offset,
 	return 0;
 }
 
+static void a6xx_calc_ubwc_config_legacy(struct adreno_device *adreno_dev)
+{
+	struct adreno_ubwc_props *ubwc_props = &adreno_dev->ubwc_props;
+
+	switch (adreno_dev->ubwc_mode) {
+	case KGSL_UBWC_1_0:
+		ubwc_props->mode = 1;
+		break;
+	case KGSL_UBWC_2_0:
+		ubwc_props->mode = 0;
+		break;
+	case KGSL_UBWC_3_0:
+		ubwc_props->mode = 0;
+		ubwc_props->amsbc = true;
+		break;
+	case KGSL_UBWC_4_0:
+		ubwc_props->mode = 0;
+		ubwc_props->rgb565_predicator = true;
+		ubwc_props->amsbc = true;
+		if (adreno_is_a663(adreno_dev))
+			ubwc_props->level2_swizzling_dis = 1;
+		break;
+	default:
+		break;
+	}
+}
+
+#if (KERNEL_VERSION(6, 17, 0) <= LINUX_VERSION_CODE)
+static void a6xx_calc_ubwc_config(struct adreno_device *adreno_dev)
+{
+	struct qcom_ubwc_cfg_data *cfg = (struct qcom_ubwc_cfg_data *)adreno_dev->ubwc_cfg_data;
+	struct adreno_ubwc_props *ubwc_props = &adreno_dev->ubwc_props;
+
+	if (!cfg)
+		return a6xx_calc_ubwc_config_legacy(adreno_dev);
+
+	ubwc_props->mode = (cfg->ubwc_enc_version == UBWC_1_0) ? 1 : 0;
+	ubwc_props->amsbc = cfg->ubwc_enc_version >= UBWC_3_0;
+	ubwc_props->rgb565_predicator = cfg->ubwc_enc_version >= UBWC_4_0;
+	ubwc_props->level2_swizzling_dis = !(cfg->ubwc_swizzle & UBWC_SWIZZLE_ENABLE_LVL2);
+}
+#else
+static void a6xx_calc_ubwc_config(struct adreno_device *adreno_dev)
+{
+	a6xx_calc_ubwc_config_legacy(adreno_dev);
+}
+#endif
+
 int a6xx_init(struct adreno_device *adreno_dev)
 {
-	const struct adreno_a6xx_core *a6xx_core = to_a6xx_core(adreno_dev);
-
-	adreno_dev->highest_bank_bit = a6xx_core->highest_bank_bit;
-
 	adreno_dev->cooperative_reset = ADRENO_FEATURE(adreno_dev,
 							ADRENO_COOP_RESET);
 
-	/* If the memory type is DDR 4, override the existing configuration */
-	if (kgsl_get_ddrtype() == 0x7) {
-		if (adreno_is_a660_shima(adreno_dev) ||
-			adreno_is_a642l(adreno_dev) ||
-			adreno_is_a643(adreno_dev) ||
-			adreno_is_a662(adreno_dev) ||
-			adreno_is_gen6_3_26_0(adreno_dev))
-			adreno_dev->highest_bank_bit = 14;
-		else if ((adreno_is_a650(adreno_dev) ||
-				adreno_is_a660(adreno_dev)))
-			adreno_dev->highest_bank_bit = 15;
-	}
+	a6xx_calc_ubwc_config(adreno_dev);
 
 	a6xx_crashdump_init(adreno_dev);
 
@@ -582,11 +620,8 @@ void a6xx_start(struct adreno_device *adreno_dev)
 	const struct adreno_a6xx_core *a6xx_core = to_a6xx_core(adreno_dev);
 	unsigned int hbb_hi = 0, hbb_lo = 0;
 	unsigned int uavflagprd_inv;
-	unsigned int amsbc = 0;
-	unsigned int rgb565_predicator = 0;
-	unsigned int level2_swizzling_dis = 0;
+	struct adreno_ubwc_props *ubwc_props = &adreno_dev->ubwc_props;
 	u32 mal = adreno_dev->mal;
-	u32 mode = adreno_dev->ubwc_mode;
 
 	/* Enable 64 bit addressing */
 	kgsl_regwrite(device, A6XX_CP_ADDR_MODE_CNTL, 0x1);
@@ -701,28 +736,6 @@ void a6xx_start(struct adreno_device *adreno_dev)
 		kgsl_regwrite(device, A6XX_RBBM_INT_2_MASK, 0x00000010);
 	}
 
-	switch (mode) {
-	case KGSL_UBWC_1_0:
-		mode = 1;
-		break;
-	case KGSL_UBWC_2_0:
-		mode = 0;
-		break;
-	case KGSL_UBWC_3_0:
-		mode = 0;
-		amsbc = 1; /* Only valid for A640 and A680 */
-		break;
-	case KGSL_UBWC_4_0:
-		mode = 0;
-		rgb565_predicator = 1;
-		amsbc = 1;
-		if (adreno_is_a663(adreno_dev))
-			level2_swizzling_dis = 1;
-		break;
-	default:
-		break;
-	}
-
 	/* macrotilingmode 0: 4 channels (default)
 	 * overwrite to 1: 8 channels for A680
 	 */
@@ -730,7 +743,7 @@ void a6xx_start(struct adreno_device *adreno_dev)
 			adreno_is_a663(adreno_dev))
 		kgsl_regwrite(device, A6XX_RBBM_NC_MODE_CNTL, 1);
 
-	if (!WARN_ON(!adreno_dev->highest_bank_bit)) {
+	if (adreno_dev->highest_bank_bit) {
 		hbb_lo = (adreno_dev->highest_bank_bit - 13) & 3;
 		hbb_hi = ((adreno_dev->highest_bank_bit - 13) >> 2) & 1;
 	}
@@ -740,18 +753,20 @@ void a6xx_start(struct adreno_device *adreno_dev)
 	uavflagprd_inv = (adreno_is_a650_family(adreno_dev)) ? 2 : 0;
 
 	kgsl_regwrite(device, A6XX_RB_NC_MODE_CNTL,
-				(level2_swizzling_dis << 12) | (rgb565_predicator << 11)|
-				(hbb_hi << 10) | (amsbc << 4) | (mal << 3) |
-				(hbb_lo << 1) | mode);
+				(ubwc_props->level2_swizzling_dis << 12) |
+				(ubwc_props->rgb565_predicator << 11) |
+				(hbb_hi << 10) | (ubwc_props->amsbc << 4) | (mal << 3) |
+				(hbb_lo << 1) | ubwc_props->mode);
+
 
 	kgsl_regwrite(device, A6XX_TPL1_NC_MODE_CNTL,
-				(level2_swizzling_dis << 6) | (hbb_hi << 4) |
-				(mal << 3) | (hbb_lo << 1) | mode);
+				(ubwc_props->level2_swizzling_dis << 6) | (hbb_hi << 4) |
+				(mal << 3) | (hbb_lo << 1) | ubwc_props->mode);
 
 	kgsl_regwrite(device, A6XX_SP_NC_MODE_CNTL,
-				(level2_swizzling_dis << 12) | (hbb_hi << 10) |
+				(ubwc_props->level2_swizzling_dis << 12) | (hbb_hi << 10) |
 				(mal << 3) | (uavflagprd_inv << 4) |
-				(hbb_lo << 1) | mode);
+				(hbb_lo << 1) | ubwc_props->mode);
 
 	kgsl_regwrite(device, A6XX_UCHE_MODE_CNTL, (mal << 23) |
 		(hbb_lo << 21));
@@ -1992,6 +2007,7 @@ static int a6xx_probe(struct platform_device *pdev,
 {
 	struct adreno_device *adreno_dev;
 	struct kgsl_device *device;
+	struct platform_device *gmu_wrapper_pdev;
 	int ret;
 
 	adreno_dev = (struct adreno_device *)
@@ -2005,11 +2021,48 @@ static int a6xx_probe(struct platform_device *pdev,
 	if (ret)
 		return ret;
 
-	ret = adreno_dispatcher_init(adreno_dev);
+	device = KGSL_DEVICE(adreno_dev);
+
+	/*
+	 * In standard DT bindings, no-GMU targets have a wrapper device
+	 * with a dedicated "gmu" register range. In contrast, non-standard
+	 * DT bindings include these registers within "kgsl_3d0_reg_memory"
+	 * for such targets. To handle the first case, add the "gmu" block to
+	 * the regmap if the wrapper device is present.
+	 */
+	gmu_wrapper_pdev = get_gmu_wrapper_pdev();
+
+	if (gmu_wrapper_pdev) {
+		struct resource *res;
+		struct kgsl_regmap *regmap = &device->regmap;
+		struct kgsl_regmap_region *region;
+
+		res = platform_get_resource_byname(gmu_wrapper_pdev, IORESOURCE_MEM, "gmu");
+
+		if (!res) {
+			platform_device_put(gmu_wrapper_pdev);
+			return -ENODEV;
+		}
+
+		if (WARN_ON(regmap->count >= ARRAY_SIZE(regmap->region))) {
+			platform_device_put(gmu_wrapper_pdev);
+			return -ENODEV;
+		}
+
+		region = &regmap->region[regmap->count];
+
+		ret = kgsl_regmap_init_region(regmap, device->pdev, region, res, NULL, NULL);
+		if (!ret)
+			regmap->count++;
+		platform_device_put(gmu_wrapper_pdev);
+	}
+
 	if (ret)
 		return ret;
 
-	device = KGSL_DEVICE(adreno_dev);
+	ret = adreno_dispatcher_init(adreno_dev);
+	if (ret)
+		return ret;
 
 	timer_setup(&device->idle_timer, kgsl_timer, 0);
 

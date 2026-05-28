@@ -298,6 +298,7 @@ enum adreno_gpurev {
 	ADRENO_REV_GEN7_2_1 = ADRENO_GPUREV_VALUE(7, 2, 1),
 	ADRENO_REV_GEN7_3_0 = ADRENO_GPUREV_VALUE(7, 3, 0),
 	ADRENO_REV_GEN7_4_0 = ADRENO_GPUREV_VALUE(7, 4, 0),
+	ADRENO_REV_GEN7_5_0 = ADRENO_GPUREV_VALUE(7, 5, 0),
 	ADRENO_REV_GEN7_6_0 = ADRENO_GPUREV_VALUE(7, 6, 0),
 	ADRENO_REV_GEN7_9_0 = ADRENO_GPUREV_VALUE(7, 9, 0),
 	ADRENO_REV_GEN7_9_1 = ADRENO_GPUREV_VALUE(7, 9, 1),
@@ -530,6 +531,25 @@ struct adreno_power_ops {
 	void (*set_thermal_index)(struct adreno_device *adreno_dev);
 };
 
+struct adreno_ubwc_props {
+	/** @mode: UBWC mode value */
+	u32 mode;
+	/** @mode2: Secondary UBWC mode (Gen8 only) */
+	u32 mode2;
+	/** @level2_swizzling_dis: Level 2 swizzling disable (Gen6 only) */
+	u32 level2_swizzling_dis;
+	/** @amsbc: AMSBC enable flag */
+	bool amsbc;
+	/** @rgb565_predicator: RGB565 predictor enable */
+	bool rgb565_predicator;
+	/** @yuvnotcomptofc: YUV not compressed to FC (Gen8 only) */
+	bool yuvnotcomptofc;
+	/** @fp16compoptdis: FP16 compression optimization disable (Gen8 only) */
+	bool fp16compoptdis;
+	/** @rgba8888_lossless: RGBA8888 lossless mode (Gen8 only) */
+	bool rgba8888_lossless;
+};
+
 /**
  * struct adreno_gpu_core - A specific GPU core definition
  * @gpurev: Unique GPU revision identifier
@@ -577,6 +597,10 @@ struct adreno_gpu_core {
 	u32 ubwc_mode;
 	/** @mal: Minimum access length */
 	u32 mal;
+	/** @highest_bank_bit: The bit of the highest DDR bank */
+	u32 highest_bank_bit;
+	/** @gpu_model: Gpu model name */
+	const char *gpu_model;
 };
 
 /**
@@ -878,6 +902,14 @@ struct adreno_device {
 	bool dcvs_profile_enabled;
 	/** @aqe_ctxt_record_sz: Size of the AQE section in preemption record in bytes */
 	u64 aqe_ctxt_record_sz;
+	/** @ubwc_cfg: Pointer to hold struct qcom_ubwc_cfg_data fetched from
+	 * qcom_ubwc_config_get_data() API
+	 */
+	void *ubwc_cfg_data;
+	/** @adreno_ubwc_props: Container of all UBWC props required to program NC_MODE_CNTL
+	 * registers
+	 */
+	struct adreno_ubwc_props ubwc_props;
 };
 
 /* Time to wait for suspend recovery gate to complete */
@@ -1424,6 +1456,7 @@ ADRENO_TARGET(gen7_2_0, ADRENO_REV_GEN7_2_0)
 ADRENO_TARGET(gen7_2_1, ADRENO_REV_GEN7_2_1)
 ADRENO_TARGET(gen7_3_0, ADRENO_REV_GEN7_3_0)
 ADRENO_TARGET(gen7_4_0, ADRENO_REV_GEN7_4_0)
+ADRENO_TARGET(gen7_5_0, ADRENO_REV_GEN7_5_0)
 ADRENO_TARGET(gen7_6_0, ADRENO_REV_GEN7_6_0)
 ADRENO_TARGET(gen7_9_0, ADRENO_REV_GEN7_9_0)
 ADRENO_TARGET(gen7_9_1, ADRENO_REV_GEN7_9_1)
@@ -1461,9 +1494,9 @@ static inline int adreno_is_gen7_14_0_family(struct adreno_device *adreno_dev)
 static inline int adreno_is_gen7_2_x_family(struct adreno_device *adreno_dev)
 {
 	return adreno_is_gen7_2_0(adreno_dev) || adreno_is_gen7_2_1(adreno_dev) ||
-		adreno_is_gen7_6_0(adreno_dev) || adreno_is_gen7_9_x(adreno_dev) ||
-		adreno_is_gen7_14_0_family(adreno_dev) || adreno_is_gen7_11_0(adreno_dev) ||
-		adreno_is_gen7_15_0(adreno_dev);
+		adreno_is_gen7_5_0(adreno_dev) || adreno_is_gen7_6_0(adreno_dev) ||
+		adreno_is_gen7_9_x(adreno_dev) || adreno_is_gen7_14_0_family(adreno_dev) ||
+		adreno_is_gen7_11_0(adreno_dev) || adreno_is_gen7_15_0(adreno_dev);
 }
 
 static inline int adreno_is_gen8_2_x(struct adreno_device *adreno_dev)

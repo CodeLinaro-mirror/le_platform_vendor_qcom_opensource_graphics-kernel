@@ -7,6 +7,7 @@
 #include <dt-bindings/power/qcom-rpmpd.h>
 #include <linux/of.h>
 #include <linux/io.h>
+#include <linux/of_platform.h>
 #include <linux/pm_opp.h>
 
 #include "adreno.h"
@@ -26,6 +27,7 @@ static const struct of_device_id gmu_match_table[] = {
 	{ .compatible = "qcom,adreno-gmu-663.0", .data = &a6xx_gmu_driver },
 	{ .compatible = "qcom,adreno-gmu-635.0", .data = &a6xx_gmu_driver },
 	{ .compatible = "qcom,adreno-rgmu", .data = &a6xx_rgmu_driver },
+	{ .compatible = "qcom,adreno-gmu-x185.1", .data = &gen7_gmu_driver },
 	{},
 };
 
@@ -1377,4 +1379,32 @@ int gmu_core_hwsched_memory_init(struct kgsl_device *device)
 	}
 
 	return 0;
+}
+
+struct platform_device *get_gmu_wrapper_pdev(void)
+{
+	struct device_node *node;
+	struct platform_device *pdev = NULL;
+
+	node = of_find_compatible_node(NULL, NULL, "qcom,adreno-gmu-wrapper");
+	if (!node)
+		return NULL;
+
+	if (!of_device_is_available(node)) {
+		of_node_put(node);
+		return NULL;
+	}
+
+	pdev = of_find_device_by_node(node);
+	of_node_put(node);
+	return pdev;
+}
+
+bool is_gmu_wrapper_available(void)
+{
+	struct platform_device *pdev = get_gmu_wrapper_pdev();
+
+	platform_device_put(pdev);
+
+	return pdev != NULL;
 }

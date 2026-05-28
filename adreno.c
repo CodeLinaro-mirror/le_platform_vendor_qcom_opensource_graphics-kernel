@@ -34,6 +34,9 @@
 #if (KERNEL_VERSION(6, 10, 0) <= LINUX_VERSION_CODE)
 #include <linux/soc/qcom/socinfo.h>
 #endif
+#if (KERNEL_VERSION(6, 17, 0) <= LINUX_VERSION_CODE)
+#include <linux/soc/qcom/ubwc.h>
+#endif
 
 #include "adreno.h"
 #include "adreno_a6xx.h"
@@ -41,6 +44,7 @@
 #include "adreno_pm4types.h"
 #include "adreno_trace.h"
 #include "kgsl_bus.h"
+#include "kgsl_gmu_core.h"
 #include "kgsl_power_trace.h"
 #include "kgsl_reclaim.h"
 #include "kgsl_trace.h"
@@ -1174,7 +1178,17 @@ static int adreno_parse_opp_node(struct kgsl_device *device,
 {
 	int ret;
 
+	level->opp = opp;
+
 	level->voltage_level = dev_pm_opp_get_level(opp);
+
+	if (level->voltage_level == U32_MAX)
+		level->voltage_level = dev_pm_opp_get_required_pstate(opp, 0);
+
+	if (level->voltage_level == U32_MAX) {
+		dev_err(device->dev, "Failed to get valid voltage level from OPP\n");
+		return -EINVAL;
+	}
 
 	level->cx_level = 0xffffffff;
 	of_property_read_u32(dev_pm_opp_get_of_node(opp), "qcom,opp-acd-level", &level->acd_level);
@@ -1196,9 +1210,37 @@ static int adreno_of_parse_pwrlevels(struct adreno_device *adreno_dev)
 	unsigned long freq = ULONG_MAX;
 	int ret;
 
+	/* Only handle the core clock for no GMU and RGMU targets */
+	if (is_gmu_wrapper_available() || ADRENO_GPUREV(adreno_dev) == ADRENO_REV_A612) {
+		/*
+		 * This can only be done before devm_pm_opp_of_add_table(), or
+		 * dev_pm_opp_set_config() will WARN_ON()
+		 */
+		if (IS_ERR(devm_clk_get(dev, "core"))) {
+			/*
+			 * If "core" is absent, go for the legacy clock name.
+			 * If we got this far in probing, it's a given one of
+			 * them exists.
+			 */
+			ret = devm_pm_opp_set_clkname(dev, "core_clk");
+		} else
+			ret = devm_pm_opp_set_clkname(dev, "core");
+
+		if (ret) {
+			dev_err(dev, "Failed to set OPP clock name, ret: %d\n", ret);
+			return ret;
+		}
+	}
+
 	ret = devm_pm_opp_of_add_table(&device->pdev->dev);
 	if (ret) {
-		dev_err(&device->pdev->dev, "Unable to initialize opp table from device tree\n");
+		dev_err(dev, "Unable to initialize opp table from device tree\n");
+		return ret;
+	}
+
+	ret = dev_pm_opp_of_find_icc_paths(dev, NULL);
+	if (ret) {
+		dev_err(dev, "Unable to fetch the interconnects from device tree\n");
 		return ret;
 	}
 
@@ -1517,6 +1559,10 @@ const char *adreno_get_gpu_model(struct kgsl_device *device)
 	if (model)
 		goto done;
 
+	model = ADRENO_DEVICE(device)->gpucore->gpu_model;
+	if (model)
+		goto done;
+
 	scnprintf(gpu_model, sizeof(gpu_model), "Adreno%u%u%uv%u",
 		(u32)ADRENO_CHIPID_CORE(ADRENO_DEVICE(device)->chipid),
 		(u32)ADRENO_CHIPID_MAJOR(ADRENO_DEVICE(device)->chipid),
@@ -1559,7 +1605,25 @@ static u32 adreno_get_vk_device_id(struct kgsl_device *device)
 static int adreno_probe_llcc(struct adreno_device *adreno_dev,
 		struct platform_device *pdev)
 {
+	struct device_node *node;
 	int ret;
+
+	/*
+	 * Unlike some non-standard kernels, the llcc_slice_getd API
+	 * in the standard kernel does not check for the cache-controller
+	 * node in the device tree and returns EPROBE_DEFER for targets
+	 * without LLCC support. Therefore, explicitly check for the node
+	 * and return early in the LLCC probe.
+	 */
+	node = of_find_node_by_name(NULL, "system-cache-controller");
+	if (!node)
+		return 0;
+
+	if (!of_device_is_available(node)) {
+		of_node_put(node);
+		return 0;
+	}
+	of_node_put(node);
 
 	/* Get the system cache slice descriptor for GPU */
 	adreno_dev->gpu_llc_slice = llcc_slice_getd(LLCC_GPU);
@@ -1863,6 +1927,110 @@ static void validate_pwrlevels(struct kgsl_device *device)
 	}
 }
 
+static int adreno_init_ubwc_legacy(struct adreno_device *adreno_dev)
+{
+	if (adreno_dev->gpucore->ubwc_mode)
+		adreno_dev->ubwc_mode = adreno_dev->gpucore->ubwc_mode;
+	else {
+		struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+		int status;
+
+		status = of_property_read_u32(device->pdev->dev.of_node,
+			"qcom,ubwc-mode", &adreno_dev->ubwc_mode);
+		if (status) {
+			dev_err(device->dev, "Failed to get ubwc-mode\n");
+			return status;
+		}
+	}
+
+	adreno_dev->highest_bank_bit = adreno_dev->gpucore->highest_bank_bit;
+
+	if (kgsl_get_ddrtype() != 0x7)
+		return 0;
+
+	/* If the memory type is DDR 4, override the existing configuration */
+	if (adreno_is_gen8(adreno_dev) || adreno_is_gen7(adreno_dev) ||
+		adreno_is_a660_shima(adreno_dev) || adreno_is_a642l(adreno_dev) ||
+		adreno_is_a643(adreno_dev) || adreno_is_a662(adreno_dev) ||
+		adreno_is_gen6_3_26_0(adreno_dev))
+		adreno_dev->highest_bank_bit = 14;
+	else if (adreno_is_a650(adreno_dev) || adreno_is_a660(adreno_dev))
+		adreno_dev->highest_bank_bit = 15;
+
+	return 0;
+}
+
+#if (KERNEL_VERSION(6, 17, 0) <= LINUX_VERSION_CODE)
+static inline u32 ubwc_encoder_to_kgsl_mode(u32 enc_version)
+{
+	/* Convert UBWC encoder version to KGSL UBWC mode */
+	switch (enc_version) {
+	case UBWC_1_0:
+		return KGSL_UBWC_1_0;
+	case UBWC_2_0:
+		return KGSL_UBWC_2_0;
+	case UBWC_3_0:
+		return KGSL_UBWC_3_0;
+	case UBWC_4_0:
+		return KGSL_UBWC_4_0;
+	case UBWC_5_0:
+		return KGSL_UBWC_5_0;
+#if (KERNEL_VERSION(6, 19, 0) <= LINUX_VERSION_CODE)
+	case UBWC_6_0:
+		return KGSL_UBWC_6_0;
+#endif
+	default:
+		return KGSL_UBWC_NONE;
+	}
+}
+
+static int adreno_init_ubwc(struct adreno_device *adreno_dev)
+{
+	struct qcom_ubwc_cfg_data *cfg = qcom_ubwc_config_get_data();
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	int ret = 0;
+
+	if (cfg) {
+		adreno_dev->ubwc_cfg_data = cfg;
+		adreno_dev->ubwc_mode = ubwc_encoder_to_kgsl_mode(cfg->ubwc_enc_version);
+		adreno_dev->highest_bank_bit = cfg->highest_bank_bit;
+	} else
+		ret = adreno_init_ubwc_legacy(adreno_dev);
+
+	if (!adreno_dev->highest_bank_bit)
+		dev_warn(device->dev, "Invalid highest bank bit\n");
+
+	return ret;
+}
+
+#else
+static int adreno_init_ubwc(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	int ret;
+
+	ret = adreno_init_ubwc_legacy(adreno_dev);
+
+	if (!adreno_dev->highest_bank_bit)
+		dev_warn(device->dev, "Invalid highest bank bit\n");
+
+	return ret;
+}
+#endif
+
+static int adreno_bind_components(struct device *dev)
+{
+	/*
+	 * Bind components before performing the KGSL platform probe.
+	 * Note: with standard DT bindings, there are no components to bind
+	 * for no GMU targets, so skip invoking component_bind_all in this case.
+	 */
+	if (!is_gmu_wrapper_available())
+		return component_bind_all(dev, NULL);
+
+	return 0;
+}
+
 int adreno_device_probe(struct platform_device *pdev,
 		struct adreno_device *adreno_dev)
 {
@@ -1957,8 +2125,7 @@ int adreno_device_probe(struct platform_device *pdev,
 		!adreno_is_gen7_14_0_family(adreno_dev)))
 		kgsl_mmu_set_feature(device, KGSL_MMU_FORCE_LLCC_NWA);
 
-	 /* Bind the components before doing the KGSL platform probe. */
-	status = component_bind_all(dev, NULL);
+	status = adreno_bind_components(dev);
 	if (status)
 		goto err_remove_llcc;
 
@@ -2009,12 +2176,13 @@ int adreno_device_probe(struct platform_device *pdev,
 		goto err_unbind;
 	}
 
-	/* Initialize UBWC mode and mal */
-	if (adreno_dev->gpucore->ubwc_mode)
-		adreno_dev->ubwc_mode = adreno_dev->gpucore->ubwc_mode;
-	else
-		of_property_read_u32(device->pdev->dev.of_node,
-			"qcom,ubwc-mode", &adreno_dev->ubwc_mode);
+	/* Initialize UBWC mode and HBB */
+	status = adreno_init_ubwc(adreno_dev);
+	if (status) {
+		trace_array_put(device->fence_trace_array);
+		kgsl_device_platform_remove(device);
+		goto err_unbind;
+	}
 
 	if (adreno_dev->gpucore->mal)
 		adreno_dev->mal = adreno_dev->gpucore->mal;
@@ -4155,30 +4323,62 @@ int adreno_power_cycle_u32(struct adreno_device *adreno_dev,
 	return adreno_power_cycle(adreno_dev, cycle_set_u32, &data);
 }
 
+static int adreno_set_opp(struct kgsl_device *device, struct kgsl_pwrlevel *level)
+{
+	struct device *dev = &device->pdev->dev;
+	int ret;
+
+	/*
+	 * level->opp is initialized with a valid OPP pointer only when the driver
+	 * is probed with standard DT bindings. Use this to distinguish standard
+	 * vs non‑standard kernels here.
+	 *
+	 * On non‑standard kernels (level->opp == NULL), vote the core clock using
+	 * clk_set_rate API. The downstream clock driver internally handles the
+	 * required regulator voting.
+	 *
+	 * On standard kernels (level->opp != NULL), use dev_pm_opp_set_opp() API
+	 * and OPP framework will take care of all required votes.
+	 */
+	if (!level->opp) {
+		struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+
+		ret = clk_set_rate(pwr->grp_clks[0], level->gpu_freq);
+		if (ret)
+			dev_err(device->dev, "GPU clk freq set failure: %d\n", ret);
+
+		return ret;
+	}
+
+	ret = dev_pm_opp_set_opp(dev, level->opp);
+	if (ret)
+		dev_err(device->dev, "GPU OPP configure failure: %d\n", ret);
+
+	return ret;
+}
+
 static int adreno_gpu_clock_set(struct kgsl_device *device, u32 pwrlevel)
 {
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	const struct adreno_power_ops *ops = ADRENO_POWER_OPS(adreno_dev);
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
-	struct kgsl_pwrlevel *pl = &pwr->pwrlevels[pwrlevel];
+	struct kgsl_pwrlevel *level = &pwr->pwrlevels[pwrlevel];
 	u32 prev_pwrlevel = pwr->previous_pwrlevel;
 	int ret;
 
 	if (ops->gpu_clock_set) {
 		ret = ops->gpu_clock_set(adreno_dev, pwrlevel);
-	} else {
-		ret = clk_set_rate(pwr->grp_clks[0], pl->gpu_freq);
-		if (ret)
-			dev_err(device->dev, "GPU clk freq set failure: %d\n", ret);
-	}
+	} else
+		ret = adreno_set_opp(device, level);
+
 
 	if (ret)
 		return ret;
 
-	trace_kgsl_pwrlevel(device, pwrlevel, pl->gpu_freq,
+	trace_kgsl_pwrlevel(device, pwrlevel, level->gpu_freq,
 		prev_pwrlevel, pwr->pwrlevels[prev_pwrlevel].gpu_freq, 0);
 
-	KGSL_TRACE_GPU_FREQ(pl->gpu_freq/1000, 0, 0);
+	KGSL_TRACE_GPU_FREQ(level->gpu_freq/1000, 0, 0);
 	return 0;
 }
 
@@ -4388,13 +4588,6 @@ static void adreno_set_thermal_index(struct kgsl_device *device)
 		ops->set_thermal_index(adreno_dev);
 }
 
-static bool adreno_is_reset_recovery(struct kgsl_device *device)
-{
-	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
-
-	return test_bit(ADRENO_DEVICE_RESET_RECOVERY, &adreno_dev->priv);
-}
-
 static bool adreno_is_first_boot_done(struct kgsl_device *device)
 {
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
@@ -4446,7 +4639,6 @@ static const struct kgsl_functable adreno_functable = {
 	.gmu_based_dcvs_pwr_ops = adreno_gmu_based_dcvs_pwr_ops,
 	.set_thermal_index = adreno_set_thermal_index,
 	.alloc_dcvs_profile_memory = adreno_alloc_dcvs_profile_memory,
-	.is_reset_recovery = adreno_is_reset_recovery,
 	.is_first_boot_done = adreno_is_first_boot_done,
 };
 
@@ -4511,6 +4703,14 @@ static int adreno_probe(struct platform_device *pdev)
 		matches = adreno_component_match;
 	}
 
+	/*
+	 * With standard DT bindings, there is no component to match
+	 * from adreno_component_match list for no GMU targets. Invoke
+	 * adreno_bind directly in this case.
+	 */
+	if (is_gmu_wrapper_available())
+		return adreno_bind(&pdev->dev);
+
 	adreno_add_components(&pdev->dev, &match, matches);
 
 	if (!match)
@@ -4523,12 +4723,18 @@ static int adreno_probe(struct platform_device *pdev)
 #if (KERNEL_VERSION(6, 10, 0) <= LINUX_VERSION_CODE)
 static void adreno_remove(struct platform_device *pdev)
 {
-	component_master_del(&pdev->dev, &adreno_ops);
+	if (is_gmu_wrapper_available())
+		adreno_unbind(&pdev->dev);
+	else
+		component_master_del(&pdev->dev, &adreno_ops);
 }
 #else
 static int adreno_remove(struct platform_device *pdev)
 {
-	component_master_del(&pdev->dev, &adreno_ops);
+	if (is_gmu_wrapper_available())
+		adreno_unbind(&pdev->dev);
+	else
+		component_master_del(&pdev->dev, &adreno_ops);
 
 	return 0;
 }

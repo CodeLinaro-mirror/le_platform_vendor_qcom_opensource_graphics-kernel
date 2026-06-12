@@ -993,6 +993,7 @@ struct hfi_ts_retire_cmd {
 	u64 retired_on_gmu;
 	u64 active;
 	u32 version;
+	u32 flags;
 } __packed;
 
 /* H2F */

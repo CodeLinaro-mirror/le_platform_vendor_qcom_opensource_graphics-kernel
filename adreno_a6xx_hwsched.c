@@ -283,7 +283,7 @@ static int a6xx_hwsched_notify_slumber(struct adreno_device *adreno_dev)
 	 * This could abort CX GDSC collapse. Assert Qactive to avoid this.
 	 */
 	if ((adreno_is_a662(adreno_dev) || adreno_is_a621(adreno_dev) ||
-			adreno_is_a622(adreno_dev) || adreno_is_a642l(adreno_dev)))
+			adreno_is_a622_family(adreno_dev) || adreno_is_a642l(adreno_dev)))
 		gmu_core_regwrite(device, A6XX_GPU_GMU_CX_GMU_CX_FALNEXT_INTF, 0x1);
 
 	return ret;
@@ -431,6 +431,10 @@ static void a6xx_hwsched_touch_wakeup(struct adreno_device *adreno_dev)
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct a6xx_gmu_device *gmu = to_a6xx_gmu(adreno_dev);
 	int ret;
+
+	/* If device is already in SUSPEND state, don't act on touch wakeup */
+	if (device->state == KGSL_STATE_SUSPEND)
+		return;
 
 	/*
 	 * Do not wake up a suspended device or until the first boot sequence

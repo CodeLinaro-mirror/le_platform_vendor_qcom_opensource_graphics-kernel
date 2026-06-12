@@ -1715,6 +1715,9 @@ done:
 	adreno_active_count_put(adreno_dev);
 	del_waiter(hfi, &pending_ack);
 
+	/* Trigger scheduler to retire draw objects from this detached context */
+	adreno_scheduler_queue(adreno_dev);
+
 	return ret;
 }
 

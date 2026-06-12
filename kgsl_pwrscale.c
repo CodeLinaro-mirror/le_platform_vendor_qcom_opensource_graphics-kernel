@@ -119,7 +119,11 @@ void kgsl_pwrscale_update_stats(struct kgsl_device *device)
 			pwrctrl->thermal_time += stats.busy_time;
 		pwrctrl->time_in_pwrlevel[pwrctrl->active_pwrlevel] +=
 			ktime_us_delta(cur_time, pwrctrl->last_stat_updated);
+		pwrctrl->trans_stats.time_in_pwrlevel[pwrctrl->active_pwrlevel] +=
+			ktime_us_delta(cur_time,
+				pwrctrl->trans_stats.last_time_updated);
 		pwrctrl->last_stat_updated = cur_time;
+		pwrctrl->trans_stats.last_time_updated = cur_time;
 	}
 }
 

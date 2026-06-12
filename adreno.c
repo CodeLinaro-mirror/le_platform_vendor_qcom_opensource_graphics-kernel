@@ -230,13 +230,12 @@ int adreno_zap_shader_load(struct adreno_device *adreno_dev,
 static void adreno_zap_shader_unload(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
-	int ret;
 
-	if (adreno_dev->zap_loaded) {
-		ret = kgsl_zap_shader_unload(&device->pdev->dev);
-		if (!ret)
-			adreno_dev->zap_loaded = false;
-	}
+	if (!adreno_dev->zap_loaded)
+		return;
+
+	kgsl_zap_shader_unload(&device->pdev->dev);
+	adreno_dev->zap_loaded = false;
 }
 
 /**
@@ -283,6 +282,10 @@ unsigned int adreno_get_rptr(struct adreno_ringbuffer *rb)
 static void adreno_touch_wakeup(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+
+	/* If device is already in SUSPEND state, don't act on touch wakeup */
+	if (device->state == KGSL_STATE_SUSPEND)
+		return;
 
 	/*
 	 * Don't schedule adreno_start in a high priority workqueue, we are
@@ -1929,6 +1932,8 @@ static int adreno_pm_suspend(struct device *dev)
 	/* Return early if fault recovery is in progress */
 	if (!mutex_trylock(&adreno_dev->fault_recovery_mutex))
 		return -EDEADLK;
+
+	cancel_work_sync(&adreno_dev->input_work);
 
 	kgsl_mutex_lock(&device->mutex);
 	status = ops->pm_suspend(adreno_dev);
@@ -4217,13 +4222,15 @@ static int adreno_secure_pt_hibernate(struct adreno_device *adreno_dev)
 			memdesc = &entry->memdesc;
 			if (!kgsl_memdesc_is_secured(memdesc) ||
 				(memdesc->flags & KGSL_MEMFLAGS_USERMEM_ION) ||
-				(TEST_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv)))
+				TEST_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv))
 				continue;
 
 			read_unlock(&kgsl_driver.proclist_lock);
-
-			if (kgsl_unlock_sgt(memdesc->sgt))
-				dev_err(device->dev, "kgsl_unlock_sgt failed\n");
+			ret = kgsl_unlock_sgt(memdesc->sgt);
+			if (ret) {
+				dev_err(device->dev, "secure page unlock failed: ret %d\n", ret);
+				goto fail;
+			}
 
 			SET_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv);
 
@@ -4238,7 +4245,7 @@ static int adreno_secure_pt_hibernate(struct adreno_device *adreno_dev)
 			!(TEST_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv))) {
 			ret = kgsl_unlock_sgt(memdesc->sgt);
 			if (ret) {
-				dev_err(device->dev, "kgsl_unlock_sgt failed ret %d\n", ret);
+				dev_err(device->dev, "secure page unlock failed: ret %d\n", ret);
 				goto fail;
 			}
 			SET_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv);
@@ -4248,12 +4255,30 @@ static int adreno_secure_pt_hibernate(struct adreno_device *adreno_dev)
 	return 0;
 
 fail:
+	read_lock(&kgsl_driver.proclist_lock);
+	list_for_each_entry(process, &kgsl_driver.process_list, list) {
+		idr_for_each_entry(&process->mem_idr, entry, id) {
+			memdesc = &entry->memdesc;
+			if (TEST_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv)) {
+				read_unlock(&kgsl_driver.proclist_lock);
+				if (kgsl_lock_sgt(memdesc->sgt, memdesc->size))
+					dev_err(device->dev, "secure page lock failed\n");
+
+				read_lock(&kgsl_driver.proclist_lock);
+				CLEAR_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv);
+			}
+		}
+	}
+	read_unlock(&kgsl_driver.proclist_lock);
+
 	list_for_each_entry(md, &device->globals, node) {
 		memdesc = &md->memdesc;
 		if (kgsl_memdesc_is_secured(memdesc) &&
 			(TEST_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv))) {
-			kgsl_lock_sgt(memdesc->sgt, memdesc->size);
-			CLEAR_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv);
+			if (kgsl_lock_sgt(memdesc->sgt, memdesc->size))
+				dev_err(device->dev, "secure page lock failed\n");
+			else
+				CLEAR_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv);
 		}
 	}
 
@@ -4275,7 +4300,7 @@ static int adreno_secure_pt_restore(struct adreno_device *adreno_dev)
 			(TEST_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv))) {
 			ret = kgsl_lock_sgt(memdesc->sgt, memdesc->size);
 			if (ret) {
-				dev_err(device->dev, "kgsl_lock_sgt failed ret %d\n", ret);
+				dev_err(device->dev, "secure page lock failed: ret %d\n", ret);
 				return ret;
 			}
 			CLEAR_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv);
@@ -4288,14 +4313,14 @@ static int adreno_secure_pt_restore(struct adreno_device *adreno_dev)
 			memdesc = &entry->memdesc;
 			if (!kgsl_memdesc_is_secured(memdesc) ||
 				(memdesc->flags & KGSL_MEMFLAGS_USERMEM_ION) ||
-				!(TEST_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv)))
+				!TEST_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv))
 				continue;
 
 			read_unlock(&kgsl_driver.proclist_lock);
 
 			ret = kgsl_lock_sgt(memdesc->sgt, memdesc->size);
 			if (ret) {
-				dev_err(device->dev, "kgsl_lock_sgt failed ret %d\n", ret);
+				dev_err(device->dev, "secure page lock failed: ret %d\n", ret);
 				return ret;
 			}
 			CLEAR_FLAG(KGSL_MEMDESC_HYPASSIGNED_HLOS, &memdesc->priv);
@@ -4390,9 +4415,7 @@ static int adreno_hibernation_resume(struct device *dev)
 		goto err;
 
 	gmu_core_dev_force_first_boot(device);
-
 	msm_adreno_tz_reinit(pwrscale->devfreqptr);
-
 	ops->pm_resume(adreno_dev);
 
 err:

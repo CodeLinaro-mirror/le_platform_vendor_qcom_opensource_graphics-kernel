@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2002,2007-2020, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023,2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/slab.h>
@@ -347,6 +347,8 @@ static inline void refcount_group(const struct adreno_perfcount_group *group,
 {
 	if (flags & PERFCOUNTER_FLAG_KERNEL)
 		group->regs[reg].kernelcount++;
+	else if (flags & PERFCOUNTER_FLAG_GMU)
+		group->regs[reg].gmureserved = true;
 	else
 		group->regs[reg].usercount++;
 
@@ -406,7 +408,8 @@ int adreno_perfcounter_get(struct adreno_device *adreno_dev,
 
 		/* If it is already reserved, just increase the refcounts */
 		if ((group->regs[countable].kernelcount != 0) ||
-			(group->regs[countable].usercount != 0)) {
+			(group->regs[countable].usercount != 0) ||
+			(group->regs[countable].gmureserved)) {
 			refcount_group(group, countable, flags,
 				offset, offset_hi);
 			return 0;
@@ -452,17 +455,21 @@ int adreno_perfcounter_get(struct adreno_device *adreno_dev,
 		return ret;
 	}
 
-	if (!(group->flags & ADRENO_PERFCOUNTER_GROUP_RESTORE))
+	if (!(group->flags & ADRENO_PERFCOUNTER_GROUP_RESTORE) &&
+			!(group->flags & ADRENO_PERFCOUNTER_GROUP_NON_RBBM))
 		adreno_dev->no_restore_count++;
 
+	group->regs[empty].kernelcount = 0;
+	group->regs[empty].usercount = 0;
+	group->regs[empty].gmureserved = false;
+
 	/* set initial kernel and user count */
-	if (flags & PERFCOUNTER_FLAG_KERNEL) {
+	if (flags & PERFCOUNTER_FLAG_KERNEL)
 		group->regs[empty].kernelcount = 1;
-		group->regs[empty].usercount = 0;
-	} else {
-		group->regs[empty].kernelcount = 0;
+	else if (flags & PERFCOUNTER_FLAG_GMU)
+		group->regs[empty].gmureserved = true;
+	else
 		group->regs[empty].usercount = 1;
-	}
 
 	if (offset)
 		*offset = group->regs[empty].offset;
@@ -509,6 +516,8 @@ int adreno_perfcounter_put(struct adreno_device *adreno_dev,
 			if (flags & PERFCOUNTER_FLAG_KERNEL &&
 					group->regs[i].kernelcount > 0)
 				group->regs[i].kernelcount--;
+			else if (flags & PERFCOUNTER_FLAG_GMU)
+				group->regs[i].gmureserved = false;
 			else if (group->regs[i].usercount > 0)
 				group->regs[i].usercount--;
 			else
@@ -516,16 +525,21 @@ int adreno_perfcounter_put(struct adreno_device *adreno_dev,
 
 			/* mark available if not used anymore */
 			if (group->regs[i].kernelcount == 0 &&
-					group->regs[i].usercount == 0) {
+					group->regs[i].usercount == 0 &&
+					!group->regs[i].gmureserved) {
 
-				if (!(group->flags & ADRENO_PERFCOUNTER_GROUP_RESTORE))
+				if (!(group->flags & ADRENO_PERFCOUNTER_GROUP_RESTORE) &&
+					!(group->flags & ADRENO_PERFCOUNTER_GROUP_NON_RBBM))
 					adreno_dev->no_restore_count--;
 
 				if (gpudev->perfcounter_remove)
 					ret = gpudev->perfcounter_remove(adreno_dev,
 							&group->regs[i], groupid);
-				if (!ret)
+				if (!ret) {
 					group->regs[i].countable = KGSL_PERFCOUNTER_NOT_USED;
+					if (group->disable)
+						group->disable(adreno_dev, group, i, countable);
+				}
 			}
 
 			return ret;

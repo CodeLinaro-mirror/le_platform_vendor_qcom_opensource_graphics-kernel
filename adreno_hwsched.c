@@ -341,10 +341,7 @@ int adreno_hwsched_process_mem_alloc(struct adreno_device *adreno_dev,
 		mad->gmu_addr = entry->md->gmuaddr;
 	}
 
-	/*
-	 * GMU uses the host_mem_handle to check if this memalloc was
-	 * successful
-	 */
+	/* GMU uses the host_mem_handle to check if this memalloc was successful */
 	mad->host_mem_handle = mad->gmu_mem_handle;
 
 	trace_adreno_hwsched_mem_alloc(mad->mem_kind, mad->flags, mad->gmu_addr, mad->gpu_addr,
@@ -354,8 +351,8 @@ int adreno_hwsched_process_mem_alloc(struct adreno_device *adreno_dev,
 	return 0;
 }
 
-static struct hfi_mem_alloc_entry *get_preempt_record_entry(struct adreno_device *adreno_dev,
-	unsigned long flags)
+static struct hfi_mem_alloc_entry *get_preempt_record_entry(
+	struct adreno_device *adreno_dev, unsigned long flags)
 {
 	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
 	u32 mem_kind = flags & KGSL_CONTEXT_SECURE ?
@@ -372,17 +369,121 @@ static struct hfi_mem_alloc_entry *get_preempt_record_entry(struct adreno_device
 	return NULL;
 }
 
+/*
+ * alloc_preempt_rec_gmem_for_level - Allocate the GMEM portion of a
+ * preemption record for a specific RB level.
+ *
+ * Must be called with device->mutex held.
+ *
+ * @adreno_dev: Pointer to the adreno device
+ * @level: RB level (1 to KGSL_PRIORITY_MAX_RB_LEVELS-1); RB0 has no GMEM
+ * @secure: true for secure preemption record, false for non-secure
+ *
+ * Returns 0 on success or negative error on failure.
+ */
+static int alloc_preempt_rec_gmem_for_level(struct adreno_device *adreno_dev,
+	u32 level, bool secure)
+{
+	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct hfi_mem_alloc_entry *entry;
+	struct kgsl_memdesc *pr_md, **md;
+	u64 curr_gmem_size = adreno_gmem_size(adreno_dev);
+	u64 flags = 0;
+	u32 priv = 0;
+
+	md = secure ? &hwsched->secure_preempt_rec_gmem[level - 1] :
+		      &hwsched->preempt_rec_gmem[level - 1];
+
+	/* Already allocated */
+	if (*md)
+		return 0;
+
+	entry = get_preempt_record_entry(adreno_dev,
+		secure ? KGSL_CONTEXT_SECURE : 0);
+	if (!entry) {
+		dev_err_ratelimited(GMU_PDEV_DEV(device),
+			"preempt record entry not found for rb:%u secure:%d\n",
+			level, secure);
+		return -EINVAL;
+	}
+
+	pr_md = secure ? hwsched->secure_preempt_rec[level] :
+			 hwsched->preempt_rec[level];
+
+	if (!pr_md) {
+		dev_err_ratelimited(GMU_PDEV_DEV(device),
+			"non-gmem preempt record not found for rb:%u secure:%d\n",
+			level, secure);
+		return -EINVAL;
+	}
+
+	if ((pr_md->gpuaddr + pr_md->size + curr_gmem_size) >
+		(entry->md->gpuaddr + entry->md->size)) {
+		dev_err_ratelimited(GMU_PDEV_DEV(device),
+			"No space for gmem preempt record rb:%u secure:%d\n",
+			level, secure);
+		return -ENOSPC;
+	}
+
+	setup_gfx_flags_priv(entry->desc.flags, &flags, &priv);
+
+	/* GMEM section only needs to be mapped to GPU, not GMU */
+	*md = kgsl_alloc_map_gpu_global(device, pr_md->gpuaddr + pr_md->size,
+			curr_gmem_size, 0, flags, priv,
+			secure ? "sec_preempt_record_gmem" : "preempt_record_gmem");
+	if (IS_ERR(*md)) {
+		int ret = PTR_ERR(*md);
+
+		dev_err_ratelimited(GMU_PDEV_DEV(device),
+			"Failed to allocate gmem preempt record for rb:%u secure:%d ret:%d\n",
+			level, secure, ret);
+		*md = NULL;
+		return ret;
+	}
+
+	return 0;
+}
+
+/* Allocate deferred GMEM for pending lower-priority (higher-level) RBs */
+static int alloc_deferred_preempt_gmem(struct adreno_device *adreno_dev,
+	u32 trigger_level, bool secure)
+{
+	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
+	unsigned long *pending = secure ? &hwsched->rb_ctx_gmem_pending_sec :
+					  &hwsched->rb_ctx_gmem_pending_nonsec;
+	/* Pending levels strictly above trigger_level */
+	unsigned long to_alloc = *pending & ~GENMASK(trigger_level, 0);
+	u32 level;
+
+	for_each_set_bit(level, &to_alloc, KGSL_PRIORITY_MAX_RB_LEVELS) {
+		int ret = alloc_preempt_rec_gmem_for_level(adreno_dev,
+			level, secure);
+
+		if (ret) {
+			dev_err_ratelimited(GMU_PDEV_DEV(KGSL_DEVICE(adreno_dev)),
+				"Deferred gmem alloc failed rb:%u secure:%d ret:%d\n",
+				level, secure, ret);
+			return ret;
+		}
+
+		/* Clear the pending bit on success */
+		WRITE_ONCE(*pending, *pending & ~BIT(level));
+	}
+
+	return 0;
+}
+
 static int adreno_hwsched_alloc_preempt_record_gmem(struct adreno_device *adreno_dev,
 	struct adreno_context *drawctxt)
 {
 	struct adreno_hwsched *hwsched = &adreno_dev->hwsched;
 	struct kgsl_context *context = &drawctxt->base;
 	struct kgsl_device *device = context->device;
-	struct hfi_mem_alloc_entry *entry = NULL;
-	struct kgsl_memdesc *pr_md, **md = NULL;
-	u32 priv = 0, level = adreno_get_level(context);
-	u64 curr_gmem_size = adreno_gmem_size(adreno_dev);
-	u64 flags = 0;
+	u32 level = adreno_get_level(context);
+	bool secure = !!(context->flags & KGSL_CONTEXT_SECURE);
+	unsigned long *first_created;
+	unsigned long *pending;
 	int ret = 0;
 
 	if (context->flags & KGSL_CONTEXT_LPAC)
@@ -392,53 +493,64 @@ static int adreno_hwsched_alloc_preempt_record_gmem(struct adreno_device *adreno
 		!ADRENO_FEATURE(adreno_dev, ADRENO_DEFER_GMEM_ALLOC))
 		return 0;
 
-	/* No need to allocate gmem for RB0 preemption record */
-	if (!level)
-		return 0;
+	/* Track secure and non-secure state independently */
+	first_created = secure ? &hwsched->rb_ctx_first_created_sec :
+				 &hwsched->rb_ctx_first_created_nonsec;
+	pending = secure ? &hwsched->rb_ctx_gmem_pending_sec :
+			   &hwsched->rb_ctx_gmem_pending_nonsec;
 
-	md = context->flags & KGSL_CONTEXT_SECURE ?
-		&hwsched->secure_preempt_rec_gmem[level - 1] :
-		&hwsched->preempt_rec_gmem[level - 1];
-
-	/* Avoid device mutex if buffer is already allocated */
-	if (*md)
-		return 0;
+	/* Fast path: RB0 needs no GMEM, RBn skips if GMEM already exists */
+	if (!level) {
+		if (READ_ONCE(*first_created) & BIT(0))
+			return 0;
+	} else {
+		if (secure ? READ_ONCE(hwsched->secure_preempt_rec_gmem[level - 1]) :
+			     READ_ONCE(hwsched->preempt_rec_gmem[level - 1]))
+			return 0;
+	}
 
 	kgsl_mutex_lock(&device->mutex);
 
-	if (*md)
+	/*
+	 * Only the first context at this level drives allocation decisions.
+	 * Subsequent contexts either find GMEM already allocated (fast path)
+	 * or find it still pending (no higher-priority context yet), in which
+	 * case there is nothing new to do here.
+	 */
+	if (!(READ_ONCE(*first_created) & BIT(level)))
+		WRITE_ONCE(*first_created, *first_created | BIT(level));
+	else
 		goto unlock;
 
-	entry = get_preempt_record_entry(adreno_dev, context->flags);
-	if (!entry) {
-		dev_err_ratelimited(GMU_PDEV_DEV(device),
-			"preempt record entry not found\n");
-		ret = -EINVAL;
+	/* RB0 itself needs no GMEM, but it can unblock low priority RBs */
+	if (!level) {
+		ret = alloc_deferred_preempt_gmem(adreno_dev, 0, secure);
+		if (ret)
+			WRITE_ONCE(*first_created,
+				   *first_created & ~BIT(level));
 		goto unlock;
 	}
 
-	pr_md = context->flags & KGSL_CONTEXT_SECURE ?
-		hwsched->secure_preempt_rec[level] : hwsched->preempt_rec[level];
-
-	if ((pr_md->gpuaddr + pr_md->size + curr_gmem_size) >
-		(entry->md->gpuaddr + entry->md->size)) {
-		ret = -ENOSPC;
-		goto unlock;
+	/*
+	 * RBn: dependency is at least one ctx created for higher-priority RB.
+	 * If satisfied, allocate GMEM now. Otherwise, defer and try to unblock
+	 * any lower-priority RBs whose dependency is now satisfied by our first
+	 * context creation.
+	 */
+	if (READ_ONCE(*first_created) & (BIT(level) - 1)) {
+		/* Higher RB context exists: allocate GMEM for this level now */
+		ret = alloc_preempt_rec_gmem_for_level(adreno_dev, level, secure);
+	} else {
+		/* No higher RB context yet: defer GMEM allocation */
+		WRITE_ONCE(*pending, *pending | BIT(level));
+		ret = alloc_deferred_preempt_gmem(adreno_dev, level, secure);
+		if (ret)
+			WRITE_ONCE(*pending, *pending & ~BIT(level));
 	}
 
-	setup_gfx_flags_priv(entry->desc.flags, &flags, &priv);
+	if (ret)
+		WRITE_ONCE(*first_created, *first_created & ~BIT(level));
 
-	/* gmem section only needs to be mapped to gpu */
-	*md = kgsl_alloc_map_gpu_global(device, pr_md->gpuaddr + pr_md->size,
-			curr_gmem_size, 0, flags, priv,
-			(entry->desc.mem_kind == HFI_MEMKIND_CSW_PRIV_SECURE) ?
-			"sec_preempt_record_gmem" : "preempt_record_gmem");
-	if (!*md) {
-		dev_err_ratelimited(GMU_PDEV_DEV(device),
-			"Failed to allocate gmem preempt record for rb:%d\n", level);
-		ret = PTR_ERR(*md);
-		kfree(*md);
-	}
 unlock:
 	kgsl_mutex_unlock(&device->mutex);
 	return ret;
@@ -3296,12 +3408,15 @@ static void _retire_inflight_hw_fences(struct adreno_device *adreno_dev,
 	spin_unlock(&drawctxt->lock);
 }
 
+#define HFI_TS_RETIRE_VERSION_HAS_FLAGS 2
+
 void adreno_hwsched_log_profiling_info(struct adreno_device *adreno_dev, u32 *rcvd)
 {
 	struct hfi_ts_retire_cmd *cmd = (struct hfi_ts_retire_cmd *)rcvd;
 	struct kgsl_context *context;
 	struct retire_info info = {0};
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	u32 flags;
 
 	context = kgsl_context_get(device, cmd->ctxt_id);
 	if (context == NULL)
@@ -3324,7 +3439,12 @@ void adreno_hwsched_log_profiling_info(struct adreno_device *adreno_dev, u32 *rc
 		kgsl_work_period_update(device, context->proc_priv->period,
 					     info.active);
 
-	trace_adreno_cmdbatch_retired(context, &info, 0, 0, 0);
+	if (cmd->version < HFI_TS_RETIRE_VERSION_HAS_FLAGS)
+		flags = 0;
+	else
+		flags = cmd->flags;
+
+	trace_adreno_cmdbatch_retired(context, &info, flags, 0, 0);
 
 	log_kgsl_cmdbatch_retired_event(context->id, cmd->ts,
 		context->priority, 0, cmd->sop, cmd->eop);
@@ -3376,6 +3496,10 @@ void adreno_hwsched_reset_hfi_mem(struct adreno_device *adreno_dev)
 	/* No need to reset gmem portion of the preemption records */
 	for (i = 0; i < KGSL_PRIORITY_MAX_RB_LEVELS; i++) {
 		md = hwsched->preempt_rec[i];
+		if (md && md->hostptr)
+			memset(md->hostptr, 0x0, md->size);
+
+		md = hwsched->secure_preempt_rec[i];
 		if (md && md->hostptr)
 			memset(md->hostptr, 0x0, md->size);
 	}

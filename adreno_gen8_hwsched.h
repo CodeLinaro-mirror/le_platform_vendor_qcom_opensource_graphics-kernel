@@ -49,6 +49,14 @@ int gen8_hwsched_probe(struct platform_device *pdev,
 		u32 chipid, const struct adreno_gpu_core *gpucore);
 
 /**
+ * gen8_hwsched_remove - Target specific remove for hwsched
+ * @adreno_dev: Pointer to the adreno device
+ *
+ * The target specific remove function for hwsched enabled gmu targets.
+ */
+void gen8_hwsched_remove(struct adreno_device *adreno_dev);
+
+/**
  * gen8_hwsched_reset_replay - Restart the gmu and gpu and replay inflight cmdbatches
  * @adreno_dev: Pointer to the adreno device
  *

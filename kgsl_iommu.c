@@ -356,27 +356,32 @@ static size_t _iopgtbl_map_sg(struct kgsl_iommu_pt *pt, u64 gpuaddr,
 	return mapped;
 }
 
-static void kgsl_iommu_send_tlb_hint(struct kgsl_mmu *mmu, bool hint)
+static void kgsl_iommu_send_tlb_hint(struct kgsl_mmu *mmu, u32 tlb_hint)
 {
 	struct kgsl_device *device = KGSL_MMU_DEVICE(mmu);
 	struct kgsl_iommu *iommu = &mmu->iommu;
+	bool skip_tlb_mgnt = tlb_hint & KGSL_MMU_TLB_HINT_SKIP_MGNT;
+	bool skip_tlb_flush = tlb_hint & KGSL_MMU_TLB_HINT_SKIP_FLUSH;
 
 	/*
 	 * Send skip TLB hints for user context, LPAC context, and GMU domains
 	 * to the SMMU driver to skip TLB operations during slumber. This will
 	 * help avoid unnecessary CX GDSC toggling.
 	 */
-	qcom_skip_tlb_management(&iommu->user_context.pdev->dev, hint);
+	qcom_skip_tlb_management(&iommu->user_context.pdev->dev,
+		skip_tlb_mgnt);
 	if (iommu->lpac_context.domain)
-		qcom_skip_tlb_management(&iommu->lpac_context.pdev->dev, hint);
+		qcom_skip_tlb_management(&iommu->lpac_context.pdev->dev,
+			skip_tlb_mgnt);
 	if (device->gmu_core.domain)
-		qcom_skip_tlb_management(&device->gmu_core.pdev->dev, hint);
+		qcom_skip_tlb_management(&device->gmu_core.pdev->dev,
+			skip_tlb_mgnt);
 	/*
 	 * TLB operations are skipped during slumber. Incase CX doesn't
 	 * go down, it can result in incorrect translations due to stale
 	 * TLB entries. Flush TLB before boot up to ensure fresh start.
 	 */
-	if (!hint)
+	if (!skip_tlb_mgnt && !skip_tlb_flush)
 		kgsl_iommu_flush_tlb(mmu);
 }
 
@@ -421,11 +426,13 @@ static size_t _iopgtbl_map_page_to_range(struct kgsl_iommu_pt *pt,
 		struct page *page, u64 gpuaddr, size_t range, int prot)
 {
 	struct io_pgtable_ops *ops = pt->pgtbl_ops;
-	size_t mapped = 0, map_size = 0;
+	size_t mapped = 0;
 	u64 addr = gpuaddr;
 	int ret;
 
 	while (range) {
+		size_t map_size = 0;
+
 		ret = ops->map_pages(ops, addr, page_to_phys(page), PAGE_SIZE,
 				     1, prot, GFP_KERNEL, &map_size);
 		if (ret) {
@@ -2601,7 +2608,7 @@ static bool kgsl_iommu_addr_in_range(struct kgsl_pagetable *pagetable,
 	return false;
 }
 
-#if (KERNEL_VERSION(6, 13, 0) <= LINUX_VERSION_CODE)
+#if (KERNEL_VERSION(6, 11, 0) <= LINUX_VERSION_CODE)
 static struct iommu_domain *kgsl_iommu_domain_alloc(struct device *dev)
 {
 	return iommu_paging_domain_alloc(dev);
@@ -2618,20 +2625,26 @@ static int kgsl_iommu_setup_context(struct kgsl_mmu *mmu,
 		struct kgsl_iommu_context *context, const char *name,
 		iommu_fault_handler_t handler)
 {
-	struct device_node *node = of_find_node_by_name(parent, name);
+	struct device_node *node;
 	struct platform_device *pdev;
 	struct kgsl_device *device = KGSL_MMU_DEVICE(mmu);
 	int ret;
 
-	if (!node)
-		return -ENOENT;
+	node = of_find_node_by_name(parent, name);
+	if (!node) {
+		ret = -ENOENT;
+		goto err;
+	}
 
 	pdev = of_find_device_by_node(node);
-	ret = of_dma_configure(&pdev->dev, node, true);
-	of_node_put(node);
+	if (!pdev) {
+		ret = -ENODEV;
+		goto err_node_put;
+	}
 
+	ret = of_dma_configure(&pdev->dev, node, true);
 	if (ret)
-		return ret;
+		goto err_device_put;
 
 	context->cb_num = -1;
 	context->name = name;
@@ -2644,9 +2657,11 @@ static int kgsl_iommu_setup_context(struct kgsl_mmu *mmu,
 
 	/* Create a new context */
 	context->domain = kgsl_iommu_domain_alloc(&context->pdev->dev);
-	if (!context->domain) {
-		/*FIXME: Put back the pdev here? */
-		return -ENODEV;
+	if (IS_ERR_OR_NULL(context->domain)) {
+		ret = (context->domain) ? PTR_ERR(context->domain) : -ENODEV;
+		dev_err(&device->pdev->dev, "Failed to allocate domain for %s: %d\n", name, ret);
+		context->domain = NULL;
+		goto err_device_put;
 	}
 
 	qcom_iommu_set_fault_model(context->domain, QCOM_IOMMU_FAULT_MODEL_NON_FATAL);
@@ -2654,30 +2669,34 @@ static int kgsl_iommu_setup_context(struct kgsl_mmu *mmu,
 	_enable_gpuhtw_llc(mmu, context->domain);
 
 	ret = iommu_attach_device(context->domain, &context->pdev->dev);
-	if (ret) {
-		/* FIXME: put back the device here? */
-		iommu_domain_free(context->domain);
-		context->domain = NULL;
-		return ret;
-	}
+	if (ret)
+		goto err_domain_free;
 
 	iommu_set_fault_handler(context->domain, handler, mmu);
 
 	context->cb_num = qcom_iommu_get_context_bank_nr(context->domain);
 
-	if (context->cb_num >= 0)
+	if (context->cb_num >= 0) {
+		of_node_put(node);
 		return 0;
+	}
 
+	ret = context->cb_num;
 	dev_err(&device->pdev->dev, "Couldn't get the context bank for %s: %d\n",
-		context->name, context->cb_num);
+		context->name, ret);
 
 	iommu_detach_device(context->domain, &context->pdev->dev);
+
+err_domain_free:
 	iommu_domain_free(context->domain);
-
-	/* FIXME: put back the device here? */
 	context->domain = NULL;
-
-	return context->cb_num;
+err_device_put:
+	platform_device_put(pdev);
+	context->pdev = NULL;
+err_node_put:
+	of_node_put(node);
+err:
+	return ret;
 }
 
 static int iommu_probe_user_context(struct kgsl_device *device,
@@ -2793,8 +2812,11 @@ static int iommu_probe_secure_context(struct kgsl_device *device,
 	ratelimit_default_init(&context->ratelimit);
 
 	context->domain = kgsl_iommu_domain_alloc(&context->pdev->dev);
-	if (!context->domain) {
-		ret = -ENODEV;
+	if (IS_ERR_OR_NULL(context->domain)) {
+		ret = (context->domain) ? PTR_ERR(context->domain) : -ENODEV;
+		dev_err(&device->pdev->dev,
+				"Failed to allocate domain for secure context: %d\n", ret);
+		context->domain = NULL;
 		goto err_device_put;
 	}
 
@@ -2840,7 +2862,7 @@ err_node_put:
 	of_node_put(node);
 err:
 	mmu->secured = false;
-
+	mmu->securepagetable = NULL;
 	return ret;
 }
 

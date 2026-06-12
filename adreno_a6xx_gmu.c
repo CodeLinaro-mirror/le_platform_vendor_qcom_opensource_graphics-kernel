@@ -322,8 +322,15 @@ void a6xx_load_rsc_ucode(struct adreno_device *adreno_dev)
 	_regwrite(rscc, A6XX_RSCC_HIDDEN_TCS_CMD0_ADDR, 0);
 	_regwrite(rscc, A6XX_RSCC_HIDDEN_TCS_CMD0_DATA + RSC_CMD_OFFSET, 0);
 	_regwrite(rscc, A6XX_RSCC_HIDDEN_TCS_CMD0_ADDR + RSC_CMD_OFFSET, 0);
-	_regwrite(rscc, A6XX_RSCC_HIDDEN_TCS_CMD0_DATA + RSC_CMD_OFFSET * 2,
-			adreno_is_a622(adreno_dev) ? 0x80000028 : 0x80000000);
+	if (adreno_is_a622(adreno_dev))
+		_regwrite(rscc, A6XX_RSCC_HIDDEN_TCS_CMD0_DATA + RSC_CMD_OFFSET * 2,
+			0x80000028);
+	else if (adreno_is_a624(adreno_dev))
+		_regwrite(rscc, A6XX_RSCC_HIDDEN_TCS_CMD0_DATA + RSC_CMD_OFFSET * 2,
+			0x80000021);
+	else
+		_regwrite(rscc, A6XX_RSCC_HIDDEN_TCS_CMD0_DATA + RSC_CMD_OFFSET * 2,
+			0x80000000);
 	_regwrite(rscc, A6XX_RSCC_HIDDEN_TCS_CMD0_ADDR + RSC_CMD_OFFSET * 2,
 			0);
 	_regwrite(rscc, A6XX_RSCC_OVERRIDE_START_ADDR, 0);
@@ -332,7 +339,7 @@ void a6xx_load_rsc_ucode(struct adreno_device *adreno_dev)
 	_regwrite(rscc, A6XX_RSCC_PDC_MATCH_VALUE_HI, 0x4514);
 
 	/* Load RSC sequencer uCode for sleep and wakeup */
-	if (adreno_is_a622(adreno_dev)) {
+	if (adreno_is_a622_family(adreno_dev)) {
 		_regwrite(rscc, A622_RSCC_SEQ_MEM_0_DRV0, 0xEAAAE5A0);
 		_regwrite(rscc, A622_RSCC_SEQ_MEM_0_DRV0 + 1, 0xE1A1EBAB);
 		_regwrite(rscc, A622_RSCC_SEQ_MEM_0_DRV0 + 2, 0xA2E0A581);
@@ -434,8 +441,8 @@ int a6xx_load_pdc_ucode(struct adreno_device *adreno_dev)
 
 	cfg = gmu->pdc_cfg_base;
 
-	/* PDC GPU SEQ start addr register is removed for A622 */
-	if (adreno_is_a622(adreno_dev) && a6xx_core->pdc_in_aop)
+	/* PDC GPU SEQ start addr register is removed for A622 family */
+	if (adreno_is_a622_family(adreno_dev) && a6xx_core->pdc_in_aop)
 		return 0;
 
 	/* PDC is programmed in AOP for newer platforms */
@@ -695,9 +702,9 @@ int a6xx_rscc_wakeup_sequence(struct adreno_device *adreno_dev)
 	/* Skip wakeup sequence if we didn't do the sleep sequence */
 	if (!test_bit(GMU_PRIV_RSCC_SLEEP_DONE, &gmu->flags))
 		return 0;
-	 /* A660 has a replacement register */
+	 /* A662, A621, A622 family have a replacement register */
 	if (adreno_is_a662(adreno_dev) || adreno_is_a621(adreno_dev) ||
-				adreno_is_a622(adreno_dev))
+				adreno_is_a622_family(adreno_dev))
 		gmu_core_regread(device, A662_GPU_CC_GX_DOMAIN_MISC3, &val);
 	else if (adreno_is_a660(ADRENO_DEVICE(device)) ||
 			adreno_is_a663(adreno_dev))
@@ -1105,7 +1112,7 @@ static int a6xx_complete_rpmh_votes(struct adreno_device *adreno_dev,
 				ARRAY_SIZE(a6xx_rscc_tcsm_drv0_status_reglist) : 4;
 	int i, ret = 0;
 
-	if (adreno_is_a622(adreno_dev)) {
+	if (adreno_is_a622_family(adreno_dev)) {
 		for (i = 0; i < count; i++)
 			ret |= timed_poll_check_rscc(device, a622_rscc_tcsm_drv0_status_reglist[i],
 					BIT(0), timeout, BIT(0));
@@ -1777,7 +1784,7 @@ static void a6xx_gmu_pwrctrl_suspend(struct adreno_device *adreno_dev)
 	 * This could abort CX GDSC collapse. Assert Qactive to avoid this.
 	 */
 	if ((adreno_is_a662(adreno_dev) || adreno_is_a621(adreno_dev) ||
-			adreno_is_a622(adreno_dev) || adreno_is_a642l(adreno_dev)))
+			adreno_is_a622_family(adreno_dev) || adreno_is_a642l(adreno_dev)))
 		gmu_core_regwrite(device, A6XX_GPU_GMU_CX_GMU_CX_FALNEXT_INTF, 0x1);
 
 	/* Check no outstanding RPMh voting */
@@ -1918,7 +1925,7 @@ out:
 	 * This could abort CX GDSC collapse. Assert Qactive to avoid this.
 	 */
 	if ((adreno_is_a662(adreno_dev) || adreno_is_a621(adreno_dev) ||
-			adreno_is_a622(adreno_dev) || adreno_is_a642l(adreno_dev)))
+			adreno_is_a622_family(adreno_dev) || adreno_is_a642l(adreno_dev)))
 		gmu_core_regwrite(device, A6XX_GPU_GMU_CX_GMU_CX_FALNEXT_INTF, 0x1);
 
 	return ret;
@@ -3363,6 +3370,10 @@ static void a6xx_gmu_touch_wakeup(struct adreno_device *adreno_dev)
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct a6xx_gmu_device *gmu = to_a6xx_gmu(adreno_dev);
 	int ret;
+
+	/* If device is already in SUSPEND state, don't act on touch wakeup */
+	if (device->state == KGSL_STATE_SUSPEND)
+		return;
 
 	/*
 	 * Do not wake up a suspended device or until the first boot sequence

@@ -16,6 +16,10 @@
 #define KGSL_MMU_GLOBAL_PT 0
 #define KGSL_MMU_SECURE_PT 1
 
+/* TLB hint flags */
+#define KGSL_MMU_TLB_HINT_SKIP_MGNT	BIT(0)
+#define KGSL_MMU_TLB_HINT_SKIP_FLUSH	BIT(1)
+
 #define MMU_DEFAULT_TTBR0(_d) \
 	(kgsl_mmu_pagetable_get_ttbr0((_d)->mmu.defaultpagetable))
 
@@ -123,7 +127,7 @@ struct kgsl_mmu_ops {
 		struct kgsl_memdesc *memdesc, u32 padding);
 	int (*mmu_reserve_global_gpuaddr)(struct kgsl_mmu *mmu, struct kgsl_memdesc *memdesc,
 			u32 padding);
-	void (*mmu_send_tlb_hint)(struct kgsl_mmu *mmu, bool hint);
+	void (*mmu_send_tlb_hint)(struct kgsl_mmu *mmu, u32 tlb_hint);
 	void (*mmu_sysfs_init)(struct kgsl_mmu *mmu);
 };
 
@@ -377,10 +381,10 @@ kgsl_mmu_pagetable_get_ttbr0(struct kgsl_pagetable *pagetable)
 	return 0;
 }
 
-static inline void kgsl_mmu_send_tlb_hint(struct kgsl_mmu *mmu, bool hint)
+static inline void kgsl_mmu_send_tlb_hint(struct kgsl_mmu *mmu, u32 tlb_hint)
 {
 	if (MMU_OP_VALID(mmu, mmu_send_tlb_hint))
-		return mmu->mmu_ops->mmu_send_tlb_hint(mmu, hint);
+		return mmu->mmu_ops->mmu_send_tlb_hint(mmu, tlb_hint);
 }
 
 /**

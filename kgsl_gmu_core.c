@@ -690,7 +690,7 @@ static int gmu_core_iommu_fault_handler(struct iommu_domain *domain,
 	return 0;
 }
 
-#if (KERNEL_VERSION(6, 13, 0) <= LINUX_VERSION_CODE)
+#if (KERNEL_VERSION(6, 11, 0) <= LINUX_VERSION_CODE)
 static struct iommu_domain *gmu_core_iommu_domain_alloc(struct device *dev)
 {
 	return iommu_paging_domain_alloc(dev);
@@ -708,9 +708,10 @@ int gmu_core_iommu_init(struct kgsl_device *device)
 	int ret;
 
 	device->gmu_core.domain = gmu_core_iommu_domain_alloc(gmu_pdev_dev);
-	if (!device->gmu_core.domain) {
-		dev_err(gmu_pdev_dev, "Unable to allocate GMU IOMMU domain\n");
-		return -ENODEV;
+	if (IS_ERR_OR_NULL(device->gmu_core.domain)) {
+		ret = (device->gmu_core.domain) ? PTR_ERR(device->gmu_core.domain) : -ENODEV;
+		dev_err(gmu_pdev_dev, "Unable to allocate GMU IOMMU domain: %d\n", ret);
+		return ret;
 	}
 
 	/*
@@ -795,6 +796,16 @@ static void _gmu_trace_dcvs_pwrlevel(struct kgsl_device *device, struct gmu_trac
 	if (data->prev_pwrlvl == pwr->num_pwrlevels)
 		data->prev_pwrlvl = pwr->active_pwrlevel;
 
+	if (data->prev_pwrlvl != data->new_pwrlvl) {
+		unsigned long flags;
+
+		/* Track GPU frequency transitions for GMU-based DCVS */
+		spin_lock_irqsave(&pwr->trans_stats.lock, flags);
+		pwr->trans_stats.trans_table[data->prev_pwrlvl][data->new_pwrlvl]++;
+		pwr->trans_stats.total_trans++;
+		spin_unlock_irqrestore(&pwr->trans_stats.lock, flags);
+	}
+
 	if (pwr->active_pwrlevel != data->new_pwrlvl) {
 		u32 penalty = FIELD_PREP(GENMASK(31, 16), data->penalty_down) |
 				FIELD_PREP(GENMASK(15, 0), data->penalty_up);
@@ -850,6 +861,9 @@ static void _gmu_trace_dcvs_pwrstats(struct kgsl_device *device, struct gmu_trac
 
 	pwr->clock_times[pwr->active_pwrlevel] += data->gpu_time;
 	pwr->time_in_pwrlevel[pwr->active_pwrlevel] += data->total_time;
+	pwr->trans_stats.time_in_pwrlevel[pwr->active_pwrlevel] += data->total_time;
+	pwr->trans_stats.last_time_updated = ktime_get();
+
 	if (pwr->thermal_pwrlevel)
 		pwr->thermal_time += data->gpu_time;
 

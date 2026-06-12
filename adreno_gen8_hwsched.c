@@ -466,16 +466,38 @@ cx_gdsc_off:
 	return ret;
 }
 
+/* TSENSE work that is scheduled on the single-threaded wq */
+static void gen8_scm_gpu_tsense_work(struct work_struct *work)
+{
+	struct gen8_device *gen8_dev = container_of(work, struct gen8_device, tsense_work);
+	bool prev_state, req_state;
+
+	/* Check if we want to change the tsense state */
+	prev_state = gen8_dev->tsense_state;
+	req_state = READ_ONCE(gen8_dev->tsense_req_state);
+
+	if (req_state == prev_state)
+		return;
+
+	gen8_dev->tsense_state = req_state;
+	gen8_scm_gpu_tsense_default(&gen8_dev->adreno_dev, gen8_dev->tsense_state);
+}
+
+static void gen8_scm_gpu_tsense_update(struct adreno_device *adreno_dev, bool req_state)
+{
+	struct gen8_device *gen8_dev = container_of(adreno_dev, struct gen8_device, adreno_dev);
+
+	if (!gen8_dev->tsense_wq)
+		return;
+
+	WRITE_ONCE(gen8_dev->tsense_req_state, req_state);
+
+	queue_work(gen8_dev->tsense_wq, &gen8_dev->tsense_work);
+}
+
 static void gen8_scm_gpu_tsense_boot(struct adreno_device *adreno_dev)
 {
-	struct gen8_device *gen8_dev = container_of(adreno_dev,
-					struct gen8_device, adreno_dev);
-
-	/* Cancel any pending TSENSE work that didn't run */
-	cancel_work_sync(&gen8_dev->tsense_work);
-
-	/* Set default tsense measurement window */
-	gen8_scm_gpu_tsense_default(adreno_dev, true);
+	gen8_scm_gpu_tsense_update(adreno_dev, true);
 }
 
 static int gen8_hwsched_gmu_boot(struct adreno_device *adreno_dev)
@@ -564,28 +586,9 @@ cx_gdsc_off:
 	return ret;
 }
 
-/* TSENSE suspend work can be done in parallel with GPU suspend */
-static void gen8_scm_gpu_tsense_suspend_work(struct work_struct *work)
-{
-	struct gen8_device *gen8_dev = container_of(work, struct gen8_device, tsense_work);
-
-	/* Set non-default tsense measurement window */
-	gen8_scm_gpu_tsense_default(&gen8_dev->adreno_dev, false);
-}
-
 static void gen8_scm_gpu_tsense_suspend(struct adreno_device *adreno_dev)
 {
-	struct gen8_device *gen8_dev = container_of(adreno_dev,
-					struct gen8_device, adreno_dev);
-
-	if (!ADRENO_FEATURE(adreno_dev, ADRENO_TSENSE_DYNAMIC_PERIOD))
-		return;
-
-	/*
-	 * Schedule on the lockless workqueue instead of the kgsl workqueue
-	 * to avoid deadlocks with the device mutex
-	 */
-	queue_work(kgsl_driver.lockless_workqueue, &gen8_dev->tsense_work);
+	gen8_scm_gpu_tsense_update(adreno_dev, false);
 }
 
 static int gen8_hwsched_notify_slumber(struct adreno_device *adreno_dev)
@@ -853,6 +856,10 @@ static void gen8_hwsched_touch_wakeup(struct adreno_device *adreno_dev)
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
 	int ret;
 
+	/* If device is already in SUSPEND state, don't act on touch wakeup */
+	if (device->state == KGSL_STATE_SUSPEND)
+		return;
+
 	/*
 	 * Do not wake up a suspended device or until the first boot sequence
 	 * has been completed.
@@ -897,6 +904,7 @@ static int gen8_hwsched_boot(struct adreno_device *adreno_dev)
 {
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	bool bcl_state = adreno_dev->bcl_enabled;
 	int ret;
 
 	if (test_bit(GMU_PRIV_GPU_STARTED, &gmu->flags))
@@ -906,7 +914,20 @@ static int gen8_hwsched_boot(struct adreno_device *adreno_dev)
 
 	adreno_hwsched_start(adreno_dev);
 
-	ret = gen8_hwsched_gmu_boot(adreno_dev);
+	if (IS_ENABLED(CONFIG_QCOM_KGSL_HIBERNATION) && !adreno_dev->zap_loaded) {
+		/*
+		 * During hibernation entry ZAP was unloaded and CBCAST BCL
+		 * register is in reset state. Set bcl_enabled to false to
+		 * skip KMD's HFI request to GMU for BCL feature, send BCL
+		 * feature request to GMU after ZAP load at GPU boot. This
+		 * ensures that Central Broadcast register was programmed
+		 * before enabling BCL.
+		 */
+		adreno_dev->bcl_enabled = false;
+		ret = gen8_hwsched_gmu_first_boot(adreno_dev);
+	} else {
+		ret = gen8_hwsched_gmu_boot(adreno_dev);
+	}
 	if (ret)
 		return ret;
 
@@ -918,6 +939,9 @@ static int gen8_hwsched_boot(struct adreno_device *adreno_dev)
 	kgsl_pwrscale_wake(device);
 
 	set_bit(GMU_PRIV_GPU_STARTED, &gmu->flags);
+
+	if (IS_ENABLED(CONFIG_QCOM_KGSL_HIBERNATION))
+		adreno_dev->bcl_enabled = bcl_state;
 
 	device->pwrctrl.last_stat_updated = ktime_get();
 
@@ -2241,8 +2265,18 @@ int gen8_hwsched_probe(struct platform_device *pdev,
 	for (i = 0; i < GPU_TUNING_KEY_MAX; i++)
 		adreno_dev->hwsched.sysfs_dcvs_tunables[i].value = GPU_DCVS_TUNING_INVALID_VALUE;
 
-	/* Initialize the TSENSE suspend work that is done at GPU suspend */
-	INIT_WORK(&gen8_dev->tsense_work, gen8_scm_gpu_tsense_suspend_work);
+	/* Initialize the TSENSE work that is done when GPU is started or suspended */
+	INIT_WORK(&gen8_dev->tsense_work, gen8_scm_gpu_tsense_work);
+	if (ADRENO_FEATURE(adreno_dev, ADRENO_TSENSE_DYNAMIC_PERIOD)) {
+
+		/*
+		 * Create a single-threaded workqueue to ensure tsense_work
+		 * does not block other driver work.
+		 */
+		gen8_dev->tsense_wq = create_freezable_workqueue("adreno_tsense_wq");
+		if (!gen8_dev->tsense_wq)
+			dev_warn(device->dev, "Unable to create adreno_tsense_wq\n");
+	}
 
 	gmu_dev = GMU_PDEV_DEV(device);
 	WARN_ON(kobject_init_and_add(&adreno_dev->hwsched.tunables_kobj, &ktype_tunables,
@@ -2252,6 +2286,18 @@ int gen8_hwsched_probe(struct platform_device *pdev,
 				&gmu_dev->kobj, "dcvs"));
 
 	return ret;
+}
+
+void gen8_hwsched_remove(struct adreno_device *adreno_dev)
+{
+	struct gen8_device *gen8_dev = container_of(adreno_dev,
+					struct gen8_device, adreno_dev);
+
+	if (gen8_dev->tsense_wq) {
+		flush_workqueue(gen8_dev->tsense_wq);
+		destroy_workqueue(gen8_dev->tsense_wq);
+		gen8_dev->tsense_wq = NULL;
+	}
 }
 
 int gen8_hwsched_add_to_minidump(struct adreno_device *adreno_dev)

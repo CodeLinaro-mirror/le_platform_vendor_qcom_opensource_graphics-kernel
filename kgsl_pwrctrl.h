@@ -76,6 +76,22 @@ struct kgsl_pwrlevel {
 };
 
 /**
+ * struct kgsl_trans_stats - GPU frequency transition statistics
+ */
+struct kgsl_trans_stats {
+	/** @trans_table: Transition count matrix indexed by [from_level][to_level] */
+	u64 trans_table[KGSL_MAX_PWRLEVELS][KGSL_MAX_PWRLEVELS];
+	/** @total_trans: Total number of GPU frequency transitions recorded */
+	u64 total_trans;
+	/** @time_in_pwrlevel: Time spent at each power level in usec for trans_stat */
+	u64 time_in_pwrlevel[KGSL_MAX_PWRLEVELS];
+	/** @last_time_updated: Timestamp of last trans_stat time update */
+	ktime_t last_time_updated;
+	/** @lock: Spinlock to protect transition table updates */
+	spinlock_t lock;
+};
+
+/**
  * struct kgsl_pwrctrl - Power control settings for a KGSL device
  * @interrupt_num - The interrupt number for the device
  * @grp_clks - Array of clocks structures that we control
@@ -217,6 +233,8 @@ struct kgsl_pwrctrl {
 	u64 accum_busy_stats;
 	/** @accum_total_time: Accumulated gpu total sampling time */
 	u64 accum_total_time;
+	/** @trans_stats: GPU frequency transition statistics */
+	struct kgsl_trans_stats trans_stats;
 };
 
 int kgsl_pwrctrl_init(struct kgsl_device *device);

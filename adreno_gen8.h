@@ -81,8 +81,14 @@ struct gen8_device {
 	bool nc_overrides_enabled;
 	/** @slice_mask: The bitmask of active GPU slices */
 	u32 slice_mask;
-	/** @tsense_work: Work struct for TSENSE suspend in parallel with GPU suspend */
+	/** @tsense_state: Current TSENSE state */
+	bool tsense_state;
+	/** @tsense_state: Requested TSENSE state */
+	bool tsense_req_state;
+	/** @tsense_work: Work struct for TSENSE update */
 	struct work_struct tsense_work;
+	/** @tsense_wq: Workqueue struct for TSENSE update */
+	struct workqueue_struct *tsense_wq;
 };
 
 /**
@@ -702,6 +708,23 @@ void gen8_periph_regread(struct kgsl_device *device, u32 offsetwords,
  */
 void gen8_host_aperture_set(struct adreno_device *adreno_dev, u32 pipe_id,
 		u32 slice_id, u32 use_slice_id);
+
+/**
+ * gen8_host_aperture_clear - Clear the CP aperture register
+ * @adreno_dev: Handle to the adreno device
+ *
+ * This function clears the CP aperture register
+ */
+void gen8_host_aperture_clear(struct adreno_device *adreno_dev);
+
+/**
+ * gen8_host_aperture_pipe_clear - Clear the CP aperture register, using a pipe ID
+ * @adreno_dev: Handle to the adreno device
+ * @pipe_id: Pipe for which the register is to be cleared
+ *
+ * This function clears the CP aperture register and writes the provided pipe ID
+ */
+void gen8_host_aperture_pipe_clear(struct adreno_device *adreno_dev, u32 pipe_id);
 
 /**
  * gen8_set_gmem_protect - Program the RB_GC_GMEM_PROTECT

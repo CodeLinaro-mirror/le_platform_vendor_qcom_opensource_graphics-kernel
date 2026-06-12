@@ -179,6 +179,14 @@ struct adreno_hwsched {
 	 * preemption records. No gmem buffer needed for rb0 preemption record.
 	 */
 	struct kgsl_memdesc *secure_preempt_rec_gmem[KGSL_PRIORITY_MAX_RB_LEVELS - 1];
+	/** @rb_ctx_first_created_nonsec: Non-secure RB levels with at least one context */
+	unsigned long rb_ctx_first_created_nonsec;
+	/** @rb_ctx_first_created_sec: Secure RB levels with at least one context */
+	unsigned long rb_ctx_first_created_sec;
+	/** @rb_ctx_gmem_pending_nonsec: Non-secure RB levels waiting for deferred GMEM alloc */
+	unsigned long rb_ctx_gmem_pending_nonsec;
+	/** @rb_ctx_gmem_pending_sec: Secure RB levels waiting for deferred GMEM alloc */
+	unsigned long rb_ctx_gmem_pending_sec;
 	/** @dcvs_param_update: True if dcvs params have to be sent to GMU at slumber exit */
 	bool dcvs_param_update;
 	/** @tunables_kobj: Kobj for dcvs tunables **/

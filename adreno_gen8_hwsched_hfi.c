@@ -682,6 +682,10 @@ static void gen8_process_syncobj_query_work(struct kthread_work *work)
 	mutex_lock(&hwsched->mutex);
 	kgsl_mutex_lock(&device->mutex);
 
+	/* If context is bad, we don't care about the sync object query */
+	if (kgsl_context_is_bad(context))
+		goto unlock;
+
 	list_for_each_entry(obj, &hwsched->cmd_list, node) {
 		struct kgsl_drawobj *drawobj = obj->drawobj;
 
@@ -714,6 +718,7 @@ static void gen8_process_syncobj_query_work(struct kthread_work *work)
 		}
 	}
 
+unlock:
 	kgsl_mutex_unlock(&device->mutex);
 	mutex_unlock(&hwsched->mutex);
 
@@ -1118,7 +1123,7 @@ void gen8_hwsched_process_msgq(struct adreno_device *adreno_dev)
 				(struct hfi_gmu_cntr_release_cmd *) rcvd;
 
 			adreno_perfcounter_put(adreno_dev,
-				cmd->group_id, cmd->countable, PERFCOUNTER_FLAG_KERNEL);
+				cmd->group_id, cmd->countable, PERFCOUNTER_FLAG_GMU);
 
 			gmu_core_mark_for_coldboot(KGSL_DEVICE(adreno_dev));
 			}
@@ -1397,7 +1402,7 @@ static int gmu_cntr_register_reply(struct adreno_device *adreno_dev, void *rcvd)
 	 * indicates to GMU that counter allocation failed.
 	 */
 	adreno_perfcounter_get(adreno_dev,
-		in->group_id, in->countable, &lo, &hi, PERFCOUNTER_FLAG_KERNEL);
+		in->group_id, in->countable, &lo, &hi, PERFCOUNTER_FLAG_GMU);
 
 	out.hdr = ACK_MSG_HDR(F2H_MSG_GMU_CNTR_REGISTER);
 	seqnum = atomic_inc_return(&gmu->hfi.seqnum);
@@ -4282,6 +4287,7 @@ void gen8_hwsched_context_detach(struct adreno_context *drawctxt)
 	struct kgsl_device *device = context->device;
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	int ret = 0;
+	struct gmu_context_queue_header *hdr = drawctxt->gmu_context_queue.hostptr;
 
 	kgsl_mutex_lock(&device->mutex);
 
@@ -4299,6 +4305,16 @@ void gen8_hwsched_context_detach(struct adreno_context *drawctxt)
 
 	adreno_profile_process_results(adreno_dev);
 	context->gmu_registered = false;
+
+	/*
+	 * Update the sync object timestamp so that pending sync objects from this context can be
+	 * released
+	 */
+	if (hdr)
+		hdr->sync_obj_ts = drawctxt->syncobj_timestamp;
+
+	/* Trigger scheduler to retire draw objects from this detached context */
+	adreno_scheduler_queue(adreno_dev);
 
 out:
 	WARN_RATELIMIT(!list_empty(&drawctxt->hw_fence_list) ||

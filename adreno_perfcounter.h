@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2008-2015,2017,2019-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __ADRENO_PERFCOUNTER_H
 #define __ADRENO_PERFCOUNTER_H
@@ -13,6 +13,7 @@ struct adreno_device;
 
 #define PERFCOUNTER_FLAG_NONE 0x0
 #define PERFCOUNTER_FLAG_KERNEL 0x1
+#define PERFCOUNTER_FLAG_GMU 0x2
 
 #define PERFCOUNTER_REG_DEPENDENCY_LEN 2
 
@@ -42,6 +43,8 @@ struct adreno_perfcount_register {
 	 * with this register.
 	 */
 	u32 reg_dependency[PERFCOUNTER_REG_DEPENDENCY_LEN];
+	/* @gmureserved: True if GMU is holding the perfcounter */
+	bool gmureserved;
 };
 
 /**
@@ -63,6 +66,9 @@ struct adreno_perfcount_group {
 		unsigned int counter);
 	void (*load)(struct adreno_device *adreno_dev,
 		struct adreno_perfcount_register *reg);
+	void (*disable)(struct adreno_device *adreno_dev,
+		const struct adreno_perfcount_group *group,
+		unsigned int counter, unsigned int countable);
 };
 
 /*
@@ -80,6 +86,13 @@ struct adreno_perfcount_group {
  * registers of this perfcounter group as part of preemption and IFPC
  */
 #define ADRENO_PERFCOUNTER_GROUP_RESTORE BIT(1)
+
+/*
+ * ADRENO_PERFCOUNTER_GROUP_NON_RBBM indicated that the perfcounter group
+ * is non RBBM. This means that these counters need not be restored by CP.
+ * Nor does these counters require RBBM_PERFCTR_CNTL registers to be set.
+ */
+#define ADRENO_PERFCOUNTER_GROUP_NON_RBBM BIT(2)
 
 
 /**

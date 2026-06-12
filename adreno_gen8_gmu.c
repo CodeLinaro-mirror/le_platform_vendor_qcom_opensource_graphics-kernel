@@ -783,7 +783,7 @@ int gen8_gmu_wait_for_lowest_idle(struct adreno_device *adreno_dev)
 		gen8_regread_aperture(device, GEN8_CP_PIPE_STATUS_PIPE, &reg, PIPE_BV, 0, 0);
 		gen8_regread_aperture(device, GEN8_CP_PIPE_STATUS_PIPE, &reg1, PIPE_BR, 0, 0);
 		/* Clear aperture register */
-		gen8_host_aperture_set(adreno_dev, 0, 0, 0);
+		gen8_host_aperture_clear(adreno_dev);
 		kgsl_regread(device, GEN8_CP_CP2GMU_STATUS, &reg2);
 		kgsl_regread(device, GEN8_CP_CONTEXT_SWITCH_CNTL, &reg3);
 
@@ -2023,6 +2023,14 @@ static u32 gen8_gmu_pwr_trace_trigger_set(struct kgsl_device *device, u32 val)
 	return 0;
 }
 
+static void gen8_gmu_force_first_boot(struct kgsl_device *device)
+{
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
+
+	clear_bit(GMU_PRIV_RSCC_SLEEP_DONE, &gmu->flags);
+}
+
 static const struct gmu_dev_ops gen8_gmudev = {
 	.oob_set = gen8_gmu_oob_set,
 	.oob_clear = gen8_gmu_oob_clear,
@@ -2038,6 +2046,7 @@ static const struct gmu_dev_ops gen8_gmudev = {
 	.minbw_idle_level_set = gen8_minbw_idle_level_set,
 	.gmu_pwr_trace_trigger_set = gen8_gmu_pwr_trace_trigger_set,
 	.gmu_pwr_trace_trigger_get = gen8_gmu_pwr_trace_trigger_get,
+	.force_first_boot = gen8_gmu_force_first_boot,
 };
 
 static int gen8_gmu_bus_set(struct adreno_device *adreno_dev, int buslevel,
@@ -2503,6 +2512,7 @@ static int gen8_boot(struct adreno_device *adreno_dev)
 {
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	bool bcl_state = adreno_dev->bcl_enabled;
 	int ret;
 
 	if (WARN_ON(test_bit(GMU_PRIV_GPU_STARTED, &gmu->flags)))
@@ -2510,7 +2520,20 @@ static int gen8_boot(struct adreno_device *adreno_dev)
 
 	kgsl_pwrctrl_request_state(device, KGSL_STATE_ACTIVE);
 
-	ret = gen8_gmu_boot(adreno_dev);
+	if (IS_ENABLED(CONFIG_QCOM_KGSL_HIBERNATION) && !adreno_dev->zap_loaded) {
+		/*
+		 * During hibernation entry ZAP was unloaded and CBCAST BCL
+		 * register is in reset state. Set bcl_enabled to false to
+		 * skip KMD's HFI request to GMU for BCL feature, send BCL
+		 * feature request to GMU after ZAP load at GPU boot. This
+		 * ensures that Central Broadcast register was programmed
+		 * before enabling BCL.
+		 */
+		adreno_dev->bcl_enabled = false;
+		ret = gen8_gmu_first_boot(adreno_dev);
+	} else {
+		ret = gen8_gmu_boot(adreno_dev);
+	}
 	if (ret)
 		return ret;
 
@@ -2523,8 +2546,10 @@ static int gen8_boot(struct adreno_device *adreno_dev)
 
 	set_bit(GMU_PRIV_GPU_STARTED, &gmu->flags);
 
-	device->pwrctrl.last_stat_updated = ktime_get();
+	if (IS_ENABLED(CONFIG_QCOM_KGSL_HIBERNATION))
+		adreno_dev->bcl_enabled = bcl_state;
 
+	device->pwrctrl.last_stat_updated = ktime_get();
 	kgsl_pwrctrl_set_state(device, KGSL_STATE_ACTIVE);
 
 	return ret;
@@ -2851,6 +2876,10 @@ static void gen8_gmu_touch_wakeup(struct adreno_device *adreno_dev)
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
 	int ret;
+
+	/* If device is already in SUSPEND state, don't act on touch wakeup */
+	if (device->state == KGSL_STATE_SUSPEND)
+		return;
 
 	/*
 	 * Do not wake up a suspended device or until the first boot sequence

@@ -1918,7 +1918,7 @@ int gen7_probe_common(struct platform_device *pdev,
 
 	if (adreno_is_gen7_11_0(adreno_dev))
 		pwr->cx_cfg_gdsc_offset = GEN7_11_0_GPU_CC_CX_CFG_GDSCR;
-	else if (adreno_is_gen7_17_0(adreno_dev))
+	else if (adreno_is_gen7_17_0(adreno_dev) || adreno_is_gen7_18_0(adreno_dev))
 		pwr->cx_cfg_gdsc_offset = GEN7_17_0_GPU_CC_CX_CFG_GDSCR;
 	else
 		pwr->cx_cfg_gdsc_offset = GEN7_GPU_CC_CX_CFG_GDSCR;

@@ -83,6 +83,9 @@ endif
 ifeq ($(CONFIG_ARCH_SERAPH), y)
        include $(KGSL_PATH)/config/gki_seraph.conf
 endif
+ifeq ($(CONFIG_ARCH_PEBBLE), y)
+       include $(KGSL_PATH)/config/pebble_le.conf
+endif
 
 ifdef SOC_REPO
 LINUXINCLUDE := \

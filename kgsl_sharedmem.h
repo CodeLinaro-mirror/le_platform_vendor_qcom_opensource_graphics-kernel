@@ -53,7 +53,7 @@ struct kgsl_memdesc;
 struct kgsl_memdesc_ops {
 	u32 vmflags;
 	vm_fault_t (*vmfault)(struct kgsl_memdesc *memdesc,
-		struct vm_area_struct *vma, struct vm_fault *vmf);
+		struct vm_area_struct *vma, struct vm_fault *vmf, u64 data_offset);
 	void (*free)(struct kgsl_memdesc *memdesc);
 	int (*map_kernel)(struct kgsl_memdesc *memdesc);
 	void (*unmap_kernel)(struct kgsl_memdesc *memdesc);
@@ -69,17 +69,18 @@ struct kgsl_memdesc_ops {
  * @pagetable: Pointer to the pagetable that the object is mapped in
  * @hostptr: Kernel virtual address
  * @hostptr_count: Number of threads using hostptr
- * @gpuaddr: GPU virtual address
+ * @gpuaddr: GPU virtual address. Points to the start of the data region (which is not necessarily
+ * the start of the memory footprint).
  * @physaddr: Physical address of the memory object
- * @size: Size of the memory object
+ * @size: Size of the memory object's data region (in bytes). Excludes guard regions.
  * @priv: Internal flags and settings
  * @sgt: Scatter gather table for allocated pages
  * @ops: Function hooks for the memdesc memory type
  * @flags: Flags set from userspace
  * @dev: Pointer to the struct device that owns this memory
  * @attrs: dma attributes for this memory
- * @pages: An array of pointers to allocated pages
- * @page_count: Total number of pages allocated
+ * @pages: An array of pointers to allocated data pages. Excludes guard pages.
+ * @page_count: Total number of data pages allocated. Excludes guard pages.
  */
 struct kgsl_memdesc {
 	struct kgsl_pagetable *pagetable;
@@ -96,6 +97,8 @@ struct kgsl_memdesc {
 	unsigned long attrs;
 	struct page **pages;
 	u32 page_count;
+	/** @unmapped_guard_page_count: Number of pages in each unmapped guard region */
+	u32 unmapped_guard_page_count;
 	/**
 	 * @lock: Mutex to protect the gpuaddr from being accessed by
 	 * multiple entities trying to map the same SVM region at once
@@ -513,22 +516,64 @@ kgsl_memdesc_use_cpu_map(const struct kgsl_memdesc *memdesc)
 	return memdesc && (memdesc->flags & KGSL_MEMFLAGS_USE_CPU_MAP);
 }
 
-/*
- * kgsl_memdesc_footprint - get the size of the mmap region
- * @memdesc - the memdesc
+/**
+ * kgsl_memdesc_mapped_size - Get the size of the GPU mapped region
+ * @memdesc: Pointer to a GPU memory descriptor
  *
- * The entire memdesc must be mapped. Additionally if the
- * CPU mapping is going to be mirrored, there must be room
- * for the guard page to be mapped so that the address spaces
- * match up.
+ * Compute the GPU-mapped region size for a memory descriptor. Includes the guard page if present.
+ *
+ * Return: Total size of the GPU-mapped region (in bytes)
  */
-static inline uint64_t
-kgsl_memdesc_footprint(const struct kgsl_memdesc *memdesc)
+static inline u64 kgsl_memdesc_mapped_size(const struct kgsl_memdesc *memdesc)
 {
-	if (!(TEST_FLAG(KGSL_MEMDESC_GUARD_PAGE, &memdesc->priv)))
-		return memdesc->size;
+	u64 mapped_size = memdesc->size;
 
-	return PAGE_ALIGN(memdesc->size + PAGE_SIZE);
+	if (TEST_FLAG(KGSL_MEMDESC_GUARD_PAGE, &memdesc->priv))
+		mapped_size += PAGE_SIZE;
+
+	return PAGE_ALIGN(mapped_size);
+}
+
+/**
+ * kgsl_memdesc_footprint - Get the size of the mmap region
+ * @memdesc: Pointer to a GPU memory descriptor
+ *
+ * Compute the total footprint for a memory descriptor. Includes both mapped and unmapped regions.
+ *
+ * Return: Total size of the mmap region (in bytes)
+ */
+static inline u64 kgsl_memdesc_footprint(const struct kgsl_memdesc *memdesc)
+{
+	return PAGE_ALIGN(kgsl_memdesc_mapped_size(memdesc) +
+		(2 * memdesc->unmapped_guard_page_count * PAGE_SIZE));
+}
+
+/**
+ * kgsl_memdesc_gpuaddr_from_base - Get the GPU address for a memdesc
+ * @memdesc: Pointer to a GPU memory descriptor
+ * @base: Address where the memory footprint begins
+ *
+ * Compute the starting address for the GPU data (accounting for unmapped regions)
+ *
+ * Return: The address where GPU data begins
+ */
+static inline u64 kgsl_memdesc_gpuaddr_from_base(const struct kgsl_memdesc *memdesc, u64 base)
+{
+	return base + (memdesc->unmapped_guard_page_count * PAGE_SIZE);
+}
+
+/**
+ * kgsl_memdesc_base_from_gpuaddr - Get the base address for a memdesc
+ * @memdesc: Pointer to a GPU memory descriptor
+ * @gpuaddr: Address where the GPU data begins
+ *
+ * Compute the starting address for the memory footprint (accounting for unmapped regions)
+ *
+ * Return: The address where the memory footprint begins
+ */
+static inline u64 kgsl_memdesc_base_from_gpuaddr(const struct kgsl_memdesc *memdesc, u64 gpuaddr)
+{
+	return gpuaddr - (memdesc->unmapped_guard_page_count * PAGE_SIZE);
 }
 
 /**
@@ -758,5 +803,10 @@ void kgsl_memdesc_pagelist_cleanup(struct file *shmem_filp, struct kgsl_memdesc 
  * @memdesc: Pointer to the memdesc
  */
 void kgsl_memdesc_free_sgt(struct kgsl_memdesc *md);
+
+/**
+ * kgsl_register_shmem_mthp_callback - Register shmem mthp vendor hook callback with shmem driver
+ */
+void kgsl_register_shmem_mthp_callback(void);
 
 #endif /* __KGSL_SHAREDMEM_H */

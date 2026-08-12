@@ -431,4 +431,30 @@ void gen8_hwsched_hfi_get_dcvs_tuning_attrs(struct adreno_device *adreno_dev, u3
  * Return: Zero on success or negative error on failure
  */
 int gen8_hwsched_process_f2h_platform_msg(struct adreno_device *adreno_dev, u32 *rcvd);
+
+/**
+ * gen8_hwsched_send_deadline_boost - Send H2F msg to boost gpu frequency
+ * @adreno_dev: Pointer to the adreno device
+ * @ctx_id: Context id for which the deadline was overdue
+ *
+ * This function sends an HFI to GMU to boost gpu frequency to meet further
+ * deadlines.
+ *
+ * Return: Zero on success or negative error on failure
+ */
+int gen8_hwsched_send_deadline_boost(struct adreno_device *adreno_dev, u32 ctx_id);
+
+/**
+ * gen8_hwsched_context_priority_update - Send a dynamic context priority update to the GMU
+ * @adreno_dev: Pointer to the adreno device
+ * @context: Pointer to the kgsl context whose priority is being changed
+ * @new_ctx_pri: New context priority value
+ *
+ * Sends H2F_MSG_CONTEXT_PRI_UPDATE to the GMU. If the GPU is in SLUMBER,
+ * defers the update; it is applied on the next context registration.
+ *
+ * Return: 0 on success or negative error on failure
+ */
+int gen8_hwsched_context_priority_update(struct adreno_device *adreno_dev,
+	struct kgsl_context *context, u32 new_ctx_pri);
 #endif

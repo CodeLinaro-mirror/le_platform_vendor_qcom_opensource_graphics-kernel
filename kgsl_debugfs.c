@@ -201,7 +201,7 @@ static int print_mem_entry(void *data, void *ptr)
 	/* Show Y if at least one vma has this entry mapped (could be multiple) */
 	flags[6] = map_count ? 'Y' : 'N';
 	flags[7] = kgsl_memdesc_is_secured(m) ?  's' : '-';
-	flags[8] = '-';
+	flags[8] = TEST_FLAG(KGSL_MEMDESC_GUARD_PAGE, &m->priv) ? 'G' : '-';
 	flags[9] = m->flags & KGSL_MEMFLAGS_VBO ? 'v' : '-';
 	flags[10] = '\0';
 
@@ -213,13 +213,13 @@ static int print_mem_entry(void *data, void *ptr)
 		inode_number = kgsl_get_dmabuf_inode_number(entry);
 	}
 
-	seq_printf(s, "%pK %pK %16llu %5d %10s %10s %16s %5d %10d %6d %6d %10lu",
+	seq_printf(s, "%pK %pK %16llu %16llu %5d %10s %10s %16s %5d %10d %6d %6d %10lu",
 			(uint64_t *)(uintptr_t) m->gpuaddr,
 			/*
 			 * Show zero for the useraddr - we can't reliably track
 			 * that value for multiple vmas anyway
 			 */
-			NULL, m->size, entry->id, flags,
+			NULL, m->size, kgsl_memdesc_footprint(m), entry->id, flags,
 			memtype_str(usermem_type),
 			usage, (m->sgt ? m->sgt->nents : 0), map_count,
 			egl_surface_count, egl_image_count, inode_number);
@@ -290,8 +290,8 @@ static void *process_mem_seq_next(struct seq_file *s, void *ptr,
 static int process_mem_seq_show(struct seq_file *s, void *ptr)
 {
 	if (ptr == SEQ_START_TOKEN) {
-		seq_printf(s, "%16s %16s %16s %5s %10s %10s %16s %5s %10s %6s %6s %10s\n",
-			"gpuaddr", "useraddr", "size", "id", "flags", "type",
+		seq_printf(s, "%16s %16s %16s %16s %5s %10s %10s %16s %5s %10s %6s %6s %10s\n",
+			"gpuaddr", "useraddr", "size", "footprint", "id", "flags", "type",
 			"usage", "sglen", "mapcnt", "eglsrf", "eglimg", "inode");
 		return 0;
 	} else

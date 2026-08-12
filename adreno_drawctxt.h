@@ -101,6 +101,11 @@ struct adreno_context {
 	 * This is used to figure out if a new fence has an out-of-order timestamp.
 	 */
 	u32 hw_fence_last_ts;
+	/**
+	 * @pending_ctx_pri: New pending priority for context; cleared to 0 when GMU sends
+	 * F2H_MSG_CONTEXT_PRI_UPDATE_DONE.
+	 */
+	u32 pending_ctx_pri;
 };
 
 /* Flag definitions for flag field in adreno_context */

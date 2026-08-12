@@ -991,6 +991,97 @@ TRACE_EVENT(adreno_ifpc_count,
 	TP_printk("total times GMU entered IFPC = %d", __entry->ifpc_count)
 );
 
+TRACE_EVENT(adreno_ctx_priority_update_request,
+	TP_PROTO(u32 ctx_id, u32 cur_ctx_pri, u32 new_ctx_pri,
+		 u32 cur_rb_id, u32 new_rb_id,
+		 u32 flags, u32 last_submitted_ts, u64 gmu_ticks),
+	TP_ARGS(ctx_id, cur_ctx_pri, new_ctx_pri, cur_rb_id, new_rb_id,
+		flags, last_submitted_ts, gmu_ticks),
+	TP_STRUCT__entry(
+		__field(u32, ctx_id)
+		__field(u32, cur_ctx_pri)
+		__field(u32, new_ctx_pri)
+		__field(u32, cur_rb_id)
+		__field(u32, new_rb_id)
+		__field(u32, flags)
+		__field(u32, last_submitted_ts)
+		__field(u64, ticks)
+	),
+	TP_fast_assign(
+		__entry->ctx_id            = ctx_id;
+		__entry->cur_ctx_pri       = cur_ctx_pri;
+		__entry->new_ctx_pri       = new_ctx_pri;
+		__entry->cur_rb_id         = cur_rb_id;
+		__entry->new_rb_id         = new_rb_id;
+		__entry->flags             = flags;
+		__entry->last_submitted_ts = last_submitted_ts;
+		__entry->ticks             = gmu_ticks;
+	),
+	TP_printk(
+		"ctx=%u cur_ctx_pri=%u new_ctx_pri=%u cur_rb_id=%u new_rb_id=%u flags=0x%x last_submitted_ts=%u ticks=%llu",
+		__entry->ctx_id, __entry->cur_ctx_pri, __entry->new_ctx_pri,
+		__entry->cur_rb_id, __entry->new_rb_id,
+		__entry->flags, __entry->last_submitted_ts, __entry->ticks
+	)
+);
+
+TRACE_EVENT(adreno_ctx_priority_update_done,
+	TP_PROTO(u32 ctx_id, u32 cur_ctx_pri, u32 new_ctx_pri,
+		 u32 cur_rb_id, u32 new_rb_id, u64 gmu_ticks),
+	TP_ARGS(ctx_id, cur_ctx_pri, new_ctx_pri, cur_rb_id, new_rb_id, gmu_ticks),
+	TP_STRUCT__entry(
+		__field(u32, ctx_id)
+		__field(u32, cur_ctx_pri)
+		__field(u32, new_ctx_pri)
+		__field(u32, cur_rb_id)
+		__field(u32, new_rb_id)
+		__field(u64, ticks)
+	),
+	TP_fast_assign(
+		__entry->ctx_id      = ctx_id;
+		__entry->cur_ctx_pri = cur_ctx_pri;
+		__entry->new_ctx_pri = new_ctx_pri;
+		__entry->cur_rb_id   = cur_rb_id;
+		__entry->new_rb_id   = new_rb_id;
+		__entry->ticks       = gmu_ticks;
+	),
+	TP_printk("ctx=%u cur_ctx_pri=%u new_ctx_pri=%u cur_rb_id=%u new_rb_id=%u ticks=%llu",
+		__entry->ctx_id,
+		__entry->cur_ctx_pri,
+		__entry->new_ctx_pri,
+		__entry->cur_rb_id,
+		__entry->new_rb_id,
+		__entry->ticks)
+);
+
+TRACE_EVENT(adreno_ctx_pri_update_deferred,
+	TP_PROTO(u32 ctx_id, u32 cur_ctx_pri, u32 new_ctx_pri,
+		 u32 cur_rb_id, u32 new_rb_id, u32 last_ts, u64 gmu_ticks),
+	TP_ARGS(ctx_id, cur_ctx_pri, new_ctx_pri, cur_rb_id, new_rb_id, last_ts, gmu_ticks),
+	TP_STRUCT__entry(
+		__field(u32, ctx_id)
+		__field(u32, cur_ctx_pri)
+		__field(u32, new_ctx_pri)
+		__field(u32, cur_rb_id)
+		__field(u32, new_rb_id)
+		__field(u32, last_ts)
+		__field(u64, ticks)
+	),
+	TP_fast_assign(
+		__entry->ctx_id      = ctx_id;
+		__entry->cur_ctx_pri = cur_ctx_pri;
+		__entry->new_ctx_pri = new_ctx_pri;
+		__entry->cur_rb_id   = cur_rb_id;
+		__entry->new_rb_id   = new_rb_id;
+		__entry->last_ts     = last_ts;
+		__entry->ticks       = gmu_ticks;
+	),
+	TP_printk("ctx=%u cur_ctx_pri=%u new_ctx_pri=%u cur_rb_id=%u new_rb_id=%u last_ts=%u ticks=%llu",
+		__entry->ctx_id, __entry->cur_ctx_pri,
+		__entry->new_ctx_pri, __entry->cur_rb_id, __entry->new_rb_id,
+		__entry->last_ts, __entry->ticks)
+);
+
 TRACE_EVENT(adreno_dcvs_tuning,
 	TP_PROTO(u32 param, u32 mingap, u32 penalty, u32 numbusy),
 	TP_ARGS(param, mingap, penalty, numbusy),
@@ -1068,6 +1159,28 @@ TRACE_EVENT(adreno_gpu_vote_params,
 		__entry->mod_percent,
 		__entry->flag,
 		__entry->ticks
+	)
+);
+
+TRACE_EVENT(adreno_gpu_preempt_info,
+	TP_PROTO(const struct trace_preempt_info *data, u64 ticks),
+	TP_ARGS(data, ticks),
+	TP_STRUCT__entry(
+		__field(u64, ticks)
+		__field(u32, level_info)
+		__field(u32, reason)
+	),
+	TP_fast_assign(
+		__entry->ticks = ticks;
+		__entry->level_info = data->level_info;
+		__entry->reason = data->reason;
+	),
+	TP_printk("ticks=%llu global_level=%lu dynamic_level=%lu dynamic_level_reason=%u aggr_level=%lu",
+		__entry->ticks,
+		FIELD_GET(GENMASK(15, 8), __entry->level_info),
+		FIELD_GET(GENMASK(7, 0), __entry->level_info),
+		__entry->reason,
+		FIELD_GET(GENMASK(23, 16), __entry->level_info)
 	)
 );
 
@@ -1164,6 +1277,26 @@ TRACE_EVENT(adreno_hwsched_mem_alloc,
 	TP_printk("mem_kind=%u flags=0x%x gmuaddr=0x%x gpuaddr=0x%llx size=0x%x handle=%u gmu_va_align=0x%x gmu_sz_align=0x%x",
 		__entry->mem_kind, __entry->flags, __entry->gmuaddr, __entry->gpuaddr,
 		__entry->size, __entry->handle, __entry->gmu_va_align, __entry->gmu_sz_align
+	)
+);
+
+TRACE_EVENT(adreno_spel_cap_pwrlevel,
+	TP_PROTO(u64 ticks, u32 pwrlevel, u32 freq),
+	TP_ARGS(ticks, pwrlevel, freq),
+	TP_STRUCT__entry(
+		__field(u64, ticks)
+		__field(u32, pwrlevel)
+		__field(u32, freq)
+	),
+	TP_fast_assign(
+		__entry->ticks = ticks;
+		__entry->pwrlevel = pwrlevel;
+		__entry->freq = freq;
+	),
+	TP_printk("ticks=%llu pwrlevel=%u freq=%u",
+		__entry->ticks,
+		__entry->pwrlevel,
+		__entry->freq
 	)
 );
 

@@ -406,6 +406,7 @@ adreno_drawctxt_create(struct kgsl_device_private *dev_priv,
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	int ret;
 	unsigned int local;
+	u32 min_priority;
 
 	local = *flags & (KGSL_CONTEXT_PREAMBLE |
 		KGSL_CONTEXT_NO_GMEM_ALLOC |
@@ -419,16 +420,25 @@ adreno_drawctxt_create(struct kgsl_device_private *dev_priv,
 		KGSL_CONTEXT_PWR_CONSTRAINT |
 		KGSL_CONTEXT_IFH_NOP |
 		KGSL_CONTEXT_SECURE |
-		KGSL_CONTEXT_PREEMPT_STYLE_MASK |
 		KGSL_CONTEXT_LPAC |
 		KGSL_CONTEXT_NO_SNAPSHOT |
-		KGSL_CONTEXT_FAULT_INFO);
+		KGSL_CONTEXT_FAULT_INFO |
+		KGSL_CONTEXT_FAULT_SNAPSHOT);
 
 	/* Check for errors before trying to initialize */
 
-	/* If preemption is not supported, ignore preemption request */
-	if (!adreno_preemption_feature_set(adreno_dev))
-		local &= ~KGSL_CONTEXT_PREEMPT_STYLE_MASK;
+	/*
+	 * These bits represent the preemption style only for a5xx targets. For other targets,
+	 * userspace uses these bits to keep track of foreign contexts i.e. contexts that
+	 * may submit work to cores other than just the GPU.
+	 */
+	if (adreno_is_a5xx(adreno_dev)) {
+		/* Honor the preemption style only if preemption is enabled */
+		if (adreno_preemption_feature_set(adreno_dev))
+			local |= *flags & KGSL_CONTEXT_A5XX_PREEMPT_STYLE_MASK;
+	} else {
+		local |= *flags & (KGSL_CONTEXT_FOREIGN_NPU | KGSL_CONTEXT_FOREIGN_GPU);
+	}
 
 	/* We no longer support legacy context switching */
 	if ((local & KGSL_CONTEXT_PREAMBLE) == 0 ||
@@ -484,6 +494,18 @@ adreno_drawctxt_create(struct kgsl_device_private *dev_priv,
 	drawctxt->base.priority =
 		(drawctxt->base.flags & KGSL_CONTEXT_PRIORITY_MASK) >>
 		KGSL_CONTEXT_PRIORITY_SHIFT;
+
+	/*
+	 * Check if the requested priority level is allowed for the process.
+	 * Processes without appropriate privileges are restricted from RB 0, so
+	 * clamp to the minimum priority level allowed for this task.
+	 */
+	min_priority = adreno_context_min_priority(adreno_dev);
+	if (drawctxt->base.priority < min_priority) {
+		drawctxt->base.priority = min_priority;
+		drawctxt->base.flags = u32_replace_bits(drawctxt->base.flags,
+			drawctxt->base.priority, KGSL_CONTEXT_PRIORITY_MASK);
+	}
 
 	/*
 	 * Now initialize the common part of the context. This allocates the

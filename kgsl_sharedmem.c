@@ -7,6 +7,8 @@
 #include <asm/cacheflush.h>
 #include <linux/of_platform.h>
 #include <linux/highmem.h>
+#include <trace/hooks/mm.h>
+#include <linux/huge_mm.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/shmem_fs.h>
@@ -521,16 +523,16 @@ kgsl_sharedmem_init_sysfs(void)
 
 static vm_fault_t kgsl_paged_vmfault(struct kgsl_memdesc *memdesc,
 				struct vm_area_struct *vma,
-				struct vm_fault *vmf)
+				struct vm_fault *vmf, u64 data_offset)
 {
 	int pgoff, ret;
 	struct page *page;
-	unsigned int offset = vmf->address - vma->vm_start;
+	u64 offset = ((u64)vma->vm_pgoff << PAGE_SHIFT) + (vmf->address - vma->vm_start);
 
-	if (offset >= memdesc->size)
+	if ((offset < data_offset) || (offset >= (data_offset + memdesc->size)))
 		return VM_FAULT_SIGBUS;
 
-	pgoff = offset >> PAGE_SHIFT;
+	pgoff = (offset - data_offset) >> PAGE_SHIFT;
 	mutex_lock(&memdesc->lock);
 
 	if (memdesc->pages[pgoff]) {
@@ -691,7 +693,7 @@ static int kgsl_paged_map_kernel(struct kgsl_memdesc *memdesc)
 
 static vm_fault_t kgsl_contiguous_vmfault(struct kgsl_memdesc *memdesc,
 				struct vm_area_struct *vma,
-				struct vm_fault *vmf)
+				struct vm_fault *vmf, u64 data_offset)
 {
 	unsigned long offset, pfn;
 
@@ -822,6 +824,9 @@ void kgsl_memdesc_init(struct kgsl_device *device,
 	if (kgsl_mmu_has_feature(device, KGSL_MMU_NEED_GUARD_PAGE) ||
 		(flags & KGSL_MEMFLAGS_GUARD_PAGE))
 		SET_FLAG(KGSL_MEMDESC_GUARD_PAGE, &memdesc->priv);
+
+	memdesc->unmapped_guard_page_count =
+		FIELD_GET(KGSL_MEMFLAGS_UNMAPPED_GUARD_PAGES_MASK, flags);
 
 	if (flags & KGSL_MEMFLAGS_SECURE)
 		SET_FLAG(KGSL_MEMDESC_SECURE, &memdesc->priv);
@@ -1053,8 +1058,10 @@ static int _kgsl_shmem_alloc_page(struct kgsl_memdesc *memdesc, u32 order)
 	if (fatal_signal_pending(current))
 		return -EINTR;
 
-	/* Allocate non compound page to split 4K page chunks */
-	gfp_mask &= ~__GFP_COMP;
+	if (!IS_ENABLED(CONFIG_QCOM_KGSL_USE_SHMEM_MTHP)) {
+		/* Allocate non compound page to split 4K page chunks */
+		gfp_mask &= ~__GFP_COMP;
+	}
 
 	page = alloc_pages(gfp_mask, order);
 	if (page == NULL) {
@@ -1063,6 +1070,22 @@ static int _kgsl_shmem_alloc_page(struct kgsl_memdesc *memdesc, u32 order)
 			return -EAGAIN;
 		else
 			return -ENOMEM;
+	}
+
+	if (IS_ENABLED(CONFIG_QCOM_KGSL_USE_SHMEM_MTHP)) {
+		/*
+		 * With shmem mTHP enabled, KGSL returns folios to shmem via shmem_get_folio,
+		 * and the order-aware path may look for an exact folio order in memdesc
+		 * shmem_page_list. Splitting into 4K pages here drops the original folio
+		 * information, defeating mTHP and preventing shmem from consuming large folios.
+		 */
+		if (!IS_ENABLED(CONFIG_QCOM_KGSL_HYBRID_ALLOCATION)) {
+			for (pcount = 0; pcount < (1 << order); pcount++)
+				clear_highpage(page + pcount);
+		}
+
+		list_add_tail(&page->lru, &memdesc->shmem_page_list);
+		return (1 << order);
 	}
 
 	/* Split non-compound higher-order pages to 4k pages */
@@ -1097,24 +1120,41 @@ static int kgsl_shmem_alloc_pages(struct kgsl_memdesc *memdesc)
 	align = ilog2(SZ_1M);
 	size = kgsl_get_alloc_page_size(len, align);
 	order = get_order(size);
+	/* Cap order to the maximum allowed by shmem mTHP constraint */
+	if (IS_ENABLED(CONFIG_QCOM_KGSL_USE_SHMEM_MTHP)) {
+		order = min_t(u32, order, ilog2(SZ_512K >> PAGE_SHIFT));
+		size = PAGE_SIZE << order;
+		align = ilog2(size);
+	}
 
 	while (len) {
 		ret = _kgsl_shmem_alloc_page(memdesc, order);
 
 		if (ret == -EAGAIN) {
-			size = PAGE_SIZE << --order;
-			size = kgsl_get_alloc_page_size(size, ilog2(size));
+			if (!order)
+				return -ENOMEM;
+
+			order--;
+			size = PAGE_SIZE << order;
 			align = ilog2(size);
 			continue;
-		} else if (ret <= 0) {
-			return -ENOMEM;
 		}
 
+		if (ret <= 0)
+			return -ENOMEM;
+
 		count += ret;
-		len -= size;
+		len -= (ret << PAGE_SHIFT);
+
 		size = kgsl_get_alloc_page_size(len, align);
-		align = ilog2(size);
 		order = get_order(size);
+		/* Cap order to the maximum allowed by shmem mTHP constraint */
+		if (IS_ENABLED(CONFIG_QCOM_KGSL_USE_SHMEM_MTHP)) {
+			order = min_t(u32, order, ilog2(SZ_512K >> PAGE_SHIFT));
+			size = PAGE_SIZE << order;
+		}
+
+		align = ilog2(size);
 	}
 	return count;
 }
@@ -1123,8 +1163,10 @@ static void __maybe_unused kgsl_shmem_fill_page_order(void *ptr,
 	struct shmem_inode_info *inode, struct folio **folio, int order)
 {
 	struct kgsl_memdesc *memdesc = (struct kgsl_memdesc *)inode->android_vendor_data1;
+	struct folio *f, *tmp;
 
-	if (IS_ERR_OR_NULL(memdesc) || order)
+	*folio = NULL;
+	if (IS_ERR_OR_NULL(memdesc))
 		return;
 
 	mutex_lock(&memdesc->lock);
@@ -1137,9 +1179,13 @@ static void __maybe_unused kgsl_shmem_fill_page_order(void *ptr,
 		}
 	}
 
-	if (!list_empty(&memdesc->shmem_page_list)) {
-		*folio = list_first_entry(&memdesc->shmem_page_list, struct folio, lru);
-		list_del(&(*folio)->lru);
+	/* Search the list for a folio that matches the exact requested order */
+	list_for_each_entry_safe(f, tmp, &memdesc->shmem_page_list, lru) {
+		if (folio_order(f) == order) {
+			*folio = f;
+			list_del(&f->lru);
+			break;
+		}
 	}
 	mutex_unlock(&memdesc->lock);
 }
@@ -1152,6 +1198,7 @@ static void __maybe_unused kgsl_shmem_fill_page(void *ptr,
 	if (IS_ERR_OR_NULL(memdesc))
 		return;
 
+	*folio = NULL;
 	mutex_lock(&memdesc->lock);
 	if (list_empty(&memdesc->shmem_page_list)) {
 		int ret = kgsl_shmem_alloc_pages(memdesc);
@@ -1232,6 +1279,7 @@ int kgsl_alloc_shmem_page(struct kgsl_memdesc *memdesc, struct file *shmem_filp,
 {
 	struct page *page;
 	u32 pcount = (memdesc->size >> PAGE_SHIFT) - memdesc->shmem_pages;
+	int i, order, count;
 
 	if (pages == NULL)
 		return -EINVAL;
@@ -1247,6 +1295,9 @@ int kgsl_alloc_shmem_page(struct kgsl_memdesc *memdesc, struct file *shmem_filp,
 	if (IS_ERR(page))
 		return PTR_ERR(page);
 
+	order = compound_order(page);
+	count = 1 << order;
+
 	/*
 	 * In the hybrid allocation, shmem is used to replace pages allocated
 	 * from the kgsl pool. Since we're going to copy data into these pages,
@@ -1255,18 +1306,34 @@ int kgsl_alloc_shmem_page(struct kgsl_memdesc *memdesc, struct file *shmem_filp,
 	if (!IS_ENABLED(CONFIG_QCOM_KGSL_HYBRID_ALLOCATION)) {
 		/* Clear only shmem driver allocated pages */
 		if ((memdesc->size == PAGE_SIZE) ||
-			(list_empty(&memdesc->shmem_page_list) && (pcount > 1)))
-			clear_highpage(page);
+			(list_empty(&memdesc->shmem_page_list) && (pcount > 1))) {
+			for (i = 0; i < count; i++)
+				clear_highpage(page + i);
+		}
 
-		kgsl_page_sync(memdesc->dev, page, PAGE_SIZE, DMA_TO_DEVICE);
+		kgsl_page_sync(memdesc->dev, page, count * PAGE_SIZE, DMA_TO_DEVICE);
 	}
 
-	memdesc->shmem_pages++;
-	*page_size = PAGE_SIZE;
-	*pages = page;
+	for (i = 0; i < count; i++)
+		pages[i] = kgsl_nth_page(page, i);
 
-	return 1;
+	memdesc->shmem_pages += count;
+	*page_size = count << PAGE_SHIFT;
+
+	return count;
 }
+
+#if (KERNEL_VERSION(7, 0, 0) <= LINUX_VERSION_CODE)
+static struct file *kgsl_shmem_file_setup(const char *name, u64 size)
+{
+	return shmem_file_setup(name, size, mk_vma_flags(VMA_NORESERVE_BIT));
+}
+#else
+static struct file *kgsl_shmem_file_setup(const char *name, u64 size)
+{
+	return shmem_file_setup(name, size, VM_NORESERVE);
+}
+#endif
 
 struct file *kgsl_memdesc_file_setup(struct kgsl_memdesc *memdesc)
 {
@@ -1281,8 +1348,7 @@ struct file *kgsl_memdesc_file_setup(struct kgsl_memdesc *memdesc)
 	if (kgsl_memdesc_is_secured(memdesc))
 		return 0;
 
-	shmem_filp = shmem_file_setup("kgsl-3d0", memdesc->size,
-			VM_NORESERVE);
+	shmem_filp = kgsl_shmem_file_setup("kgsl-3d0", memdesc->size);
 	if (IS_ERR(shmem_filp))
 		return shmem_filp;
 
@@ -1515,10 +1581,20 @@ static int _kgsl_alloc_pages(struct kgsl_memdesc *memdesc,
 {
 	int count = 0;
 	int npages = memdesc->size >> PAGE_SHIFT;
-	struct page **local = kvcalloc(npages, sizeof(*local), GFP_KERNEL);
+	struct page **local;
+	size_t size;
 	u32 page_size, align;
 	u64 len = memdesc->size;
 	bool memwq_flush_done = false;
+
+	if (check_mul_overflow((size_t)npages, sizeof(*local), &size))
+		return -ENOMEM;
+
+	/* Use vzalloc for large arrays to avoid high-order kmalloc pressure */
+	if (size > PAGE_SIZE)
+		local = vzalloc(size);
+	else
+		local = kcalloc(npages, sizeof(*local), GFP_KERNEL);
 
 	if (!local)
 		return -ENOMEM;
@@ -2068,8 +2144,10 @@ int kgsl_allocate_kernel(struct kgsl_device *device,
 
 void kgsl_memdesc_free_sgt(struct kgsl_memdesc *md)
 {
-	sg_free_table(md->sgt);
-	kfree(md->sgt);
+	if (md->sgt) {
+		sg_free_table(md->sgt);
+		kfree(md->sgt);
+	}
 	md->sgt = NULL;
 }
 
@@ -2077,31 +2155,18 @@ int kgsl_memdesc_init_fixed(struct kgsl_device *device,
 		struct platform_device *pdev, const char *resource,
 		struct kgsl_memdesc *memdesc)
 {
-	const __be32 *prop;
-	phys_addr_t physaddr;
-	u64 size;
-	int len;
-	int addr_cells = of_n_addr_cells(pdev->dev.of_node);
-	int size_cells = of_n_size_cells(pdev->dev.of_node);
+	int ret;
+	uint64_t addr, size;
 
-	prop = of_get_property(pdev->dev.of_node, resource, &len);
-	if (!prop)
-		return -ENODEV;
-
-	if (len != ((addr_cells + size_cells) * sizeof(__be32))) {
-		dev_err_ratelimited(device->dev, "of property %s has len %d expected %lu\n",
-			resource, len, (addr_cells + size_cells) * sizeof(__be32));
-		return -E2BIG;
-	}
-
-	physaddr = of_read_number(prop, addr_cells);
-	size = of_read_number(prop + addr_cells, size_cells);
+	ret = kgsl_get_resource_address_size(device, pdev, resource, &addr, &size);
+	if (ret)
+		return ret;
 
 	kgsl_memdesc_init(device, memdesc, 0);
-	memdesc->physaddr = physaddr;
+	memdesc->physaddr = addr;
 	memdesc->size = size;
 
-	return kgsl_memdesc_sg_dma(memdesc, physaddr, size);
+	return kgsl_memdesc_sg_dma(memdesc, addr, size);
 }
 
 struct kgsl_memdesc *kgsl_allocate_global_fixed(struct kgsl_device *device,
@@ -2251,3 +2316,73 @@ void kgsl_free_globals(struct kgsl_device *device)
 		kfree(md);
 	}
 }
+
+#if IS_ENABLED(CONFIG_QCOM_KGSL_USE_SHMEM_MTHP)
+/**
+ * kgsl_shmem_allowable_huge_orders() - Constrain mTHP orders for KGSL shmem
+ * @unused: Unused parameter
+ * @inode: Inode backing the shmem object
+ * @index: Page index within the file
+ * @vma: VMA for fault path, or NULL for readahead
+ * @orders: Bitmap of allowable mTHP orders
+ *
+ * This vendor hook constrains the set of multi-size Transparent Huge Page
+ * (mTHP) orders that the kernel may use for KGSL-backed shmem during readahead.
+ *
+ * As KGSL uses pre-allocated memory backed by a custom shmem_page_list, this function
+ * restricts the @orders mask so that the kernel selects folio sizes that are suitable
+ * for KGSL allocations and do not cross file bounds.
+ */
+static void kgsl_shmem_allowable_huge_orders(void *unused, struct inode *inode,
+		pgoff_t index, struct vm_area_struct *vma, unsigned long *orders)
+{
+	loff_t i_size;
+	pgoff_t max_pages, aligned_index, end;
+	unsigned long folio_pages;
+	unsigned int min_order, max_order;
+	struct shmem_inode_info *info = SHMEM_I(inode);
+
+	/* Only handle KGSL shmem readahead path */
+	if (vma || !info->android_vendor_data1)
+		return;
+
+	i_size = i_size_read(inode);
+	max_pages = DIV_ROUND_UP_ULL(i_size, PAGE_SIZE);
+
+	if (!max_pages || index >= max_pages)
+		return;
+
+	/* Allowed orders: 4K (order 0) up to 512K (order 7) */
+	min_order = 0;
+	max_order = ilog2(SZ_512K >> PAGE_SHIFT);
+
+	/* Limit by file size */
+	max_order = min_t(unsigned int, max_order, __fls(max_pages));
+
+	/* Reduce max_order until a folio aligned at this index fits completely
+	 * within file bounds
+	 */
+	while (max_order > min_order) {
+		folio_pages = 1UL << max_order;
+		aligned_index = round_down(index, folio_pages);
+		end = aligned_index + folio_pages;
+
+		if (end <= max_pages)
+			break;
+
+		max_order--;
+	}
+
+	*orders |= GENMASK(max_order, min_order);
+}
+
+void kgsl_register_shmem_mthp_callback(void)
+{
+	register_trace_android_rvh_shmem_allowable_huge_orders(
+		kgsl_shmem_allowable_huge_orders, NULL);
+}
+#else
+void kgsl_register_shmem_mthp_callback(void)
+{
+}
+#endif /* CONFIG_QCOM_KGSL_USE_SHMEM_MTHP */

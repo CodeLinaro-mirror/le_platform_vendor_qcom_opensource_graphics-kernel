@@ -21,6 +21,10 @@ static const struct adreno_gpu_core adreno_gpu_core_##_name = { \
 #define CLX_DATA(irated, num_phases, clx_path, extd_intf) \
 	((extd_intf << 29) | (clx_path << 28) | (num_phases << 22) | (irated << 16))
 
+/* Set the BCL throttle levels as a percentage */
+#define BCL_DATA(resp_type, throttle_lvl_1, throttle_lvl_2, throttle_lvl_3) \
+	((throttle_lvl_3 << 15) | (throttle_lvl_2 << 8) | (throttle_lvl_1 << 1) | resp_type)
+
 DEFINE_DEPRECATED_CORE(a304, ADRENO_REV_A304, 4, 0, 5, ANY_ID);
 DEFINE_DEPRECATED_CORE(a306, ADRENO_REV_A306, 4, 0, 5, ANY_ID);
 DEFINE_DEPRECATED_CORE(a306a, ADRENO_REV_A306A, 4, 0, 5, ANY_ID);
@@ -2569,7 +2573,7 @@ static const struct adreno_gen7_core adreno_gpu_core_gen7_5_0 = {
 		.compatible = "qcom,adreno-gpu-gen7-5-0",
 		.features = ADRENO_APRIV | ADRENO_IOCOHERENT | ADRENO_IFPC |
 				ADRENO_PREEMPTION | ADRENO_L3_VOTE | ADRENO_DMS | ADRENO_ACD |
-				ADRENO_LPAC | ADRENO_BCL,
+				ADRENO_LPAC | ADRENO_BCL | ADRENO_CONTENT_PROTECTION,
 		.gpudev = &adreno_gen7_gmu_gpudev.base,
 		.perfcounters = &adreno_gen7_2_0_perfcounters,
 		.uche_gmem_alignment = SZ_16M,
@@ -2846,7 +2850,8 @@ static const struct adreno_gen7_core adreno_gpu_core_gen7_15_0 = {
 				  UINT_MAX, UINT_MAX, UINT_MAX, ANY_ID),
 		.compatible = "qcom,adreno-gpu-gen7-15-0",
 		.features = ADRENO_APRIV | ADRENO_IOCOHERENT | ADRENO_IFPC |
-			ADRENO_PREEMPTION | ADRENO_L3_VOTE | ADRENO_DMS | ADRENO_CONTENT_PROTECTION,
+			ADRENO_PREEMPTION | ADRENO_L3_VOTE | ADRENO_DMS |
+			ADRENO_CONTENT_PROTECTION | ADRENO_ACD,
 		.gpudev = &adreno_gen7_gmu_gpudev.base,
 		.perfcounters = &adreno_gen7_2_0_perfcounters,
 		.uche_gmem_alignment = SZ_16M,
@@ -3590,6 +3595,29 @@ static struct gen8_thermal_mit_cfg therm_mit_cfg_8_11_0 = {
 	.tsens_en_cfg = &tsens_en_cfg_8_2_0,
 };
 
+static struct hfi_therm_profile_ctrl therm_profile_8_14_0 = {
+	.feature_en = 1,
+	.feature_rev = 1,
+	.tj_limit = 900,
+	.tskin_addr = 0,
+	.tskin_limit = 0,
+	.tsens_cfg_cnt = 1,
+	.tsens_cfg.limit_u = 1180,
+	.tsens_cfg.limit_l = 10,
+	.tsens_cfg.margin_u = 30,
+	.tsens_cfg.margin_l = 20,
+	.throttle_cfg.throttle_hyst = 250,
+	.throttle_cfg.num_throttle_cnt = 3,
+	.throttle_cfg.throttle_lvls[0] = 50,
+	.throttle_cfg.throttle_lvls[1] = 37,
+	.throttle_cfg.throttle_lvls[2] = 20,
+};
+
+static struct gen8_thermal_mit_cfg therm_mit_cfg_8_14_0 = {
+	.therm = &therm_profile_8_14_0,
+	.tsens_en_cfg = &tsens_en_cfg_8_2_0,
+};
+
 static const struct hfi_therm_profile_ctrl therm_profile_8_9_0 = {
 	.feature_en = 1,
 	.feature_rev = 1,
@@ -3608,9 +3636,6 @@ static const struct hfi_therm_profile_ctrl therm_profile_8_9_0 = {
 	.throttle_cfg.throttle_lvls[1] = 37,
 	.throttle_cfg.throttle_lvls[2] = 20,
 };
-
-/* Set the BCL throttle levels to 62/75/83 percent */
-#define GEN8_2_X_BCL_DATA ((62 << 15) | (75 << 8) | (83 << 1) | 0x1)
 
 static const struct adreno_gen8_core adreno_gpu_core_gen8_2_0 = {
 	.base = {
@@ -3647,7 +3672,7 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_2_0 = {
 	.gmu_hub_clk_freq = 150000000,
 	.gen8_snapshot_block_list = &gen8_2_0_snapshot_block_list,
 	.fast_bus_hint = true,
-	.bcl_data = GEN8_2_X_BCL_DATA,
+	.bcl_data = BCL_DATA(1, 83, 75, 62),
 	.acv_perfmode_ddr_freq = MHZ_TO_KBPS(2736, 4),
 	.noc_timeout_us = 3410, /* 3.41 msec */
 	.cl_no_ft_timeout_ms = 6500,
@@ -3693,7 +3718,7 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_2_1 = {
 	.gmu_hub_clk_freq = 150000000,
 	.gen8_snapshot_block_list = &gen8_2_0_snapshot_block_list,
 	.fast_bus_hint = true,
-	.bcl_data = GEN8_2_X_BCL_DATA,
+	.bcl_data = BCL_DATA(1, 83, 75, 62),
 	.acv_perfmode_ddr_freq = MHZ_TO_KBPS(2736, 4),
 	.noc_timeout_us = 3410, /* 3.41 msec */
 	.cl_no_ft_timeout_ms = 6500,
@@ -3738,7 +3763,7 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_5_0 = {
 	.gmu_hub_clk_freq = 150000000,
 	.gen8_snapshot_block_list = &gen8_2_0_snapshot_block_list,
 	.fast_bus_hint = true,
-	.bcl_data = GEN8_2_X_BCL_DATA,
+	.bcl_data = BCL_DATA(1, 83, 75, 62),
 	.acv_perfmode_ddr_freq = MHZ_TO_KBPS(2736, 4),
 	.noc_timeout_us = 3410, /* 3.41 msec */
 	.cl_no_ft_timeout_ms = 6500,
@@ -3829,7 +3854,7 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_4_0 = {
 			ADRENO_CONTENT_PROTECTION | ADRENO_LPAC | ADRENO_AQE |
 			ADRENO_GMU_WARMBOOT | ADRENO_L3_VOTE | ADRENO_IFPC |
 			ADRENO_BCL | ADRENO_ACD | ADRENO_HW_FENCE |
-			ADRENO_PREEMPTION | ADRENO_GMU_AB,
+			ADRENO_PREEMPTION | ADRENO_GMU_AB | ADRENO_RT_HINT,
 		.gpudev = &adreno_gen8_hwsched_gpudev.base,
 		.perfcounters = &adreno_gen8_perfcounters,
 		.uche_gmem_alignment = SZ_64M,
@@ -4216,6 +4241,8 @@ static const struct gen8_nonctxt_regs gen8_9_0_nonctxt_regs[] = {
 	{ GEN8_SP_READ_SEL, 0x0001ff00, BIT(PIPE_NONE) },
 	{ GEN8_TPL1_DBG_ECO_CNTL, 0x10100000, BIT(PIPE_NONE) },
 	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x04000720, BIT(PIPE_NONE) },
+	/* Disable HLSQ stproc stc_buf_mode */
+	{ GEN8_SP_HLSQ_DBG_ECO_CNTL_3, BIT(7), BIT(PIPE_NONE) },
 	{ 0 },
 };
 
@@ -4265,12 +4292,42 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_9_0 = {
 	.bcl_data = 1,
 };
 
+/*
+ * Look up table for dynamic BCL configuration. This is a pair of percentage
+ * power drop expected and the corresponding percentage clock rate required
+ * to achieve such drop. The clock rate is achieved by configuring corresponding
+ * sid for clock throttling.
+ */
+static const struct gen8_dynamic_bcl_entry gen8_dynamic_bcl_lut[] = {
+	{5, 91},
+	{10, 91},
+	{15, 83},
+	{20, 83},
+	{25, 75},
+	{30, 75},
+	{35, 66},
+	{40, 62},
+	{45, 58},
+	{50, 54},
+	{55, 50},
+	{60, 45},
+	{65, 41},
+	{70, 37},
+	{75, 33},
+	{80, 29},
+	{85, 25},
+	{90, 20},
+	{95, 16},
+	{100, 12},
+	{0},
+};
+
 static const struct hfi_clx_table_v2_cmd gen8_11_0_clx_table = {
 	.version = (2 << 16) | 1,
 	.domain = {
 		/* GFX domain */
 		{
-			.data0 = CLX_DATA(60, 6, 1, 1),
+			.data0 = CLX_DATA(60, 5, 0, 1),
 			.clxt = 0,
 			.clxh = 0,
 			.urgmode = 1,
@@ -4279,12 +4336,36 @@ static const struct hfi_clx_table_v2_cmd gen8_11_0_clx_table = {
 		},
 		/* MxG domain */
 		{
-			.data0 = CLX_DATA(60, 1, 1, 1),
+			.data0 = CLX_DATA(30, 1, 1, 1),
 			.clxt = 0,
 			.clxh = 0,
 			.urgmode = 1,
 			.lkgen = 0,
-			.currbudget = 50,
+			.currbudget = 100,
+		},
+	},
+};
+
+static const struct hfi_clx_table_v2_cmd gen8_14_0_clx_table = {
+	.version = (2 << 16) | 1,
+	.domain = {
+		/* GFX domain */
+		{
+			.data0 = CLX_DATA(60, 4, 1, 1),
+			.clxt = 10,
+			.clxh = 0,
+			.urgmode = 1,
+			.lkgen = 0,
+			.currbudget = 100,
+		},
+		/* MxG domain */
+		{
+			.data0 = CLX_DATA(60, 1, 1, 1),
+			.clxt = 10,
+			.clxh = 0,
+			.urgmode = 1,
+			.lkgen = 0,
+			.currbudget = 100,
 		},
 	},
 };
@@ -4301,7 +4382,7 @@ static const struct hfi_limits_mit_tbl gen8_11_0_limits_mit_tbl[] = {
 			.mode = 0,
 			.sid_val = 0xC,
 			.mit_time = 5,
-			.curr_limit = 6000,
+			.curr_limit = 30000,
 		}
 	},
 	{
@@ -4312,10 +4393,10 @@ static const struct hfi_limits_mit_tbl gen8_11_0_limits_mit_tbl[] = {
 			.enable = 1,
 			.msg_path = 0,
 			.lkgen = 0,
-			.mode = 0,
+			.mode = BIT(1),
 			.sid_val = 0x12,
 			.mit_time = 2000,
-			.curr_limit = 6000,
+			.curr_limit = 5000,
 		}
 	},
 	{
@@ -4327,7 +4408,7 @@ static const struct hfi_limits_mit_tbl gen8_11_0_limits_mit_tbl[] = {
 			.msg_path = 0,
 			.lkgen = 0,
 			.mode = 0,
-			.sid_val = 7,
+			.sid_val = 0x8,
 			.mit_time = 3,
 			.curr_limit = 30000,
 		}
@@ -4340,10 +4421,10 @@ static const struct hfi_limits_mit_tbl gen8_11_0_limits_mit_tbl[] = {
 			.enable = 0,
 			.msg_path = 0,
 			.lkgen = 0,
-			.mode = 0,
-			.sid_val = 7,
+			.mode = BIT(1),
+			.sid_val = 0x8,
 			.mit_time = 3,
-			.curr_limit = 6000,
+			.curr_limit = 5000,
 		}
 	},
 };
@@ -4426,12 +4507,16 @@ static const struct gen8_nonctxt_regs gen8_11_0_nonctxt_regs[] = {
 	{ GEN8_PC_AUTO_VERTEX_STRIDE, 0x00000001, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_VIS_STREAM_CNTL, 0x10010000, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_CONTEXT_SWITCH_STABILIZE_CNTL_1, 0x00000002, BIT(PIPE_BV) | BIT(PIPE_BR) },
-	{ GEN8_PC_CHICKEN_BITS_1, 0x00000003, BIT(PIPE_BV) | BIT(PIPE_BR) },
+	/* BIT(11): Disable skipIdx to avoid PDMA hang with restart-index draws */
+	{ GEN8_PC_CHICKEN_BITS_1, 0x00000803, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_CHICKEN_BITS_2, 0x00000200, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_CHICKEN_BITS_3, 0x00400000, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_CHICKEN_BITS_4, 0x00500050, BIT(PIPE_BV) | BIT(PIPE_BR) },
-	/* Disable GS Quad primitive */
-	{ GEN8_PC_CHICKEN_BITS_5, BIT(28), BIT(PIPE_BV) | BIT(PIPE_BR) },
+	/*
+	 * BIT(28): Disable GS Quad primitive
+	 * BIT(30): Disable skipIdx to avoid PDMA hang with restart-index draws
+	 */
+	{ GEN8_PC_CHICKEN_BITS_5, BIT(28) | BIT(30), BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_RB_CCU_CNTL, 0x00000068, BIT(PIPE_BR) },
 	/*
 	 * BIT(10): Disable sysmem nonfclear feature
@@ -4452,6 +4537,8 @@ static const struct gen8_nonctxt_regs gen8_11_0_nonctxt_regs[] = {
 	{ GEN8_RB_CMP_DBG_ECO_CNTL, 0x00004000, BIT(PIPE_BR) },
 	{ GEN8_RBBM_NC_MODE_CNTL, 0x00000001, BIT(PIPE_NONE) },
 	{ GEN8_RBBM_SLICE_NC_MODE_CNTL, 0x00000001, BIT(PIPE_NONE) },
+	/* Enable RB BAC strobes */
+	{ GEN8_RBBM_SLICE_PERFCTR_CNTL, BIT(0), BIT(PIPE_NONE) },
 	{ GEN8_RBBM_POWER_UP_RESET_SW_OVERRIDE, 0x70809060, BIT(PIPE_NONE) },
 	{ GEN8_RBBM_POWER_UP_RESET_SW_BV_OVERRIDE, 0x30000000, BIT(PIPE_NONE) },
 	{ GEN8_RBBM_WAIT_IDLE_CLOCKS_CNTL, 0x00000030, BIT(PIPE_NONE) },
@@ -4470,6 +4557,8 @@ static const struct gen8_nonctxt_regs gen8_11_0_nonctxt_regs[] = {
 	{ GEN8_SP_HLSQ_DBG_ECO_CNTL, 0x04000000, BIT(PIPE_NONE) },
 	/* HLSQ ignores the shared constant feedback from SP:MAS */
 	{ GEN8_SP_HLSQ_DBG_ECO_CNTL_1, BIT(17), BIT(PIPE_NONE) },
+	/* Disable HLSQ large instruction async mode check */
+	{ GEN8_SP_HLSQ_DBG_ECO_CNTL_3, BIT(1), BIT(PIPE_NONE) },
 	{ GEN8_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080, BIT(PIPE_NONE) },
 	{ GEN8_SP_READ_SEL, 0x0001ff00, BIT(PIPE_NONE) },
 	{ GEN8_SP_L0_PERF_TUNE, 0x00000024, BIT(PIPE_NONE) },
@@ -4519,7 +4608,10 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_11_0 = {
 			ADRENO_BCL | ADRENO_DCVS_PROFILE | ADRENO_IFPC | ADRENO_GMU_MINBW |
 			ADRENO_DEFER_GMEM_ALLOC | ADRENO_GMU_FAST_CONTEXT_DESTROY |
 			ADRENO_ACD | ADRENO_GMU_AB | ADRENO_HW_FENCE | ADRENO_GMU_SPEL |
-			ADRENO_AHB_TIMEOUT_RECOVERY,
+			ADRENO_AHB_TIMEOUT_RECOVERY | ADRENO_FENCE_DEADLINE_BOOST |
+			ADRENO_TSENSE_DYNAMIC_PERIOD | ADRENO_GMU_THINMEM_CFG |
+			ADRENO_GMU_DYNAMIC_CTX_PRIORITY | ADRENO_ACD_AVG |
+			ADRENO_SYNX | ADRENO_QECP_DEBUGBUS,
 		.gpudev = &adreno_gen8_hwsched_gpudev.base,
 		.perfcounters = &adreno_gen8_2_x_perfcounters,
 		.uche_gmem_alignment = SZ_64M,
@@ -4543,7 +4635,7 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_11_0 = {
 	.gmu_hub_clk_freq = 150000000,
 	.gen8_snapshot_block_list = &gen8_11_0_snapshot_block_list,
 	.fast_bus_hint = true,
-	.bcl_data = GEN8_2_X_BCL_DATA,
+	.bcl_data = BCL_DATA(1, 75, 54, 33),
 	.acv_perfmode_ddr_freq = MHZ_TO_KBPS(4224, 4),
 	.noc_timeout_us = 3410, /* 3.41 msec */
 	.cl_no_ft_timeout_ms = 6500,
@@ -4555,6 +4647,10 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_11_0 = {
 	.three_rail_memory = true,
 	.malu = true,
 	.clx_tbl = &gen8_11_0_clx_table,
+	.dynamic_bcl_lut = gen8_dynamic_bcl_lut,
+	.thinmem_cfg_data = 14,
+	.tdcvs_enable = 1,
+	.tdcvs_data = 0x410e1800,
 };
 
 /* GEN8_11_1 noncontext register list */
@@ -4568,12 +4664,16 @@ static const struct gen8_nonctxt_regs gen8_11_1_nonctxt_regs[] = {
 	{ GEN8_PC_AUTO_VERTEX_STRIDE, 0x00000001, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_VIS_STREAM_CNTL, 0x10010000, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_CONTEXT_SWITCH_STABILIZE_CNTL_1, 0x00000002, BIT(PIPE_BV) | BIT(PIPE_BR) },
-	{ GEN8_PC_CHICKEN_BITS_1, 0x00000003, BIT(PIPE_BV) | BIT(PIPE_BR) },
+	/* BIT(11): Disable skipIdx to avoid PDMA hang with restart-index draws */
+	{ GEN8_PC_CHICKEN_BITS_1, 0x00000803, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_CHICKEN_BITS_2, 0x00000200, BIT(PIPE_BV) | BIT(PIPE_BR) },
-	{ GEN8_PC_CHICKEN_BITS_3, 0x00500000, BIT(PIPE_BV) | BIT(PIPE_BR) },
+	{ GEN8_PC_CHICKEN_BITS_3, 0x00400000, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_CHICKEN_BITS_4, 0x00500050, BIT(PIPE_BV) | BIT(PIPE_BR) },
-	/* Disable GS Quad primitive */
-	{ GEN8_PC_CHICKEN_BITS_5, BIT(28), BIT(PIPE_BV) | BIT(PIPE_BR) },
+	/*
+	 * BIT(28): Disable GS Quad primitive
+	 * BIT(30): Disable skipIdx to avoid PDMA hang with restart-index draws
+	 */
+	{ GEN8_PC_CHICKEN_BITS_5, BIT(28) | BIT(30), BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_RB_CCU_CNTL, 0x00000068, BIT(PIPE_BR) },
 	/*
 	 * BIT(10): Disable sysmem nonfclear feature
@@ -4594,6 +4694,8 @@ static const struct gen8_nonctxt_regs gen8_11_1_nonctxt_regs[] = {
 	{ GEN8_RB_CMP_DBG_ECO_CNTL, 0x00004000, BIT(PIPE_BR) },
 	{ GEN8_RBBM_NC_MODE_CNTL, 0x00000001, BIT(PIPE_NONE) },
 	{ GEN8_RBBM_SLICE_NC_MODE_CNTL, 0x00000001, BIT(PIPE_NONE) },
+	/* Enable RB BAC strobes */
+	{ GEN8_RBBM_SLICE_PERFCTR_CNTL, BIT(0), BIT(PIPE_NONE) },
 	{ GEN8_RBBM_POWER_UP_RESET_SW_OVERRIDE, 0x70809060, BIT(PIPE_NONE) },
 	{ GEN8_RBBM_POWER_UP_RESET_SW_BV_OVERRIDE, 0x30000000, BIT(PIPE_NONE) },
 	{ GEN8_RBBM_WAIT_IDLE_CLOCKS_CNTL, 0x00000030, BIT(PIPE_NONE) },
@@ -4609,11 +4711,14 @@ static const struct gen8_nonctxt_regs gen8_11_1_nonctxt_regs[] = {
 	{ GEN8_SP_CHICKEN_BITS_5, BIT(3), BIT(PIPE_NONE) },
 	/* GEN8_SP_NC_MODE_CNTL explicitly set elsewhere */
 	{ GEN8_SP_PERFCTR_SHADER_MASK, 0x0000003f, BIT(PIPE_NONE) },
+	{ GEN8_SP_HLSQ_DBG_ECO_CNTL, 0x04000000, BIT(PIPE_NONE) },
 	/* HLSQ ignores the shared constant feedback from SP:MAS */
 	{ GEN8_SP_HLSQ_DBG_ECO_CNTL_1, BIT(17), BIT(PIPE_NONE) },
+	/* Disable HLSQ large instruction async mode check */
+	{ GEN8_SP_HLSQ_DBG_ECO_CNTL_3, BIT(1), BIT(PIPE_NONE) },
 	{ GEN8_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080, BIT(PIPE_NONE) },
 	{ GEN8_SP_READ_SEL, 0x0001ff00, BIT(PIPE_NONE) },
-	{ GEN8_SP_L0_PERF_TUNE, 0x00000091, BIT(PIPE_NONE) },
+	{ GEN8_SP_L0_PERF_TUNE, 0x00000024, BIT(PIPE_NONE) },
 	/* BIT(20): Disable alpha only optimization in TP */
 	{ GEN8_TPL1_DBG_ECO_CNTL, 0x10100000, BIT(PIPE_NONE) },
 	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x00000720, BIT(PIPE_NONE) },
@@ -4633,7 +4738,7 @@ static const struct gen8_nonctxt_regs gen8_11_1_nonctxt_regs[] = {
 	{ GEN8_VFD_CB_BUSY_REQ_CNT, 0x00200020, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_VFD_CB_LP_REQ_CNT, 0x00080020, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_VPC_FLATSHADE_MODE_CNTL, 0x00000001, BIT(PIPE_BV) | BIT(PIPE_BR) },
-	{ GEN8_VSC_VISIBILITY_FLUSH_CNTL, 0x00100010, BIT(PIPE_NONE) },
+	{ GEN8_VSC_VISIBILITY_FLUSH_CNTL, 0x00080004, BIT(PIPE_NONE) },
 	{ 0 },
 };
 
@@ -4647,7 +4752,11 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_11_1 = {
 			ADRENO_GMU_THERMAL_MITIGATION | ADRENO_AQE | ADRENO_CONTENT_PROTECTION |
 			ADRENO_BCL | ADRENO_DCVS_PROFILE | ADRENO_IFPC | ADRENO_GMU_MINBW |
 			ADRENO_DEFER_GMEM_ALLOC | ADRENO_GMU_FAST_CONTEXT_DESTROY |
-			ADRENO_ACD | ADRENO_GMU_AB | ADRENO_HW_FENCE | ADRENO_GMU_SPEL,
+			ADRENO_ACD | ADRENO_GMU_AB | ADRENO_HW_FENCE | ADRENO_GMU_SPEL |
+			ADRENO_AHB_TIMEOUT_RECOVERY | ADRENO_FENCE_DEADLINE_BOOST |
+			ADRENO_TSENSE_DYNAMIC_PERIOD | ADRENO_GMU_THINMEM_CFG |
+			ADRENO_GMU_DYNAMIC_CTX_PRIORITY | ADRENO_ACD_AVG |
+			ADRENO_SYNX | ADRENO_QECP_DEBUGBUS,
 		.gpudev = &adreno_gen8_hwsched_gpudev.base,
 		.perfcounters = &adreno_gen8_2_x_perfcounters,
 		.uche_gmem_alignment = SZ_64M,
@@ -4662,8 +4771,8 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_11_1 = {
 	.zap_name = "gen81100_zap.mbn",
 	.ao_hwcg = gen8_2_0_ao_hwcg_regs,
 	.ao_hwcg_count = ARRAY_SIZE(gen8_2_0_ao_hwcg_regs),
-	.gbif = gen8_0_0_gbif_cx_regs,
-	.gbif_count = ARRAY_SIZE(gen8_0_0_gbif_cx_regs),
+	.gbif = gen8_11_0_gbif_cx_regs,
+	.gbif_count = ARRAY_SIZE(gen8_11_0_gbif_cx_regs),
 	.hang_detect_cycles = 0xcfffff,
 	.protected_regs = gen8_11_0_protected_regs,
 	.nonctxt_regs = gen8_11_1_nonctxt_regs,
@@ -4671,7 +4780,7 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_11_1 = {
 	.gmu_hub_clk_freq = 150000000,
 	.gen8_snapshot_block_list = &gen8_11_0_snapshot_block_list,
 	.fast_bus_hint = true,
-	.bcl_data = GEN8_2_X_BCL_DATA,
+	.bcl_data = BCL_DATA(1, 75, 54, 33),
 	.acv_perfmode_ddr_freq = MHZ_TO_KBPS(4224, 4),
 	.noc_timeout_us = 3410, /* 3.41 msec */
 	.cl_no_ft_timeout_ms = 6500,
@@ -4683,6 +4792,10 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_11_1 = {
 	.three_rail_memory = true,
 	.malu = true,
 	.clx_tbl = &gen8_11_0_clx_table,
+	.dynamic_bcl_lut = gen8_dynamic_bcl_lut,
+	.thinmem_cfg_data = 14,
+	.tdcvs_enable = 1,
+	.tdcvs_data = 0x410e1800,
 };
 
 static const struct gen8_nonctxt_regs gen8_14_0_nonctxt_regs[] = {
@@ -4695,12 +4808,16 @@ static const struct gen8_nonctxt_regs gen8_14_0_nonctxt_regs[] = {
 	{ GEN8_PC_AUTO_VERTEX_STRIDE, 0x00000001, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_VIS_STREAM_CNTL, 0x10010000, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_CONTEXT_SWITCH_STABILIZE_CNTL_1, 0x00000002, BIT(PIPE_BV) | BIT(PIPE_BR) },
-	{ GEN8_PC_CHICKEN_BITS_1, 0x00000003, BIT(PIPE_BV) | BIT(PIPE_BR) },
+	/* BIT(11): Disable skipIdx to avoid PDMA hang with restart-index draws */
+	{ GEN8_PC_CHICKEN_BITS_1, 0x00000803, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_CHICKEN_BITS_2, 0x00000200, BIT(PIPE_BV) | BIT(PIPE_BR) },
-	{ GEN8_PC_CHICKEN_BITS_3, 0x00500000, BIT(PIPE_BV) | BIT(PIPE_BR) },
+	{ GEN8_PC_CHICKEN_BITS_3, 0x00400000, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_PC_CHICKEN_BITS_4, 0x00500050, BIT(PIPE_BV) | BIT(PIPE_BR) },
-	/* Disable GS Quad primitive */
-	{ GEN8_PC_CHICKEN_BITS_5, BIT(28), BIT(PIPE_BV) | BIT(PIPE_BR) },
+	/*
+	 * BIT(28): Disable GS Quad primitive
+	 * BIT(30): Disable skipIdx to avoid PDMA hang with restart-index draws
+	 */
+	{ GEN8_PC_CHICKEN_BITS_5, BIT(28) | BIT(30), BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_RB_CCU_CNTL, 0x00000068, BIT(PIPE_BR) },
 	/*
 	 * BIT(10): Disable sysmem nonfclear feature
@@ -4721,6 +4838,8 @@ static const struct gen8_nonctxt_regs gen8_14_0_nonctxt_regs[] = {
 	{ GEN8_RB_CMP_DBG_ECO_CNTL, 0x00004000, BIT(PIPE_BR) },
 	{ GEN8_RBBM_NC_MODE_CNTL, 0x00000001, BIT(PIPE_NONE) },
 	{ GEN8_RBBM_SLICE_NC_MODE_CNTL, 0x00000001, BIT(PIPE_NONE) },
+	/* Enable RB BAC strobes */
+	{ GEN8_RBBM_SLICE_PERFCTR_CNTL, BIT(0), BIT(PIPE_NONE) },
 	{ GEN8_RBBM_POWER_UP_RESET_SW_OVERRIDE, 0x70809060, BIT(PIPE_NONE) },
 	{ GEN8_RBBM_POWER_UP_RESET_SW_BV_OVERRIDE, 0x30000000, BIT(PIPE_NONE) },
 	{ GEN8_RBBM_WAIT_IDLE_CLOCKS_CNTL, 0x00000030, BIT(PIPE_NONE) },
@@ -4736,11 +4855,14 @@ static const struct gen8_nonctxt_regs gen8_14_0_nonctxt_regs[] = {
 	{ GEN8_SP_CHICKEN_BITS_5, BIT(3), BIT(PIPE_NONE) },
 	/* GEN8_SP_NC_MODE_CNTL explicitly set elsewhere */
 	{ GEN8_SP_PERFCTR_SHADER_MASK, 0x0000003f, BIT(PIPE_NONE) },
+	{ GEN8_SP_HLSQ_DBG_ECO_CNTL, 0x04000000, BIT(PIPE_NONE) },
 	/* HLSQ ignores the shared constant feedback from SP:MAS */
 	{ GEN8_SP_HLSQ_DBG_ECO_CNTL_1, BIT(17), BIT(PIPE_NONE) },
+	/* Disable HLSQ large instruction async mode check */
+	{ GEN8_SP_HLSQ_DBG_ECO_CNTL_3, BIT(1), BIT(PIPE_NONE) },
 	{ GEN8_SP_HLSQ_TIMEOUT_THRESHOLD_DP, 0x00000080, BIT(PIPE_NONE) },
 	{ GEN8_SP_READ_SEL, 0x0001ff00, BIT(PIPE_NONE) },
-	{ GEN8_SP_L0_PERF_TUNE, 0x00000091, BIT(PIPE_NONE) },
+	{ GEN8_SP_L0_PERF_TUNE, 0x00000024, BIT(PIPE_NONE) },
 	/* BIT(20): Disable alpha only optimization in TP */
 	{ GEN8_TPL1_DBG_ECO_CNTL, 0x10100000, BIT(PIPE_NONE) },
 	{ GEN8_TPL1_DBG_ECO_CNTL1, 0x00000720, BIT(PIPE_NONE) },
@@ -4760,7 +4882,7 @@ static const struct gen8_nonctxt_regs gen8_14_0_nonctxt_regs[] = {
 	{ GEN8_VFD_CB_BUSY_REQ_CNT, 0x00200020, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_VFD_CB_LP_REQ_CNT, 0x00080020, BIT(PIPE_BV) | BIT(PIPE_BR) },
 	{ GEN8_VPC_FLATSHADE_MODE_CNTL, 0x00000001, BIT(PIPE_BV) | BIT(PIPE_BR) },
-	{ GEN8_VSC_VISIBILITY_FLUSH_CNTL, 0x00100010, BIT(PIPE_NONE) },
+	{ GEN8_VSC_VISIBILITY_FLUSH_CNTL, 0x00080004, BIT(PIPE_NONE) },
 	{ 0 },
 };
 
@@ -4770,11 +4892,14 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_14_0 = {
 				UINT_MAX, UINT_MAX, UINT_MAX, ANY_ID),
 		.compatible = "qcom,adreno-gpu-gen8-14-0",
 		.features = ADRENO_APRIV | ADRENO_IOCOHERENT | ADRENO_LPAC | ADRENO_PREEMPTION |
-			ADRENO_GMU_WARMBOOT | ADRENO_GMU_BASED_DCVS |
+			ADRENO_GMU_WARMBOOT | ADRENO_GMU_BASED_DCVS | ADRENO_BCL |
 			ADRENO_GMU_THERMAL_MITIGATION | ADRENO_AQE | ADRENO_CONTENT_PROTECTION |
 			ADRENO_DCVS_PROFILE | ADRENO_IFPC | ADRENO_GMU_MINBW |
 			ADRENO_DEFER_GMEM_ALLOC | ADRENO_GMU_FAST_CONTEXT_DESTROY |
-			ADRENO_GMU_AB | ADRENO_HW_FENCE,
+			ADRENO_GMU_AB | ADRENO_HW_FENCE | ADRENO_AHB_TIMEOUT_RECOVERY |
+			ADRENO_GMU_THINMEM_CFG | ADRENO_FENCE_DEADLINE_BOOST |
+			ADRENO_TSENSE_DYNAMIC_PERIOD | ADRENO_GMU_DYNAMIC_CTX_PRIORITY |
+			ADRENO_ACD | ADRENO_CLX | ADRENO_SYNX | ADRENO_GMU_SPEL,
 		.gpudev = &adreno_gen8_hwsched_gpudev.base,
 		.perfcounters = &adreno_gen8_2_x_perfcounters,
 		.uche_gmem_alignment = SZ_64M,
@@ -4789,8 +4914,8 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_14_0 = {
 	.zap_name = "gen81100_zap.mbn",
 	.ao_hwcg = gen8_2_0_ao_hwcg_regs,
 	.ao_hwcg_count = ARRAY_SIZE(gen8_2_0_ao_hwcg_regs),
-	.gbif = gen8_0_0_gbif_cx_regs,
-	.gbif_count = ARRAY_SIZE(gen8_0_0_gbif_cx_regs),
+	.gbif = gen8_11_0_gbif_cx_regs,
+	.gbif_count = ARRAY_SIZE(gen8_11_0_gbif_cx_regs),
 	.hang_detect_cycles = 0xcfffff,
 	.protected_regs = gen8_11_0_protected_regs,
 	.nonctxt_regs = gen8_14_0_nonctxt_regs,
@@ -4798,16 +4923,22 @@ static const struct adreno_gen8_core adreno_gpu_core_gen8_14_0 = {
 	.gmu_hub_clk_freq = 150000000,
 	.gen8_snapshot_block_list = &gen8_11_0_snapshot_block_list,
 	.fast_bus_hint = true,
+	.bcl_data = BCL_DATA(1, 75, 54, 33),
 	.acv_perfmode_ddr_freq = MHZ_TO_KBPS(4224, 4),
 	.noc_timeout_us = 3410, /* 3.41 msec */
 	.cl_no_ft_timeout_ms = 6500,
-	.ctxt_record_size = (19708 * SZ_1K),
-	.therm_cfg = &therm_mit_cfg_8_11_0,
+	.ctxt_record_size = (13564 * SZ_1K),
+	.therm_cfg = &therm_mit_cfg_8_14_0,
 	.limits_mit_cfg = &gen8_11_0_limits_mit_cfg,
-	.preempt_level = 0,
+	.preempt_level = 1,
 	.gmu_mx_gdsc = true,
 	.three_rail_memory = true,
 	.malu = false,
+	.thinmem_cfg_data = 14,
+	.dynamic_bcl_lut = gen8_dynamic_bcl_lut,
+	.clx_tbl = &gen8_14_0_clx_table,
+	.tdcvs_enable = 1,
+	.tdcvs_data = 0x410e1800,
 };
 
 static const struct adreno_gen8_core adreno_gpu_core_gen8_17_0 = {

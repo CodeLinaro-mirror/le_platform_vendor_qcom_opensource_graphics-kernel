@@ -854,6 +854,252 @@ static void init_sp_profiling_config(struct adreno_device *adreno_dev)
 	sp_profiling->dbg_buf = NULL;
 }
 
+struct acd_avg_data_config {
+	u32 acd_avg_data[KGSL_MAX_ACD_AVG_STRIDE];
+	u32 lvl;
+	bool lvl_specific;
+	bool enable;
+};
+
+static int acd_avg_en_show(void *data, u64 *val)
+{
+	struct kgsl_device *device = data;
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+
+	*val = (u64)adreno_dev->acd_avg_enabled;
+	return 0;
+}
+
+static int acd_avg_en_store(void *data, u64 val)
+{
+	struct kgsl_device *device = data;
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+
+	if (val == adreno_dev->acd_avg_enabled)
+		return 0;
+
+	return adreno_power_cycle_bool(adreno_dev, &adreno_dev->acd_avg_enabled, val);
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(acd_avg_en_fops, acd_avg_en_show, acd_avg_en_store, "%llu\n");
+
+static int acd_avg_en_by_lvl_show(void *data, u64 *val)
+{
+	struct kgsl_device *device = data;
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	struct kgsl_pwrlevel *pwrlevel = &pwr->pwrlevels[pwr->num_pwrlevels - 1];
+	int i;
+
+	/* Ensure that the enable info for all power levels can be represented */
+	if (pwr->num_pwrlevels >= (sizeof(*val) * __CHAR_BIT__))
+		return -EINVAL;
+
+	/*
+	 * Power levels are reversed since lower enable bits correspond to lower frequencies
+	 * Enable bit 0 is reserved for the 0 frequency
+	 */
+	*val = 0;
+	for (i = 0; i < pwr->num_pwrlevels; i++) {
+		if (pwr->acd_avg_global_override || pwrlevel->acd_avg_level_enable)
+			*val |= BIT_ULL(i + 1);
+
+		pwrlevel--;
+	}
+
+	return 0;
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(acd_avg_en_by_lvl_fops, acd_avg_en_by_lvl_show, NULL, "0x%llx\n");
+
+static int acd_avg_get_node_pwrlevel(struct file *file, struct acd_avg_data_config *config)
+{
+	const struct dentry *node_dir = file->f_path.dentry;
+	const char *node_name = node_dir->d_name.name;
+
+	if (sscanf(node_name, "pwrlevel-%u", &config->lvl) == 1) {
+		config->lvl_specific = true;
+		return 0;
+	}
+
+	if (!strcmp(node_name, "pwrlevel-all")) {
+		config->lvl_specific = false;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static void acd_avg_config_set(struct adreno_device *adreno_dev, void *priv)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	struct acd_avg_data_config *config = (struct acd_avg_data_config *)priv;
+
+	if (config->lvl_specific) {
+		pwr->pwrlevels[config->lvl].acd_avg_level_enable = config->enable;
+		memcpy(pwr->pwrlevels[config->lvl].acd_avg_data, config->acd_avg_data,
+			sizeof(pwr->pwrlevels[config->lvl].acd_avg_data));
+	} else {
+		pwr->acd_avg_global_override = config->enable;
+		memcpy(pwr->acd_avg_global_data, config->acd_avg_data,
+			sizeof(pwr->acd_avg_global_data));
+	}
+}
+
+static ssize_t acd_avg_pwrlevel_store(struct file *file,
+		const char __user *user_buf, size_t len, loff_t *off)
+{
+	struct kgsl_device *device = (struct kgsl_device *)file->private_data;
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	char *buf, *trimmed;
+	struct acd_avg_data_config config = {0};
+	u32 data;
+	int ret, num_chars, dword = 0;
+
+	if ((len >= PAGE_SIZE) || (len == 0))
+		return -EINVAL;
+
+	buf = kzalloc(len + 1, GFP_KERNEL);
+	if (buf == NULL)
+		return -ENOMEM;
+
+	if (copy_from_user(buf, user_buf, len)) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	/* For sanity and parsing, ensure the input is null terminated */
+	buf[len] = '\0';
+
+	/* Determine whether to adjust global or level-specific data */
+	ret = acd_avg_get_node_pwrlevel(file, &config);
+	if (ret)
+		goto out;
+
+	if (config.lvl_specific && (config.lvl >= pwr->num_pwrlevels)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* If no config was provided, turn off ACD AVG for the pwrlevel */
+	trimmed = strim(buf);
+	if (!strlen(trimmed))
+		goto config;
+
+	/* Parse hex dwords until we hit the max for an ACD AVG config */
+	while (sscanf(trimmed, "0x%x %n", &data, &num_chars) == 1) {
+		config.acd_avg_data[dword++] = data;
+		trimmed += num_chars;
+		if (dword >= ARRAY_SIZE(config.acd_avg_data))
+			break;
+	}
+
+	/* Reject input data that cannot be parsed */
+	if (strlen(trimmed)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	config.enable = true;
+
+config:
+	/* Set the global or level-specific configuration */
+	ret = adreno_power_cycle(adreno_dev, acd_avg_config_set, &config);
+
+out:
+	if (!ret)
+		ret = len;
+
+	kfree(buf);
+	return ret;
+}
+
+static ssize_t acd_avg_pwrlevel_read(struct file *file,
+		char __user *user_buf, size_t len, loff_t *ppos)
+{
+	struct kgsl_device *device = (struct kgsl_device *)file->private_data;
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	struct acd_avg_data_config config = {0};
+	char *buf;
+	int ret, i, max_size = PAGE_SIZE, num_chars = 0;
+
+	buf = kzalloc(max_size, GFP_KERNEL);
+	if (buf == NULL)
+		return -ENOMEM;
+
+	/* Source global vs level-specific data */
+	ret = acd_avg_get_node_pwrlevel(file, &config);
+	if (ret)
+		goto out;
+
+	if (config.lvl_specific && (config.lvl >= pwr->num_pwrlevels)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	if (config.lvl_specific && !pwr->acd_avg_global_override) {
+		memcpy(config.acd_avg_data, pwr->pwrlevels[config.lvl].acd_avg_data,
+			sizeof(config.acd_avg_data));
+		config.enable = pwr->pwrlevels[config.lvl].acd_avg_level_enable;
+	} else {
+		memcpy(config.acd_avg_data, pwr->acd_avg_global_data,
+			sizeof(config.acd_avg_data));
+		config.enable = pwr->acd_avg_global_override;
+	}
+
+	/* Only show data when enabled */
+	if (!config.enable) {
+		num_chars += scnprintf(buf + num_chars, max_size - num_chars, "disabled\n");
+		goto read;
+	}
+
+	/* Indicate if level data has been overridden */
+	if (config.lvl_specific && pwr->acd_avg_global_override) {
+		num_chars += scnprintf(buf + num_chars, max_size - num_chars,
+				"global override - ");
+	}
+	for (i = 0; i < ARRAY_SIZE(config.acd_avg_data); i++) {
+		num_chars += scnprintf(buf + num_chars, max_size - num_chars,
+				"0x%08x ", config.acd_avg_data[i]);
+	}
+	num_chars += scnprintf(buf + num_chars, max_size - num_chars, "\n");
+
+read:
+	ret = simple_read_from_buffer(user_buf, len, ppos, buf, num_chars);
+
+out:
+	kfree(buf);
+	return ret;
+}
+
+static const struct file_operations acd_avg_pwrlevel_fops = {
+	.owner = THIS_MODULE,
+	.open = simple_open,
+	.read = acd_avg_pwrlevel_read,
+	.write = acd_avg_pwrlevel_store,
+	.llseek = default_llseek,
+};
+
+static void debugfs_create_acd_avg_pwrlevel_files(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+	char name[32];
+	int i;
+
+	/* Global override */
+	debugfs_create_file("pwrlevel-all", 0644, adreno_dev->acd_avg_debugfs_dir,
+				device, &acd_avg_pwrlevel_fops);
+
+	/* Individual pwrlevel configs */
+	for (i = 0; i < pwr->num_pwrlevels; i++) {
+		snprintf(name, sizeof(name), "pwrlevel-%d", i);
+		debugfs_create_file(name, 0644, adreno_dev->acd_avg_debugfs_dir, device,
+					&acd_avg_pwrlevel_fops);
+	}
+}
+
 static int _warmboot_show(void *data, u64 *val)
 {
 	struct adreno_device *adreno_dev = data;
@@ -1132,8 +1378,8 @@ static int spel_config_show(struct seq_file *s, void *unused)
 
 	raw = spel->config[2];
 	seq_printf(s, "RAW[2] = 0x%08x\n", raw);
-	seq_printf(s, "    reserved_2                = 0x%lx\n",
-		FIELD_GET(GMU_PWR_BUDGET_RESERVED_2, raw));
+	seq_printf(s, "    num_samples_2             = %lu\n",
+		FIELD_GET(GMU_PWR_BUDGET_NUM_SAMPLES_2, raw));
 	seq_printf(s, "    cdyn_accum_config_0       = %lu\n",
 		FIELD_GET(GMU_PWR_BUDGET_CDYN_ACCUM_CONFIG_0, raw));
 	seq_printf(s, "    cdyn_hist_alpha           = %lu\n",
@@ -1148,6 +1394,20 @@ static int spel_config_show(struct seq_file *s, void *unused)
 	seq_printf(s, "RAW[3] = 0x%08x\n", raw);
 	seq_printf(s, "    reserved_3                = 0x%lx\n",
 		FIELD_GET(GMU_PWR_BUDGET_RESERVED_3, raw));
+	seq_printf(s, "    use_static_cdyn_bp        = %lu\n",
+		FIELD_GET(GMU_PWR_BUDGET_USE_STATIC_CDYN_BP, raw));
+	seq_printf(s, "    sys_fw_vote_enforce       = %lu\n",
+		FIELD_GET(GMU_PWR_BUDGET_SYS_FW_VOTE_ENFORCE, raw));
+	seq_printf(s, "    skip_delayed_gx_vote      = %lu\n",
+		FIELD_GET(GMU_PWR_BUDGET_SKIP_DELAYED_GX_VOTE, raw));
+	seq_printf(s, "    pwr_limits_mode_val       = %lu\n",
+		FIELD_GET(GMU_PWR_BUDGET_PWR_LIMITS_MODE_VAL, raw));
+	seq_printf(s, "    pwr_limits_mode_en        = %lu\n",
+		FIELD_GET(GMU_PWR_BUDGET_PWR_LIMITS_MODE_EN, raw));
+	seq_printf(s, "    forced_time_const_mul_2   = %lu\n",
+		FIELD_GET(GMU_PWR_BUDGET_FORCED_TIME_CONST_MUL_2, raw));
+	seq_printf(s, "    forced_time_const_mul_1   = %lu\n",
+		FIELD_GET(GMU_PWR_BUDGET_FORCED_TIME_CONST_MUL_1, raw));
 	seq_puts(s, "\n");
 
 	raw = spel->config[4];
@@ -1183,6 +1443,31 @@ static const struct file_operations spel_config_fops = {
 	.llseek = seq_lseek,
 	.release = single_release,
 };
+
+static int spel_en_show(void *data, u64 *val)
+{
+	struct kgsl_device *device = data;
+	struct gmu_core_device *gmu = &device->gmu_core;
+	struct kgsl_gmu_spel *spel = &gmu->spel;
+
+	*val = (u64)spel->enabled;
+	return 0;
+}
+
+static int spel_en_store(void *data, u64 val)
+{
+	struct kgsl_device *device = data;
+	struct gmu_core_device *gmu = &device->gmu_core;
+	struct kgsl_gmu_spel *spel = &gmu->spel;
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+
+	if (val == spel->enabled)
+		return 0;
+
+	return adreno_power_cycle_bool(adreno_dev, &spel->enabled, val);
+}
+
+DEFINE_DEBUGFS_ATTRIBUTE(spel_en_fops, spel_en_show, spel_en_store, "%llu\n");
 
 static int _ifpc_hyst_store(void *data, u64 val)
 {
@@ -1410,6 +1695,25 @@ static int _host_based_dcvs_store(void *data, u64 val)
 DEFINE_DEBUGFS_ATTRIBUTE(host_based_dcvs_fops, _host_based_dcvs_show,
 				_host_based_dcvs_store, "%llu\n");
 
+static int _fence_deadline_boost_show(void *data, u64 *val)
+{
+	struct kgsl_device *device = data;
+
+	*val = (u64)device->fence_deadline_boost;
+	return 0;
+}
+
+static int _fence_deadline_boost_store(void *data, u64 val)
+{
+	struct kgsl_device *device = data;
+
+	device->fence_deadline_boost = val ? true : false;
+
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(fence_deadline_boost_fops, _fence_deadline_boost_show,
+				_fence_deadline_boost_store, "%llu\n");
+
 static int _gpu_voltage_show(struct seq_file *s, void *unused)
 {
 	struct kgsl_device *device = s->private;
@@ -1488,6 +1792,76 @@ static const struct file_operations gpu_voltage_fops = {
 	.open = _gpu_voltage_open,
 	.read = seq_read,
 	.write = _gpu_voltage_write,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+struct tdcvs_config {
+	u32 enable;
+	u32 data;
+};
+
+static void set_tdcvs(struct adreno_device *adreno_dev, void *priv)
+{
+	struct tdcvs_config *config = (struct tdcvs_config *)priv;
+
+	adreno_dev->tdcvs_enable = config->enable;
+	adreno_dev->tdcvs_data = config->data;
+}
+
+static ssize_t _tdcvs_write(struct file *file, const char __user *user_buf,
+		size_t count, loff_t *ppos)
+{
+	struct seq_file *s = file->private_data;
+	struct kgsl_device *device = s->private;
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	int ret;
+	char buf[64];
+	struct tdcvs_config config;
+
+	if (count >= sizeof(buf))
+		return -EINVAL;
+
+	if (copy_from_user(buf, user_buf, count))
+		return -EFAULT;
+
+	buf[count] = 0;
+
+	ret = sscanf(buf, "%x %x", &config.enable, &config.data);
+	if (ret != 2)
+		return -EINVAL;
+
+	/* Config remains the same. No reason to power cycle */
+	if ((config.enable == adreno_dev->tdcvs_enable) && (config.data == adreno_dev->tdcvs_data))
+		goto out;
+
+	ret = adreno_power_cycle(adreno_dev, set_tdcvs, &config);
+	if (ret)
+		return ret;
+
+out:
+	return count;
+}
+
+static int _tdcvs_show(struct seq_file *s, void *unused)
+{
+	struct kgsl_device *device = s->private;
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+
+	seq_printf(s, "0x%x 0x%x\n", adreno_dev->tdcvs_enable, adreno_dev->tdcvs_data);
+	return 0;
+}
+
+static int _tdcvs_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, _tdcvs_show, inode->i_private);
+}
+
+static const struct file_operations tdcvs_fops = {
+	.owner = THIS_MODULE,
+	.open = _tdcvs_open,
+	.read = seq_read,
+	.write = _tdcvs_write,
 	.llseek = seq_lseek,
 	.release = single_release,
 };
@@ -1583,6 +1957,17 @@ void adreno_debugfs_init(struct adreno_device *adreno_dev)
 			&sp_profiling_buf_fops);
 	}
 
+	if (adreno_is_acd_avg_feature_set(adreno_dev)) {
+		adreno_dev->acd_avg_debugfs_dir = debugfs_create_dir("acd_avg", device->d_debugfs);
+		if (!IS_ERR_OR_NULL(adreno_dev->acd_avg_debugfs_dir)) {
+			debugfs_create_file("enable", 0644,
+				adreno_dev->acd_avg_debugfs_dir, device, &acd_avg_en_fops);
+			debugfs_create_file("enable_by_level", 0444,
+				adreno_dev->acd_avg_debugfs_dir, device, &acd_avg_en_by_lvl_fops);
+			debugfs_create_acd_avg_pwrlevel_files(adreno_dev);
+		}
+	}
+
 	device->gmu_core.gmu_debugfs_dir = debugfs_create_dir("gmu", device->d_debugfs);
 	if (!IS_ERR_OR_NULL(device->gmu_core.gmu_debugfs_dir)) {
 		debugfs_create_file("gmuclk", 0444, device->gmu_core.gmu_debugfs_dir, device,
@@ -1610,14 +1995,25 @@ void adreno_debugfs_init(struct adreno_device *adreno_dev)
 		debugfs_create_file("gmu_pwr_trace_trigger", 0644, device->gmu_core.gmu_debugfs_dir,
 			device, &gmu_pwr_trace_trigger_fops);
 
-		if (ADRENO_FEATURE(adreno_dev, ADRENO_GMU_SPEL))
+		if (ADRENO_FEATURE(adreno_dev, ADRENO_GMU_SPEL)) {
 			debugfs_create_file("spel_config", 0644, device->gmu_core.gmu_debugfs_dir,
 				device, &spel_config_fops);
+			debugfs_create_file("spel_enable", 0644,
+				device->gmu_core.gmu_debugfs_dir, device, &spel_en_fops);
+		}
 	}
 
-	if (ADRENO_FEATURE(adreno_dev, ADRENO_GMU_BASED_DCVS))
+	if (ADRENO_FEATURE(adreno_dev, ADRENO_GMU_BASED_DCVS)) {
 		debugfs_create_file("host_based_dcvs", 0644, device->d_debugfs,
 				device, &host_based_dcvs_fops);
+		if (ADRENO_FEATURE(adreno_dev, ADRENO_FENCE_DEADLINE_BOOST))
+			debugfs_create_file("fence_deadline_boost", 0644, device->d_debugfs,
+					device, &fence_deadline_boost_fops);
+	}
+
+	if (ADRENO_FEATURE(adreno_dev, ADRENO_TDCVS))
+		debugfs_create_file("tdcvs", 0644, device->d_debugfs,
+				device, &tdcvs_fops);
 
 	debugfs_create_file("gpu_voltage", 0644, device->d_debugfs,
 			device, &gpu_voltage_fops);

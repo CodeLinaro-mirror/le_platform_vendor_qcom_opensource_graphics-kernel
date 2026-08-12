@@ -160,6 +160,13 @@ struct gen8_thermal_mit_cfg {
 	const struct therm_tsens_en_cfg *tsens_en_cfg;
 };
 
+struct gen8_dynamic_bcl_entry {
+	/** @percentage_power_drop: Expected power drop in percentage */
+	u32 percentage_power_drop;
+	/** @percentage_clock_throttle: Expected clock rate in percentage */
+	u32 percentage_clock_throttle;
+};
+
 /**
  * struct adreno_gen8_core - gen8 specific GPU core definitions
  */
@@ -233,6 +240,14 @@ struct adreno_gen8_core {
 	bool three_rail_memory;
 	/** @malu: This target has MALU */
 	bool malu;
+	/** @dynamic_bcl_lut: Lookup table for bcl throttling */
+	const struct gen8_dynamic_bcl_entry *dynamic_bcl_lut;
+	/** @thinmem_cfg_data: Data to enable the thinmem_cfg feature */
+	u32 thinmem_cfg_data;
+	/** @tdcvs_enable: Default TDCVS enable value */
+	u32 tdcvs_enable;
+	/** @tdcvs_data: Default TDCVS data value */
+	u32 tdcvs_data;
 };
 
 /**
@@ -833,5 +848,24 @@ static inline void gen8_populate_ctxt_record_size(struct adreno_device *adreno_d
  * depending on the target, may involve reading some GPU registers.
  */
 void gen8_setup_adreno_props(struct adreno_device *adreno_dev);
+
+/**
+ * gen8_setup_qecp_debugbus - Send debugbus data to QECP for secure capture
+ * @adreno_dev: Handle to the adreno device
+ *
+ * This function sends the CX and GX debugbus list of blocks and sizes to QECP
+ * to capture when secure debugbus capture is triggered.
+ */
+void gen8_setup_qecp_debugbus(struct adreno_device *adreno_dev);
+
+/**
+ * gen8_try_setup_qecp_debugbus - Send debugbus data to QECP for secure capture, upto a retry limit
+ * @adreno_dev: Handle to the adreno device
+ *
+ * This function sends the CX and GX debugbus list of blocks and sizes to QECP
+ * to capture when secure debugbus capture is triggered. This honours the adreno device's QECP
+ * setup retry limit.
+ */
+void gen8_try_setup_qecp_debugbus(struct adreno_device *adreno_dev);
 
 #endif

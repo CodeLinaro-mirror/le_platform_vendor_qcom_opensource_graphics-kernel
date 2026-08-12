@@ -58,11 +58,21 @@
 #define KGSL_CONTEXT_NO_SNAPSHOT        0x00040000
 #define KGSL_CONTEXT_SPARSE             0x00080000
 
-#define KGSL_CONTEXT_PREEMPT_STYLE_MASK       0x0E000000
-#define KGSL_CONTEXT_PREEMPT_STYLE_SHIFT      25
-#define KGSL_CONTEXT_PREEMPT_STYLE_DEFAULT    0x0
-#define KGSL_CONTEXT_PREEMPT_STYLE_RINGBUFFER 0x1
-#define KGSL_CONTEXT_PREEMPT_STYLE_FINEGRAIN  0x2
+#define KGSL_CONTEXT_A5XX_PREEMPT_STYLE_MASK       0x0E000000
+#define KGSL_CONTEXT_A5XX_PREEMPT_STYLE_SHIFT      25
+#define KGSL_CONTEXT_A5XX_PREEMPT_STYLE_DEFAULT    0x0
+#define KGSL_CONTEXT_A5XX_PREEMPT_STYLE_RINGBUFFER 0x1
+#define KGSL_CONTEXT_A5XX_PREEMPT_STYLE_FINEGRAIN  0x2
+#define KGSL_CONTEXT_A5XX_PREEMPT_STYLE_UNUSED     0x4
+
+/*
+ * For non-a5xx targets, these bits are re-purposed to specify if this
+ * context submits work to cores other than just the GPU
+ */
+#define KGSL_CONTEXT_FOREIGN_NPU (KGSL_CONTEXT_A5XX_PREEMPT_STYLE_FINEGRAIN \
+	<< KGSL_CONTEXT_A5XX_PREEMPT_STYLE_SHIFT)
+#define KGSL_CONTEXT_FOREIGN_GPU (KGSL_CONTEXT_A5XX_PREEMPT_STYLE_UNUSED \
+	<< KGSL_CONTEXT_A5XX_PREEMPT_STYLE_SHIFT)
 
 #define KGSL_CONTEXT_TYPE_MASK          0x01F00000
 #define KGSL_CONTEXT_TYPE_SHIFT         20
@@ -77,6 +87,7 @@
 #define KGSL_CONTEXT_INVALIDATE_ON_FAULT 0x10000000
 #define KGSL_CONTEXT_LPAC 0x20000000
 #define KGSL_CONTEXT_FAULT_INFO	  0x40000000
+#define KGSL_CONTEXT_FAULT_SNAPSHOT	0x80000000
 
 #define KGSL_CONTEXT_INVALID 0xffffffff
 
@@ -160,6 +171,11 @@
 #define KGSL_MEMFLAGS_GUARD_PAGE      (1ULL << 33)
 #define KGSL_MEMFLAGS_VBO             (1ULL << 34)
 #define KGSL_MEMFLAGS_VBO_NO_MAP_ZERO (1ULL << 35)
+
+/* Number of pages to use in the allocation's unmapped guard regions */
+#define KGSL_MEMFLAGS_UNMAPPED_GUARD_PAGES_SHIFT 36
+#define KGSL_MEMFLAGS_UNMAPPED_GUARD_PAGES_MASK \
+	(0xFULL << KGSL_MEMFLAGS_UNMAPPED_GUARD_PAGES_SHIFT)
 
 /* Memory types for which allocations are made */
 #define KGSL_MEMTYPE_MASK		0x0000FF00
@@ -367,6 +383,8 @@ enum kgsl_timestamp_type {
 #define KGSL_PROP_VIZ_FLUSH_DRAW_COUNT	0x35
 #define KGSL_PROP_VIZ_FLUSH_PRIM_COUNT	0x36
 #define KGSL_PROP_SW_CALIBRATED_TIMER	0x37
+#define KGSL_PROP_IS_MALU_ENABLED	0x38
+#define KGSL_PROP_MIN_CONTEXT_PRIORITY	0x39
 
 /*
  * kgsl_capabilities_properties returns a list of supported properties.
@@ -2042,9 +2060,10 @@ struct kgsl_gpu_aux_command_timeline {
 /* Macros for fault type used in kgsl_fault structure */
 #define KGSL_FAULT_TYPE_NO_FAULT    0
 #define KGSL_FAULT_TYPE_PAGEFAULT   1
-#define KGSL_FAULT_TYPE_MAX         2
+#define KGSL_FAULT_TYPE_GPU_FAULT   2
+#define KGSL_FAULT_TYPE_MAX         3
 
-/* Macros to be used in kgsl_pagefault_report structure */
+/* Macros for fault_type used in kgsl_fault_entry structure */
 #define KGSL_PAGEFAULT_TYPE_NONE                  0
 #define KGSL_PAGEFAULT_TYPE_READ                  (1 << 0)
 #define KGSL_PAGEFAULT_TYPE_WRITE                 (1 << 1)
@@ -2053,15 +2072,20 @@ struct kgsl_gpu_aux_command_timeline {
 #define KGSL_PAGEFAULT_TYPE_EXTERNAL              (1 << 4)
 #define KGSL_PAGEFAULT_TYPE_TRANSACTION_STALLED   (1 << 5)
 
+/* Macros for kgsl_fault_report flag */
+#define KGSL_FAULT_REPORT_FLAG_NONE               0
+#define KGSL_FAULT_REPORT_FLAG_INVALID_CTXT       (1 << 0)
+#define KGSL_FAULT_REPORT_FLAG_OVERFLOW           (1 << 1)
+
 /**
- * struct kgsl_pagefault_report - Descriptor for each page fault
- * @fault_addr: page fault address
- * @fault_type: type of page fault
+ * struct kgsl_fault_entry - Descriptor for each fault
+ * @fault_addr: Fault address
+ * @fault_type: type of fault
  *
- * Contains information about supported GPU page fault.
+ * Contains information about supported fault.
  * Supported fault type: KGSL_PAGEFAULT_TYPE_*
  */
-struct kgsl_pagefault_report {
+struct kgsl_fault_entry {
 	__u64 fault_addr;
 	/* private: reserved for future use */
 	__u64 reserved[2];
@@ -2100,7 +2124,9 @@ struct kgsl_fault {
  * KGSL_FAULT_TYPE_*
  * @faultsize: Size of each entry in @faultlist in bytes
  * @context_id: ID of a KGSL context
- *
+ * @snapshot_size: Size of the captured snpashot due to fault
+ * @snapshot_addr: User memory pointer to snapshot buffer
+ * @flag: Set to any of the KGSL_FAULT_REPORT_FLAG_* macro
  * Returns a list of GPU faults for a context identified by @context_id. If the user specifies
  * @context_id only, then KGSL will set the @faultnents to the number of fault types it has
  * for that context.
@@ -2116,6 +2142,9 @@ struct kgsl_fault_report {
 	__u32 faultnents;
 	__u32 faultsize;
 	__u32 context_id;
+	__u32 snapshot_size;
+	__u64 snapshot_addr;
+	__u32 flag;
 	/* private: padding for 64 bit compatibility */
 	__u32 padding;
 };

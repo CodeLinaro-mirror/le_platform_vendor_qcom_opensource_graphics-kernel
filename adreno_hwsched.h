@@ -52,6 +52,8 @@ struct adreno_hwsched_hw_fence {
 	struct kgsl_memdesc md;
 	/** @pending_count: Number of hardware fences that haven't yet been sent to Tx Queue */
 	u32 pending_count;
+	/** @synx_md: Kgsl memory descriptor for synx shared memory */
+	struct kgsl_memdesc synx_md;
 };
 
 /**
@@ -98,6 +100,15 @@ struct adreno_hwsched_ops {
 	 */
 	int (*set_dcvs_profile)(struct adreno_device *adreno_dev,
 		struct kgsl_process_private *proc_priv);
+	/**
+	 * @notify_deadline_boost: Send missed deadline hint to GMU for supported targets
+	 */
+	void (*notify_deadline_boost)(struct adreno_device *adreno_dev, u32 ctx_id);
+	/**
+	 * @context_priority_update - Target specific function to send priority update HFI
+	 */
+	int (*context_priority_update)(struct adreno_device *adreno_dev,
+		struct kgsl_context *context, u32 new_ctx_pri);
 };
 
 enum gpu_reset_type {
@@ -122,15 +133,19 @@ struct adreno_hwsched {
 	/** @mem_alloc_entries: Number of entries in the memory allocation table */
 	u32 mem_alloc_entries;
 	/** @mutex: Mutex needed to run dispatcher function */
+#if IS_ENABLED(CONFIG_QCOM_KGSL_RT_MUTEX)
+	struct rt_mutex mutex;
+#else
 	struct mutex mutex;
+#endif
 	/** @flags: Container for the dispatcher internal flags */
 	unsigned long flags;
 	/** @inflight: Number of active submissions to the dispatch queues */
 	u32 inflight;
 	/** @jobs - Array of dispatch job lists for each priority level */
-	struct llist_head jobs[16];
+	struct llist_head jobs[KGSL_CONTEXT_PRIORITY_NUM];
 	/** @requeue - Array of lists for dispatch jobs that got requeued */
-	struct llist_head requeue[16];
+	struct llist_head requeue[KGSL_CONTEXT_PRIORITY_NUM];
 	/** @cmd_list: List of objects submitted to dispatch queues */
 	struct list_head cmd_list;
 	/** @hwsched_ops: Container for target specific hwscheduler ops */
@@ -278,23 +293,16 @@ void adreno_hwsched_retire_cmdobj(struct adreno_hwsched *hwsched,
 	struct kgsl_drawobj_cmd *cmdobj);
 
 /**
- * adreno_hwsched_register_hw_fence - Register GPU as a hardware fence client
+ * adreno_hwsched_disable_gmu_fencing - Deregister GPU as a synx and hardware fence client
  * @adreno_dev: pointer to the adreno device
+ * @disable_synx: Boolean to track whether graphics synx client needs to be disabled
+ * @disable_hw_fence: Boolean to track whether graphics hw fence client needs to be disabled
  *
- * Register with the hardware fence driver to be able to trigger and wait
- * for hardware fences. Also, set up the memory descriptor for mapping the
- * client queue to the GMU.
+ * Deregister with the synx driver and hw fence driver free up any resources allocated  as part of
+ * registering with the synx driver and hw fence driver
  */
-void adreno_hwsched_register_hw_fence(struct adreno_device *adreno_dev);
-
-/**
- * adreno_hwsched_deregister_hw_fence - Deregister GPU as a hardware fence client
- * @adreno_dev: pointer to the adreno device
- *
- * Deregister with the hardware fence driver and free up any resources allocated
- * as part of registering with the hardware fence driver
- */
-void adreno_hwsched_deregister_hw_fence(struct adreno_device *adreno_dev);
+void adreno_hwsched_disable_gmu_fencing(struct adreno_device *adreno_dev, bool disable_synx,
+	bool disable_hw_fence);
 
 /**
  * adreno_hwsched_replay - Resubmit inflight cmdbatches after gpu reset
@@ -353,13 +361,6 @@ u32 adreno_hwsched_gpu_fault(struct adreno_device *adreno_dev);
  */
 void adreno_hwsched_log_remove_pending_hw_fences(struct adreno_device *adreno_dev,
 	struct device *dev);
-
-/**
- * adreno_hwsched_syncobj_kfence_put - Put back kfence context refcounts for this sync object
- * @syncobj: Pointer to the sync object
- *
- */
-void adreno_hwsched_syncobj_kfence_put(struct kgsl_drawobj_sync *syncobj);
 
 /**
  * adreno_hwsched_log_nonfatal_gpu_fault - Logs non fatal GPU error from context bad hfi packet
@@ -486,7 +487,7 @@ int adreno_hwsched_context_init(struct adreno_context *drawctxt);
  * adreno_hwsched_import_external_fence - Function for importing external
  * fences so that they can be dispatched to GMU
  * @adreno-dev: Pointer to the adreno device
- * @hw_fence: Pointer to the hardware fence
+ * @input_fence: Pointer to the input fence
  * @syncobj: Pointer to the sync object
  * obj@: Pointer to the hfi syncobj for this fence
  *
@@ -495,14 +496,14 @@ int adreno_hwsched_context_init(struct adreno_context *drawctxt);
  * Return: Zero on success or negative error on failure
  */
 int adreno_hwsched_import_external_fence(struct adreno_device *adreno_dev,
-	struct kgsl_drawobj_sync_hw_fence *hw_fence, struct kgsl_drawobj_sync *syncobj,
+	struct kgsl_drawobj_sync_input_fence *input_fence, struct kgsl_drawobj_sync *syncobj,
 	struct hfi_syncobj *obj);
 
 /**
  * adreno_hwsched_import_external_fence_legacy - Legacy function for importing external
  * fences so that they can be dispatched to GMU
  * @adreno-dev: Pointer to the adreno device
- * @fence: Pointer to the dma fence
+ * @input_fence: Pointer to the input fence
  * @syncobj: Pointer to the sync object
  * obj@: Pointer to the hfi syncobj for this fence
  *
@@ -511,7 +512,8 @@ int adreno_hwsched_import_external_fence(struct adreno_device *adreno_dev,
  * Return: Zero on success or negative error on failure
  */
 int adreno_hwsched_import_external_fence_legacy(struct adreno_device *adreno_dev,
-	struct dma_fence *fence, struct kgsl_drawobj_sync *syncobj, struct hfi_syncobj_legacy *obj);
+	struct kgsl_drawobj_sync_input_fence *input_fence, struct kgsl_drawobj_sync *syncobj,
+	struct hfi_syncobj_legacy *obj);
 /**
  * adreno_hwsched_enable_gmu_fencing - Register GPU as a synx client and hw fence client
  * @adreno_dev: pointer to the adreno device
@@ -532,4 +534,17 @@ void adreno_hwsched_enable_gmu_fencing(struct adreno_device *adreno_dev);
  */
 void adreno_hwsched_retire_cmdlist_obj(struct adreno_device *adreno_dev,
 	struct cmd_list_obj *obj);
+/**
+ * adreno_hwsched_ensure_gmem_for_priority - Ensure GMEM preemption record is allocated
+ * @adreno_dev: Adreno GPU device handle
+ * @drawctxt: The context whose priority is about to change
+ * @new_ctx_pri: The new context priority value (same encoding as context->priority)
+ *
+ * Ensures the GMEM portion of the preemption record is allocated for the RB
+ * level corresponding to @new_ctx_pri.
+ *
+ * Return: 0 on success or negative error on failure
+ */
+int adreno_hwsched_ensure_gmem_for_priority(struct adreno_device *adreno_dev,
+	struct adreno_context *drawctxt, u32 new_ctx_pri);
 #endif

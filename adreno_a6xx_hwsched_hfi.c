@@ -340,17 +340,15 @@ static void process_ctx_bad(struct adreno_device *adreno_dev)
 	adreno_scheduler_fault(adreno_dev, ADRENO_HARD_FAULT);
 }
 
-static u32 peek_next_header(struct a6xx_gmu_device *gmu, uint32_t queue_idx)
+static u32 peek_next_header(struct adreno_device *adreno_dev,
+	struct a6xx_gmu_device *gmu, uint32_t queue_idx)
 {
 	struct kgsl_memdesc *mem_addr = gmu->hfi.hfi_mem;
 	struct hfi_queue_table *tbl = mem_addr->hostptr;
 	struct hfi_queue_header *hdr = &tbl->qhdr[queue_idx];
 	u32 *queue;
 
-	if (hdr->status == HFI_QUEUE_STATUS_DISABLED)
-		return 0;
-
-	if (hdr->read_index == hdr->write_index)
+	if (adreno_hfi_is_queue_empty(adreno_dev, mem_addr, queue_idx))
 		return 0;
 
 	queue = HOST_QUEUE_START_ADDR(mem_addr, queue_idx);
@@ -370,7 +368,7 @@ static void a6xx_hwsched_process_msgq(struct adreno_device *adreno_dev)
 	mutex_lock(&hw_hfi->msgq_mutex);
 
 	for (;;) {
-		next_hdr = peek_next_header(gmu, HFI_MSG_ID);
+		next_hdr = peek_next_header(adreno_dev, gmu, HFI_MSG_ID);
 
 		if (!next_hdr)
 			break;
@@ -430,7 +428,10 @@ static void a6xx_hwsched_process_dbgq(struct adreno_device *adreno_dev, bool lim
 	u32 rcvd[MAX_RCVD_SIZE];
 	bool recovery = false;
 
-	while (a6xx_hfi_queue_read(gmu, HFI_DBG_ID, rcvd, sizeof(rcvd)) > 0) {
+	while (!adreno_hfi_is_queue_empty(adreno_dev, gmu->hfi.hfi_mem, HFI_DBG_ID)) {
+
+		if (a6xx_hfi_queue_read(gmu, HFI_DBG_ID, rcvd, sizeof(rcvd)) < 0)
+			break;
 
 		if (MSG_HDR_GET_ID(rcvd[0]) == F2H_MSG_ERR) {
 			adreno_a6xx_receive_err_req(gmu, rcvd);
@@ -1181,37 +1182,22 @@ err:
 	return ret;
 }
 
-static bool is_queue_empty(struct adreno_device *adreno_dev, u32 queue_idx)
-{
-	struct a6xx_gmu_device *gmu = to_a6xx_gmu(adreno_dev);
-	struct kgsl_memdesc *mem_addr = gmu->hfi.hfi_mem;
-	struct hfi_queue_table *tbl = mem_addr->hostptr;
-	struct hfi_queue_header *hdr = &tbl->qhdr[queue_idx];
-
-	if (hdr->status == HFI_QUEUE_STATUS_DISABLED)
-		return true;
-
-	if (hdr->read_index == hdr->write_index)
-		return true;
-
-	return false;
-}
-
 static int hfi_f2h_main(void *arg)
 {
 	struct adreno_device *adreno_dev = arg;
 	struct a6xx_hwsched_hfi *hfi = to_a6xx_hwsched_hfi(adreno_dev);
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	struct a6xx_gmu_device *gmu = to_a6xx_gmu(adreno_dev);
 
 	while (!kthread_should_stop()) {
 		wait_event_interruptible(hfi->f2h_wq, kthread_should_stop() ||
 			/* If msgq irq is enabled and msgq has messages to process */
 			(((hfi->irq_mask & HFI_IRQ_MSGQ_MASK) &&
-			!is_queue_empty(adreno_dev, HFI_MSG_ID)) ||
+			!adreno_hfi_is_queue_empty(adreno_dev, gmu->hfi.hfi_mem, HFI_MSG_ID)) ||
 			/* Trace buffer has messages to process */
 			!gmu_core_is_trace_empty(device->gmu_core.trace.md->hostptr) ||
 			/* Dbgq has messages to process */
-			!is_queue_empty(adreno_dev, HFI_DBG_ID)));
+			!adreno_hfi_is_queue_empty(adreno_dev, gmu->hfi.hfi_mem, HFI_DBG_ID)));
 
 		if (kthread_should_stop())
 			break;

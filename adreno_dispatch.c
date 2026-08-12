@@ -234,10 +234,7 @@ static int dispatch_retire_syncobj(struct kgsl_drawobj *drawobj,
 	 * If we got here, there are pending events for sync object.
 	 * Start the canary timer if it hasnt been started already.
 	 */
-	if (!syncobj->timeout_jiffies) {
-		syncobj->timeout_jiffies = jiffies + msecs_to_jiffies(5000);
-			mod_timer(&syncobj->timer, syncobj->timeout_jiffies);
-	}
+	kgsl_drawobj_start_syncobj_timer(syncobj);
 
 	return -EAGAIN;
 }
@@ -1109,6 +1106,7 @@ static int drawctxt_queue_markerobj(struct adreno_device *adreno_dev,
 	 */
 	if (!drawctxt->queued && kgsl_check_timestamp(drawobj->device,
 			drawobj->context, drawctxt->queued_timestamp)) {
+		drawctxt->queued_timestamp = *timestamp;
 		_retire_timestamp(drawobj);
 		return 1;
 	}
@@ -2732,7 +2730,7 @@ int adreno_dispatcher_init(struct adreno_device *adreno_dev)
 	if (ret)
 		return ret;
 
-	adreno_dev->scheduler_worker = kthread_create_worker(0, "kgsl_dispatcher");
+	adreno_dev->scheduler_worker = kgsl_kthread_run_worker(0, "kgsl_dispatcher");
 	if (IS_ERR(adreno_dev->scheduler_worker)) {
 		kobject_put(&dispatcher->kobj);
 		return PTR_ERR(adreno_dev->scheduler_worker);

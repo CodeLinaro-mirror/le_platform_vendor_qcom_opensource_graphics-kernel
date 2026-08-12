@@ -342,7 +342,7 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 	if (memdesc->flags & KGSL_MEMFLAGS_VBO)
 		return -EINVAL;
 
-	size = kgsl_memdesc_footprint(memdesc);
+	size = kgsl_memdesc_mapped_size(memdesc);
 
 	if (PT_OP_VALID(pagetable, mmu_map)) {
 		int ret;
@@ -457,7 +457,7 @@ kgsl_mmu_unmap(struct kgsl_pagetable *pagetable,
 	if (PT_OP_VALID(pagetable, mmu_unmap)) {
 		uint64_t size;
 
-		size = kgsl_memdesc_footprint(memdesc);
+		size = kgsl_memdesc_mapped_size(memdesc);
 
 		ret = pagetable->pt_ops->mmu_unmap(pagetable, memdesc);
 		if (ret)

@@ -41,6 +41,7 @@ static struct kmem_cache *memobjs_cache;
 static void syncobj_destroy_object(struct kgsl_drawobj *drawobj)
 {
 	struct kgsl_drawobj_sync *syncobj = SYNCOBJ(drawobj);
+	struct kgsl_drawobj_sync_input_fence *hw_fence, *tmp;
 	int i;
 
 	for (i = 0; i < syncobj->numsyncs; i++) {
@@ -57,16 +58,29 @@ static void syncobj_destroy_object(struct kgsl_drawobj *drawobj)
 			if (event->handle) {
 				struct kgsl_sync_fence_cb *kcb = event->handle;
 
-				dma_fence_put(kcb->fence);
 				kfree(kcb);
 			}
+
+			if (event->fence) {
+				dma_fence_put(event->fence);
+				event->fence = NULL;
+			}
+
 
 		} else if (event->type == KGSL_CMD_SYNCPOINT_TYPE_TIMELINE) {
 			kfree(event->priv);
 		}
 	}
 
-	kfree(syncobj->hw_fences);
+	list_for_each_entry_safe(hw_fence, tmp, &syncobj->hw_fence_list, node) {
+		kgsl_context_put(hw_fence->context);
+		list_del_init(&hw_fence->node);
+		/* release reference held by synx_import if this was imported as a synx client */
+		if (hw_fence->fence_type == KGSL_INPUT_FENCE_TYPE_SYNX_FENCE)
+			kgsl_synx_import_release(drawobj->device, hw_fence->handle);
+		kmem_cache_free(drawobj->device->syncobj_hw_fence_cache, hw_fence);
+	}
+
 	kfree(syncobj->synclist);
 	kfree(syncobj);
 }
@@ -143,38 +157,39 @@ void kgsl_dump_syncpoints(struct kgsl_device *device,
 	}
 }
 
-static void syncobj_timer(struct timer_list *t)
+void kgsl_drawobj_log_hw_syncobj(struct kgsl_device *device, struct kgsl_drawobj_sync *syncobj)
 {
-	struct kgsl_device *device;
-	struct kgsl_drawobj_sync *syncobj = kgsl_timer_container_of(syncobj, t, timer);
-	struct kgsl_drawobj *drawobj;
-	struct kgsl_drawobj_sync_event *event;
-	unsigned int i;
+	struct kgsl_drawobj_sync_input_fence *hw_fence;
+	int i = 0;
 
-	if (syncobj == NULL)
-		return;
+	list_for_each_entry(hw_fence, &syncobj->hw_fence_list, node) {
+		struct dma_fence *fence = hw_fence->fence;
+		bool kgsl = is_kgsl_fence(fence);
+		bool signaled = test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags);
+		char value[KGSL_FENCE_NAME_LEN] = "unknown";
+		bool cmdbatch = test_bit(KGSL_SYNCOBJ_HAS_CMDBATCH, &syncobj->flags);
 
-	drawobj = DRAWOBJ(syncobj);
+		kgsl_get_fence_name(fence, value, sizeof(value));
 
-	if (!kref_get_unless_zero(&drawobj->refcount))
-		return;
-
-	if (drawobj->context == NULL) {
-		kgsl_drawobj_put(drawobj);
-		return;
+		dev_err(device->dev,
+			"dma fence[%d] signaled:%d kgsl:%d ctx:%llu seqno:%llu value:%s cmdbatch:%d\n",
+			i++, signaled, kgsl, fence->context, fence->seqno, value, cmdbatch);
 	}
+}
 
-	device = drawobj->context->device;
+void kgsl_drawobj_start_syncobj_timer(struct kgsl_drawobj_sync *syncobj)
+{
+	if (syncobj->timeout_jiffies)
+		return;
 
-	dev_err(device->dev,
-		"kgsl: possible gpu syncpoint deadlock for context %u timestamp %u\n",
-		drawobj->context->id, drawobj->timestamp);
+	syncobj->timeout_jiffies = jiffies + msecs_to_jiffies(5000);
+	mod_timer(&syncobj->timer, syncobj->timeout_jiffies);
+}
 
-	set_bit(ADRENO_CONTEXT_FENCE_LOG, &drawobj->context->priv);
-	kgsl_context_dump(drawobj->context);
-	clear_bit(ADRENO_CONTEXT_FENCE_LOG, &drawobj->context->priv);
-
-	dev_err(device->dev, "      pending events:\n");
+static void _log_sw_syncobj(struct kgsl_device *device, struct kgsl_drawobj_sync *syncobj)
+{
+	struct kgsl_drawobj_sync_event *event;
+	int i;
 
 	for (i = 0; i < syncobj->numsyncs; i++) {
 		event = &syncobj->synclist[i];
@@ -223,6 +238,43 @@ static void syncobj_timer(struct timer_list *t)
 		}
 		}
 	}
+}
+
+static void syncobj_timer(struct timer_list *t)
+{
+	struct kgsl_device *device;
+	struct kgsl_drawobj_sync *syncobj = kgsl_timer_container_of(syncobj, t, timer);
+	struct kgsl_drawobj *drawobj;
+
+	if (syncobj == NULL)
+		return;
+
+	drawobj = DRAWOBJ(syncobj);
+
+	if (!kref_get_unless_zero(&drawobj->refcount))
+		return;
+
+	if (drawobj->context == NULL) {
+		kgsl_drawobj_put(drawobj);
+		return;
+	}
+
+	device = drawobj->context->device;
+
+	dev_err(device->dev,
+		"kgsl: possible gpu syncpoint deadlock for context %u timestamp %u\n",
+		drawobj->context->id, drawobj->timestamp);
+
+	set_bit(ADRENO_CONTEXT_FENCE_LOG, &drawobj->context->priv);
+	kgsl_context_dump(drawobj->context);
+	clear_bit(ADRENO_CONTEXT_FENCE_LOG, &drawobj->context->priv);
+
+	dev_err(device->dev, "      pending events:\n");
+
+	if (test_bit(KGSL_SYNCOBJ_SW, &syncobj->flags))
+		_log_sw_syncobj(device, syncobj);
+	else
+		kgsl_drawobj_log_hw_syncobj(device, syncobj);
 
 	kgsl_drawobj_put(drawobj);
 	dev_err(device->dev, "--gpu syncpoint deadlock print end--\n");
@@ -619,36 +671,22 @@ static int drawobj_add_sync_timeline(struct kgsl_device *device,
 	return 0;
 }
 
-static int drawobj_add_sync_fence(struct kgsl_device *device,
-		struct kgsl_drawobj_sync *syncobj, void __user *data,
-		u64 datasize)
+static int _drawobj_add_sync_fence_cb(struct kgsl_device *device,
+		struct kgsl_drawobj_sync_event *event)
 {
-	struct kgsl_cmd_syncpoint_fence sync;
+	struct kgsl_drawobj_sync *syncobj = event->syncobj;
 	struct kgsl_drawobj *drawobj = DRAWOBJ(syncobj);
-	struct kgsl_drawobj_sync_event *event;
 	struct event_fence_info *priv;
-	unsigned int id, i;
-
-	if (copy_struct_from_user(&sync, sizeof(sync), data, datasize))
-		return -EFAULT;
+	unsigned int i;
 
 	kref_get(&drawobj->refcount);
-
-	id = syncobj->numsyncs++;
-
-	event = &syncobj->synclist[id];
-
-	event->id = id;
-	event->type = KGSL_CMD_SYNCPOINT_TYPE_FENCE;
-	event->syncobj = syncobj;
-	event->device = device;
-	event->context = NULL;
 
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 
 	set_bit(event->id, &syncobj->pending);
 
-	event->handle = kgsl_sync_fence_async_wait(sync.fd, drawobj_sync_fence_func, event);
+	event->handle = kgsl_sync_fence_async_wait_fence(event->fence, drawobj_sync_fence_func,
+		event);
 
 	event->priv = priv;
 
@@ -771,6 +809,59 @@ static int drawobj_add_sync_timestamp_from_user(struct kgsl_device *device,
 		return -EFAULT;
 
 	return drawobj_add_sync_timestamp(device, syncobj, &timestamp);
+}
+
+static int drawobj_add_sync_fence(struct kgsl_device *device,
+		struct kgsl_drawobj_sync *syncobj, void __user *data,
+		u64 datasize)
+{
+	struct kgsl_cmd_syncpoint_fence sync;
+	struct kgsl_drawobj_sync_event *event;
+	struct dma_fence *fence;
+	int id, ret = 0;
+	bool add_fence_cb = test_bit(KGSL_SYNCOBJ_SW, &syncobj->flags);
+
+	if (copy_struct_from_user(&sync, sizeof(sync), data, datasize))
+		return -EFAULT;
+
+	/* This fence refcount will be put back when the sync object is destroyed */
+	fence = kgsl_sync_file_get_fence(sync.fd);
+	if (!fence)
+		return -EINVAL;
+
+	id = syncobj->numsyncs++;
+
+	event = &syncobj->synclist[id];
+
+	event->id = id;
+	event->type = KGSL_CMD_SYNCPOINT_TYPE_FENCE;
+	event->syncobj = syncobj;
+	event->device = device;
+	event->context = NULL;
+	event->fence = fence;
+
+	if (!add_fence_cb) {
+		kgsl_populate_hw_fences(event);
+
+		/*
+		 * If there are no sw-only dma fences so far, we might need to add a
+		 * sw callback for this hw fence later
+		 */
+		if (!test_bit(KGSL_SYNCOBJ_SW, &syncobj->flags)) {
+			event->defer_hw_fence_cb = true;
+			return 0;
+		}
+
+	}
+
+	ret = _drawobj_add_sync_fence_cb(device, event);
+	if (ret) {
+		dma_fence_put(event->fence);
+		event->fence = NULL;
+		syncobj->numsyncs--;
+	}
+
+	return ret;
 }
 
 /**
@@ -1208,6 +1299,7 @@ struct kgsl_drawobj_sync *kgsl_drawobj_sync_create(struct kgsl_device *device,
 
 	syncobj->base.destroy = syncobj_destroy;
 	syncobj->base.destroy_object = syncobj_destroy_object;
+	INIT_LIST_HEAD(&syncobj->hw_fence_list);
 
 	timer_setup(&syncobj->timer, syncobj_timer, 0);
 
@@ -1578,6 +1670,28 @@ kgsl_drawobj_create_timestamp_syncobj(struct kgsl_device *device,
 	}
 
 	return syncobj;
+}
+
+int kgsl_drawobj_sync_add_callbacks(struct kgsl_device *device,
+	struct kgsl_drawobj_sync *syncobj)
+{
+	struct kgsl_drawobj_sync_event *event;
+	int i, ret = 0;
+
+	for (i = 0; i < syncobj->numsyncs; i++) {
+		event = &syncobj->synclist[i];
+
+		if (!event->defer_hw_fence_cb)
+			continue;
+
+		ret = _drawobj_add_sync_fence_cb(device, event);
+		if (ret)
+			break;
+
+		event->defer_hw_fence_cb = false;
+	}
+
+	return ret;
 }
 
 int kgsl_drawobj_sync_add_synclist(struct kgsl_device *device,

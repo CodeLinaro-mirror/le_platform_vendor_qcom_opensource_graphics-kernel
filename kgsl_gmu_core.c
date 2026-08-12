@@ -506,11 +506,11 @@ int gmu_core_get_attrs(u32 flags)
 	return attrs;
 }
 
-int gmu_core_import_buffer(struct kgsl_device *device, struct hfi_mem_alloc_entry *entry)
+int gmu_core_import_buffer(struct kgsl_device *device, struct hfi_mem_alloc_entry *entry,
+	u32 vma_id)
 {
 	struct hfi_mem_alloc_desc *desc = &entry->desc;
 	u32 attrs = gmu_core_get_attrs(desc->flags);
-	u32 vma_id = (desc->flags & HFI_MEMFLAG_GMU_CACHEABLE) ? GMU_CACHE : GMU_NONCACHED_KERNEL;
 
 	/*
 	 * GMU Tx/Rx queues are mapped as I/O-coherent on both SOCCP and CPU,
@@ -875,6 +875,20 @@ static void _gmu_trace_dcvs_pwrstats(struct kgsl_device *device, struct gmu_trac
 	spin_unlock(&pwr->stats_lock);
 }
 
+static void _gmu_trace_pwr_constraint(struct kgsl_device *device,
+		struct gmu_trace_packet *pkt)
+{
+	struct trace_pwr_constraint data = {};
+	u32 pkt_words = TRACE_PKT_GET_SIZE(pkt->hdr);
+	u32 hdr_words = offsetof(struct gmu_trace_packet, payload) >> 2;
+	u32 payload_words = pkt_words - hdr_words - 1;
+	u32 payload_bytes = payload_words * sizeof(u32);
+
+	memcpy(&data, pkt->payload, min_t(u32, payload_bytes, sizeof(data)));
+	trace_kgsl_constraint(device, data.type, data.value,
+		data.status, pkt->ticks, data.owner_ctx_id);
+}
+
 static void stream_trace_data(struct kgsl_device *device, struct gmu_trace_packet *pkt)
 {
 	switch (pkt->trace_id) {
@@ -922,16 +936,68 @@ static void stream_trace_data(struct kgsl_device *device, struct gmu_trace_packe
 		break;
 		}
 	case GMU_TRACE_PWR_CONSTRAINT: {
-		struct trace_pwr_constraint *data =
-			(struct trace_pwr_constraint *)pkt->payload;
-
-		trace_kgsl_constraint(device, data->type, data->value, data->status, pkt->ticks);
+		_gmu_trace_pwr_constraint(device, pkt);
 		break;
 		}
 	case GMU_TRACE_DCVS_PROFILE: {
 		struct trace_dcvs_profile *data =
 				(struct trace_dcvs_profile *)pkt->payload;
 		trace_adreno_gpu_dcvs_profile(data, pkt->ticks);
+		break;
+		}
+	case GMU_TRACE_PREEMPT_INFO: {
+		struct trace_preempt_info *data =
+			(struct trace_preempt_info *)pkt->payload;
+		trace_adreno_gpu_preempt_info(data, pkt->ticks);
+		break;
+		}
+	case GMU_TRACE_CTX_PRI_UPDATE_REQ: {
+		struct trace_ctx_pri_update_req *data =
+				(struct trace_ctx_pri_update_req *)pkt->payload;
+		u32 cur_pri = TRACE_CUR_CTX_PRI(data->prio);
+		u32 new_pri = TRACE_NEW_CTX_PRI(data->prio);
+
+		trace_adreno_ctx_priority_update_request(
+			data->ctx_id, cur_pri, new_pri,
+			KGSL_CTX_PRI_TO_RB_LEVEL(cur_pri),
+			KGSL_CTX_PRI_TO_RB_LEVEL(new_pri),
+			data->flags, data->last_submitted_ts,
+			pkt->ticks);
+		break;
+		}
+	case GMU_TRACE_CTX_PRI_UPDATE_DONE: {
+		struct trace_ctx_pri_update_done *data =
+				(struct trace_ctx_pri_update_done *)pkt->payload;
+		u32 cur_pri = TRACE_CUR_CTX_PRI(data->prio);
+		u32 new_pri = TRACE_NEW_CTX_PRI(data->prio);
+
+		trace_adreno_ctx_priority_update_done(
+			data->ctx_id, cur_pri, new_pri,
+			KGSL_CTX_PRI_TO_RB_LEVEL(cur_pri),
+			KGSL_CTX_PRI_TO_RB_LEVEL(new_pri),
+			pkt->ticks);
+		break;
+		}
+	case GMU_TRACE_CTX_PRI_REQ_DEFERRED: {
+		struct trace_ctx_pri_req_deferred *data =
+				(struct trace_ctx_pri_req_deferred *)pkt->payload;
+		u32 cur_pri = TRACE_CUR_CTX_PRI(data->prio);
+		u32 new_pri = TRACE_NEW_CTX_PRI(data->prio);
+
+		trace_adreno_ctx_pri_update_deferred(
+			data->ctx_id, cur_pri, new_pri,
+			KGSL_CTX_PRI_TO_RB_LEVEL(cur_pri),
+			KGSL_CTX_PRI_TO_RB_LEVEL(new_pri),
+			data->last_ts, pkt->ticks);
+		break;
+		}
+	case GMU_TRACE_SPEL_CAP_PWRLEVEL: {
+		struct trace_spel_cap_pwrlevel *data =
+				(struct trace_spel_cap_pwrlevel *)pkt->payload;
+		struct kgsl_pwrctrl *pwr = &device->pwrctrl;
+
+		trace_adreno_spel_cap_pwrlevel(pkt->ticks, data->pwrlevel,
+			pwr->pwrlevels[data->pwrlevel].gpu_freq);
 		break;
 		}
 	default: {
@@ -1301,8 +1367,17 @@ static int gmu_core_clock_set_rate_locked(struct kgsl_device *device, u32 pwrlev
 	if (pwrlevel < gmu_core->min_pwrlevel)
 		pwrlevel = gmu_core->min_pwrlevel;
 
-	/* If already at requested level, do nothing */
-	if (pwrlevel == gmu_core->cur_pwrlevel)
+	/*
+	 * Skip if already at the requested level and hub clock is
+	 * correctly configured. Do not skip if cur_hub_level equals
+	 * num_hub_freqs, which is the sentinel value set by
+	 * gmu_core_enable_clks() to indicate that hub clock
+	 * reconfiguration is required after power collapse.
+	 * scale_hub_clock() clears this sentinel after configuring
+	 * GPU_CC_HUB_CX_INT_CLK.
+	 */
+	if ((pwrlevel == gmu_core->cur_pwrlevel) &&
+			(gmu_core->cur_hub_level != gmu_core->num_hub_freqs))
 		return  0;
 
 	req_freq = gmu_core->freqs[pwrlevel];
@@ -1529,4 +1604,25 @@ int gmu_core_hwsched_memory_init(struct kgsl_device *device)
 bool gmu_core_is_hw_fencing_enabled(struct kgsl_device *device)
 {
 	return test_bit(GMU_HWSCHED_HW_FENCE, &device->gmu_core.flags);
+}
+
+bool gmu_core_is_gmu_fencing_enabled(struct kgsl_device *device)
+{
+	return test_bit(GMU_HWSCHED_HW_FENCE, &device->gmu_core.flags) ||
+	test_bit(GMU_HWSCHED_SYNX, &device->gmu_core.flags);
+}
+
+void gmu_core_set_fence_type(struct kgsl_device *device)
+{
+	device->gmu_core.input_fence_type = 0;
+	device->gmu_core.output_fence_type = 0;
+
+	if (test_bit(GMU_HWSCHED_HW_FENCE, &device->gmu_core.flags)) {
+		device->gmu_core.input_fence_type |= KGSL_INPUT_FENCE_TYPE_HW_FENCE;
+		device->gmu_core.output_fence_type |= KGSL_OUTPUT_FENCE_TYPE_HW_FENCE;
+	}
+	if (test_bit(GMU_HWSCHED_SYNX, &device->gmu_core.flags)) {
+		device->gmu_core.input_fence_type |= KGSL_INPUT_FENCE_TYPE_SYNX_FENCE;
+		device->gmu_core.output_fence_type |= KGSL_OUTPUT_FENCE_TYPE_SYNX_FENCE;
+	}
 }

@@ -63,6 +63,7 @@ def kgsl_get_srcs():
         "adreno_hwsched_snapshot.c",
         "adreno_ioctl.c",
         "adreno_perfcounter.c",
+        "adreno_qmi.c",
         "adreno_ringbuffer.c",
         "adreno_snapshot.c",
         "adreno_sysfs.c",
@@ -155,6 +156,13 @@ def define_target_variant_module(target, variant):
 
     ext_deps = external_deps(target, variant)
 
+    smci_dep = []
+    if target == "hamoa":
+        smci_dep = [
+            "//soc-repo:{}/drivers/firmware/qcom/qcom_scm_smci".format(tv),
+            "//soc-repo:{}/drivers/firmware/qcom/si_core/si_core_module".format(tv),
+        ]
+
     ddk_deps = select({
         "//build/qcom_build_extensions:qtisocrepo_true": [
             "//soc-repo:all_headers",
@@ -162,6 +170,7 @@ def define_target_variant_module(target, variant):
             "//soc-repo:{}/drivers/devfreq/governor_msm_adreno_tz".format(tv),
             "//soc-repo:{}/drivers/firmware/qcom/qcom-scm".format(tv),
             "//soc-repo:{}/drivers/hwtracing/coresight/coresight".format(tv),
+            "//soc-repo:{}/drivers/hwtracing/coresight/coresight-qmi".format(tv),
             "//soc-repo:{}/drivers/iommu/qcom_iommu_util".format(tv),
             "//soc-repo:{}/drivers/remoteproc/qcom_q6v5_pas".format(tv),
             "//soc-repo:{}/drivers/soc/qcom/cmd-db".format(tv),
@@ -176,8 +185,9 @@ def define_target_variant_module(target, variant):
             "//soc-repo:{}/drivers/soc/qcom/secure_buffer".format(tv),
             "//soc-repo:{}/drivers/soc/qcom/socinfo".format(tv),
             "//soc-repo:{}/kernel/msm_sysstats".format(tv),
+            "//soc-repo:{}/drivers/soc/qcom/qmi_helpers".format(tv),
             #"//vendor/qcom/opensource/securemsm-kernel:{}_smcinvoke_dlkm".format(tv),
-        ],
+        ] + smci_dep,
         "//build/qcom_build_extensions:qtisocrepo_false": ["//msm-kernel:all_headers"],
     })
 

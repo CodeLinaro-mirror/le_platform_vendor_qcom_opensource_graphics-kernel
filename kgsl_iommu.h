@@ -141,6 +141,8 @@ struct kgsl_iommu_context {
 	int cb_num;
 	struct kgsl_device *kgsldev;
 	bool stalled_on_fault;
+	/** @is_proxy_device: managed by a proxy smmu driver */
+	bool is_proxy_device;
 	/** ratelimit: Ratelimit state for the context */
 	struct ratelimit_state ratelimit;
 	struct iommu_domain *domain;

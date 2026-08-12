@@ -685,7 +685,7 @@ bool gen8_gmu_gx_is_on(struct adreno_device *adreno_dev)
 	return is_on(val);
 }
 
-static bool gen8_gmu_malu_is_on(struct adreno_device *adreno_dev)
+bool gen8_gmu_malu_is_on(struct adreno_device *adreno_dev)
 {
 	u32 val;
 
@@ -780,8 +780,12 @@ int gen8_gmu_wait_for_lowest_idle(struct adreno_device *adreno_dev)
 
 	/* Access GX registers only when GX is ON */
 	if (is_on(reg1)) {
-		gen8_regread_aperture(device, GEN8_CP_PIPE_STATUS_PIPE, &reg, PIPE_BV, 0, 0);
-		gen8_regread_aperture(device, GEN8_CP_PIPE_STATUS_PIPE, &reg1, PIPE_BR, 0, 0);
+		u32 first_slice = gen8_first_slice(adreno_dev);
+
+		gen8_regread_aperture(device, GEN8_CP_PIPE_STATUS_PIPE, &reg, PIPE_BV,
+					first_slice, 0);
+		gen8_regread_aperture(device, GEN8_CP_PIPE_STATUS_PIPE, &reg1, PIPE_BR,
+					first_slice, 0);
 		/* Clear aperture register */
 		gen8_host_aperture_clear(adreno_dev);
 		kgsl_regread(device, GEN8_CP_CP2GMU_STATUS, &reg2);
@@ -1177,10 +1181,9 @@ static inline void gen8_gbif_gx_reinit(struct kgsl_device *device)
 static void _disable_malu_gdsc(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
-	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
 	u32 reg;
 
-	if (!gen8_core->malu)
+	if (!adreno_dev->malu_enabled)
 		return;
 
 	if (!gen8_gmu_malu_is_on(adreno_dev))
@@ -1624,56 +1627,11 @@ void gen8_gmu_aop_send_acd_state(struct gen8_gmu_device *gmu, bool flag)
 			"AOP qmp send message failed: %d\n", ret);
 }
 
-int gen8_gmu_trigger_mx_voltage_change(struct adreno_device *adreno_dev)
-{
-	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
-	struct gmu_core_device *gmu_core = &device->gmu_core;
-	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
-	unsigned long freq;
-	u32 val = 0;
-	int ret = 0;
-
-	if (!gen8_core->gmu_mx_gdsc)
-		return 0;
-
-	freq = kgsl_clk_get_rate(gmu_core->clks, gmu_core->num_clks, "gmu_clk");
-	if (freq < gmu_core->freqs[0]) {
-		dev_err_once(GMU_PDEV_DEV(device), "Incorrect GMU clock rate:%lu\n", freq);
-		return -EINVAL;
-	}
-
-	/* Bump up the frequency to bump the MX voltage corner */
-	ret = kgsl_clk_set_rate(gmu_core->clks, gmu_core->num_clks, "gmu_clk", INT_MAX);
-	if (ret) {
-		dev_err_once(GMU_PDEV_DEV(device), "Failed to bump GMU clock to:%d ret:%d\n",
-			INT_MAX, ret);
-		return ret;
-	}
-
-	/* Switch to the older frequency */
-	ret = kgsl_clk_set_rate(gmu_core->clks, gmu_core->num_clks, "gmu_clk", freq);
-	if (ret) {
-		dev_err_once(GMU_PDEV_DEV(device), "Failed to restore GMU clock to %lu ret:%d\n",
-			freq, ret);
-		return ret;
-	}
-
-	/* Make sure the voltage change has been broadcast */
-	if (kgsl_regmap_read_poll_timeout(&device->regmap, GEN8_GMUCX_CBCAST_MX_VRM_1_VAL,
-		val, val != 0, 100, 5 * 1000)) {
-		dev_err_once(GMU_PDEV_DEV(device), "MX voltage broadcast failed\n");
-		ret = -ETIMEDOUT;
-	}
-
-	return ret;
-}
-
 static int gen8_gmu_first_boot(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
-	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
 	int level, ret;
 
 	kgsl_pwrctrl_request_state(device, KGSL_STATE_AWARE);
@@ -1693,10 +1651,6 @@ static int gen8_gmu_first_boot(struct adreno_device *adreno_dev)
 		goto gdsc_off;
 
 	ret = gen8_scm_gpu_init_cx_regs(adreno_dev);
-	if (ret)
-		goto clks_gdsc_off;
-
-	ret = gen8_gmu_trigger_mx_voltage_change(adreno_dev);
 	if (ret)
 		goto clks_gdsc_off;
 
@@ -1758,9 +1712,6 @@ static int gen8_gmu_first_boot(struct adreno_device *adreno_dev)
 		/* If gmu_ab feature flag is enabled but GMU doesn't support it, set it to false */
 		adreno_dev->gmu_ab = false;
 	}
-
-	if (gen8_core->malu)
-		set_bit(ADRENO_DEVICE_ALLOW_MALU_WORKLOAD, &adreno_dev->priv);
 
 	icc_set_bw(pwr->icc_path, 0, 0);
 
@@ -1952,11 +1903,6 @@ static int gen8_gmu_acd_set(struct kgsl_device *device, bool val)
 	return adreno_power_cycle(adreno_dev, set_acd, &val);
 }
 
-#define BCL_RESP_TYPE_MASK   BIT(0)
-#define BCL_SID0_MASK        GENMASK(7, 1)
-#define BCL_SID1_MASK        GENMASK(14, 8)
-#define BCL_SID2_MASK        GENMASK(21, 15)
-
 static int gen8_bcl_sid_set(struct kgsl_device *device, u32 sid_id, u64 sid_val)
 {
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
@@ -2006,6 +1952,35 @@ static u64 gen8_bcl_sid_get(struct kgsl_device *device, u32 sid_id)
 	}
 }
 
+static u32 gen8_bcl_query_data(struct kgsl_device *device, u32 percentage_drop, u32 mode)
+{
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
+	const struct gen8_dynamic_bcl_entry *tbl = gen8_core->dynamic_bcl_lut;
+	int i;
+
+	/* Check if BCL lookup table is available */
+	if (!tbl)
+		return 0;
+
+	for (i = 0; tbl[i].percentage_power_drop; i++) {
+		/*
+		 * Mode 0 is to look up clock throttle percentage from power drop percentage.
+		 * This returns the clock throttle percentage corresponding to the rounded up
+		 * entry for power drop percentage.
+		 * Mode 1 is to look up power drop percentage from clock throttle percentage.
+		 * This returns the power drop percentage corresponding to the rounded down entry
+		 * for clock throttle percentage.
+		 */
+		if ((mode == 0) && (percentage_drop <= tbl[i].percentage_power_drop))
+			return tbl[i].percentage_clock_throttle;
+		else if ((mode == 1) && (percentage_drop >= tbl[i].percentage_clock_throttle))
+			return tbl[i].percentage_power_drop;
+	}
+
+	return 0;
+}
+
 static u32 gen8_gmu_pwr_trace_trigger_get(struct kgsl_device *device)
 {
 	u32 val;
@@ -2047,6 +2022,7 @@ static const struct gmu_dev_ops gen8_gmudev = {
 	.gmu_pwr_trace_trigger_set = gen8_gmu_pwr_trace_trigger_set,
 	.gmu_pwr_trace_trigger_get = gen8_gmu_pwr_trace_trigger_get,
 	.force_first_boot = gen8_gmu_force_first_boot,
+	.bcl_query_data = gen8_bcl_query_data,
 };
 
 static int gen8_gmu_bus_set(struct adreno_device *adreno_dev, int buslevel,
@@ -2096,7 +2072,7 @@ static int gen8_gmu_qmp_aoss_init(struct adreno_device *adreno_dev,
 	return 0;
 }
 
-static void gen8_gmu_acd_probe(struct kgsl_device *device,
+static int gen8_gmu_acd_probe(struct kgsl_device *device,
 		struct gen8_gmu_device *gmu, struct device_node *node)
 {
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
@@ -2107,7 +2083,15 @@ static void gen8_gmu_acd_probe(struct kgsl_device *device,
 	int ret, i, cmd_idx = 0;
 
 	if (!ADRENO_FEATURE(adreno_dev, ADRENO_ACD))
-		return;
+		return 0;
+
+	/* Ensure that the enable info for all power levels can be represented */
+	if (pwr->num_pwrlevels >= (sizeof(cmd->enable_by_level) * __CHAR_BIT__)) {
+		dev_err_ratelimited(GMU_PDEV_DEV(device),
+			"ACD enablement is limited to %zu power levels\n",
+			sizeof(cmd->enable_by_level) * __CHAR_BIT__);
+		return -EINVAL;
+	}
 
 	cmd->hdr = CREATE_MSG_HDR(H2F_MSG_ACD_TBL, HFI_MSG_CMD);
 
@@ -2119,24 +2103,33 @@ static void gen8_gmu_acd_probe(struct kgsl_device *device,
 	 * Iterate through each gpu power level and generate a mask for GMU
 	 * firmware for ACD enabled levels and store the corresponding control
 	 * register configurations to the acd_table structure.
+	 *
+	 * Power levels are reversed since lower enable bits correspond to lower frequencies
+	 * Enable bit 0 is reserved for the 0 frequency
 	 */
 	for (i = 0; i < pwr->num_pwrlevels; i++) {
 		if (pwrlevel->acd_level) {
-			cmd->enable_by_level |= (1 << (i + 1));
+			cmd->enable_by_level |= BIT(i + 1);
 			cmd->data[cmd_idx++] = pwrlevel->acd_level;
 		}
 		pwrlevel--;
 	}
 
 	if (!cmd->enable_by_level)
-		return;
+		return 0;
 
 	cmd->num_levels = cmd_idx;
 
+	/*
+	 * Without QMP, ACD cannot be enabled -- removing peak current mitigation. This is a
+	 * stability risk that scales with GPU fmax, but the device can still boot. As such,
+	 * probe is not failed for QMP errors.
+	 */
 	ret = gen8_gmu_qmp_aoss_init(adreno_dev, gmu);
 	if (ret)
-		dev_err(GMU_PDEV_DEV(device),
-			"AOP qmp init failed: %d\n", ret);
+		dev_err(GMU_PDEV_DEV(device), "AOP qmp init failed: %d\n", ret);
+
+	return 0;
 }
 
 static int gen8_gmu_reg_probe(struct adreno_device *adreno_dev)
@@ -2208,6 +2201,7 @@ int gen8_gmu_probe(struct kgsl_device *device,
 	adreno_dev->gmu_hub_clk_freq = freq ? freq : 150000000;
 
 	gmu_core->pdev = pdev;
+	dev_set_drvdata(&pdev->dev, gmu_core);
 	memset(&gmu_core->common_caps, 0, sizeof(struct firmware_capabilities));
 	memset(&gmu_core->platform_caps, 0, sizeof(struct firmware_capabilities));
 	memset(&gmu_core->ver, 0, sizeof(gmu_core->ver));
@@ -2289,7 +2283,9 @@ int gen8_gmu_probe(struct kgsl_device *device,
 		gmu->idle_level = GPU_HW_ACTIVE;
 	}
 
-	gen8_gmu_acd_probe(device, gmu, pdev->dev.of_node);
+	ret = gen8_gmu_acd_probe(device, gmu, pdev->dev.of_node);
+	if (ret)
+		goto error;
 
 	set_bit(GMU_ENABLED, &gmu_core->flags);
 
@@ -2515,6 +2511,8 @@ static int gen8_boot(struct adreno_device *adreno_dev)
 	bool bcl_state = adreno_dev->bcl_enabled;
 	int ret;
 
+	adreno_dev->adreno_err_code = 0;
+
 	if (WARN_ON(test_bit(GMU_PRIV_GPU_STARTED, &gmu->flags)))
 		return 0;
 
@@ -2569,6 +2567,8 @@ static int gen8_first_boot(struct adreno_device *adreno_dev)
 
 		return 0;
 	}
+
+	adreno_dev->adreno_err_code = 0;
 
 	ret = gen8_ringbuffer_init(adreno_dev);
 	if (ret)
@@ -2962,6 +2962,10 @@ int gen8_gmu_device_probe(struct platform_device *pdev,
 	INIT_WORK(&device->idle_check_ws, gmu_idle_check);
 
 	timer_setup(&device->idle_timer, gmu_idle_timer, 0);
+
+	/* Notify userspace to explicitly apply correct policies */
+	if (gmu_core_isenabled(device))
+		kobject_uevent(&GMU_PDEV_DEV(device)->kobj, KOBJ_ADD);
 
 	return 0;
 }

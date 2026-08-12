@@ -75,4 +75,8 @@ const struct adreno_sysfs_attribute_u32 adreno_attr_##_name = { \
 	.attr = __ATTR(_name, 0444, adreno_sysfs_show_u32, NULL), \
 	.show = _ ## _name ## _show, \
 }
+
+#define ADRENO_SYSFS_CUSTOM(_name) \
+const struct device_attribute adreno_attr_##_name = \
+	__ATTR(_name, 0644, _name##_show, _name##_store)
 #endif

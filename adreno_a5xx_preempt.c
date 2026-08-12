@@ -337,9 +337,9 @@ u32 a5xx_preemption_pre_ibsubmit(struct adreno_device *adreno_dev,
 		 * ringbuffer level.
 		 */
 		if (drawctxt->base.flags & KGSL_CONTEXT_SECURE)
-			preempt_style = KGSL_CONTEXT_PREEMPT_STYLE_RINGBUFFER;
+			preempt_style = KGSL_CONTEXT_A5XX_PREEMPT_STYLE_RINGBUFFER;
 		else
-			preempt_style = FIELD_GET(KGSL_CONTEXT_PREEMPT_STYLE_MASK,
+			preempt_style = FIELD_GET(KGSL_CONTEXT_A5XX_PREEMPT_STYLE_MASK,
 				drawctxt->base.flags);
 	}
 
@@ -355,7 +355,7 @@ u32 a5xx_preemption_pre_ibsubmit(struct adreno_device *adreno_dev,
 	 *    can be enabled by both UMD(within IB) and KMD.
 	 */
 	*cmds++ = cp_type7_packet(CP_PREEMPT_ENABLE_GLOBAL, 1);
-	*cmds++ = ((preempt_style == KGSL_CONTEXT_PREEMPT_STYLE_FINEGRAIN)
+	*cmds++ = ((preempt_style == KGSL_CONTEXT_A5XX_PREEMPT_STYLE_FINEGRAIN)
 				? 2 : 0);
 
 	/* Turn CP protection OFF */
@@ -377,7 +377,7 @@ u32 a5xx_preemption_pre_ibsubmit(struct adreno_device *adreno_dev,
 	 * Enable local preemption for finegrain preemption in case of
 	 * a misbehaving IB
 	 */
-	if (preempt_style == KGSL_CONTEXT_PREEMPT_STYLE_FINEGRAIN) {
+	if (preempt_style == KGSL_CONTEXT_A5XX_PREEMPT_STYLE_FINEGRAIN) {
 		*cmds++ = cp_type7_packet(CP_PREEMPT_ENABLE_LOCAL, 1);
 		*cmds++ = 1;
 	} else {

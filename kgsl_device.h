@@ -200,8 +200,8 @@ struct kgsl_functable {
 		struct kgsl_context *context);
 	/** set_isdb_breakpoint_registers: Program isdb registers to issue break command */
 	void (*set_isdb_breakpoint_registers)(struct kgsl_device *device);
-	/** @create_hw_fence: Create a hardware fence */
-	void (*create_hw_fence)(struct kgsl_device *device, struct kgsl_sync_fence *kfence);
+	/** @setup_fence: Setup a fence */
+	void (*setup_fence)(struct kgsl_device *device, struct kgsl_sync_fence *kfence);
 	/** @gmu_based_dcvs_pwr_ops: Function ops for GMU based DCVS power operations */
 	int (*gmu_based_dcvs_pwr_ops)(struct kgsl_device *device, u32 arg,
 		enum gpu_pwrlevel_op op);
@@ -212,6 +212,8 @@ struct kgsl_functable {
 		struct kgsl_process_private *proc_priv);
 	/** @is_first_boot_done: Check if the ADRENO device first boot is done */
 	bool (*is_first_boot_done)(struct kgsl_device *device);
+	/** @context_is_guilty: Check if the context is guilty for gpu fault */
+	bool (*context_is_guilty)(struct kgsl_context *context);
 };
 
 struct kgsl_ioctl {
@@ -301,7 +303,13 @@ struct kgsl_device {
 		u32 size;
 	} snapshot_memory;
 
+	struct {
+		void *ptr;
+		u32 size;
+	} secondary_snapshot_memory;
+
 	struct kgsl_snapshot *snapshot;
+	struct kgsl_snapshot *secondary_snapshot;
 	/** @panic_nb: notifier block to capture GPU snapshot on kernel panic */
 	struct notifier_block panic_nb;
 	struct {
@@ -408,6 +416,20 @@ struct kgsl_device {
 	struct mutex file_mutex;
 	/** @host_based_dcvs: Set when KGSL is in charge of DCVS */
 	bool host_based_dcvs;
+	/** @syncobj_hw_fence_cache: Kmem cache for hardware fences in a sync object */
+	struct kmem_cache *syncobj_hw_fence_cache;
+	/** @fence_deadline_boost: Flag to indicate if deadline boost is enabled */
+	bool fence_deadline_boost;
+	/** @deadline_worker: Worker thread to send missed deadline hint to GMU */
+	struct kthread_worker *deadline_worker;
+	/** @prev_missed_deadline: previous deadline for the vsync */
+	ktime_t prev_missed_deadline;
+	/** @prev_deadline_ktime: Previous ktime of deadline boost sent */
+	ktime_t prev_deadline_ktime;
+	/** @bootcomplete_ktime: ktime of gpu boot completion */
+	ktime_t bootcomplete_ktime;
+	/** @fault_report_mutex: mutex held while reporting and freeing secondary snapshot */
+	struct mutex fault_report_mutex;
 };
 
 #define KGSL_MMU_DEVICE(_mmu) \
@@ -439,21 +461,16 @@ struct kgsl_process_private;
 
 #define KGSL_MAX_FAULT_ENTRIES 40
 
-/* Maintain faults observed within threshold time (in milliseconds) */
-#define KGSL_MAX_FAULT_TIME_THRESHOLD 5000
-
 /**
  * struct kgsl_fault_node - GPU fault descriptor
  * @node: List node for list of faults
  * @type: Type of fault
  * @priv: Pointer to type specific fault
- * @time: Time when fault was observed
  */
 struct kgsl_fault_node {
 	struct list_head node;
 	u32 type;
 	void *priv;
-	ktime_t time;
 };
 
 /**
@@ -515,6 +532,8 @@ struct kgsl_context {
 	struct mutex fault_lock;
 	/** @deferred_destroy_ws: Work struct used to destroy context in a deferred manner */
 	struct work_struct deferred_destroy_ws;
+	/** @fault_report_overflow: Fault report list overflowed **/
+	bool fault_report_overflow;
 };
 
 #define _context_comm(_c) \
@@ -645,6 +664,8 @@ struct kgsl_process_private {
 	u64 elapsed_ns;
 	/* @cycles: The total GPU cycles elapsed for this context */
 	u64 cycles;
+	/** @hybrid_output_fence: Create hybrid output fences for this process */
+	bool hybrid_output_fence;
 };
 
 struct kgsl_device_private {
@@ -710,6 +731,16 @@ struct kgsl_snapshot {
 	bool first_read;
 	bool recovered;
 	struct kgsl_device *device;
+	struct kgsl_context *owner;
+	bool is_fault_snapshot;
+	/** @qecp_carveout_addr: Physical address of the encrypted debugbus buffer */
+	u64 qecp_carveout_addr;
+	/** @qecp_carveout_size: Size of the encrypted debugbus buffer to be shared with QECP */
+	u32 qecp_carveout_size;
+	/** qecp_gx_debugbus_captured: True if QECP captured GX debugbus */
+	bool qecp_gx_debugbus_captured;
+	/** qecp_cx_debugbus_captured: True if QECP captured CX debugbus */
+	bool qecp_cx_debugbus_captured;
 };
 
 /**

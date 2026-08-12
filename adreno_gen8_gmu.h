@@ -362,14 +362,6 @@ int gen8_gmu_add_to_minidump(struct adreno_device *adreno_dev);
 bool gen8_gmu_rpmh_pwr_state_is_active(struct kgsl_device *device);
 
 /**
- * gen8_gmu_trigger_mx_voltage_change - Trigger MX voltage change
- * @adreno_dev: Pointer to the adreno device
- *
- * Returns: 0 on success or negative error on failure
- */
-int gen8_gmu_trigger_mx_voltage_change(struct adreno_device *adreno_dev);
-
-/**
  * gen8_gmu_set_non_bufferable_carveout - Set the non bufferable carveout region
  * @adreno_dev: Pointer to the adreno device
  *
@@ -379,4 +371,13 @@ int gen8_gmu_trigger_mx_voltage_change(struct adreno_device *adreno_dev);
  * Return: 0 on success or negative error otherwise
  */
 int gen8_gmu_set_non_bufferable_carveout(struct adreno_device *adreno_dev);
+
+/**
+ * gen8_gmu_malu_is_on - Check the state of MALU HW
+ * @adreno_dev: Pointer to the adreno device
+ *
+ * Returns true on active or false otherwise
+ */
+bool gen8_gmu_malu_is_on(struct adreno_device *adreno_dev);
+
 #endif

@@ -1015,7 +1015,12 @@ int a6xx_hwsched_probe(struct platform_device *pdev,
 
 	timer_setup(&device->idle_timer, hwsched_idle_timer, 0);
 
-	return adreno_hwsched_init(adreno_dev, &a6xx_hwsched_ops);
+	ret = adreno_hwsched_init(adreno_dev, &a6xx_hwsched_ops);
+
+	/* Notify userspace to explicitly apply correct policies */
+	kobject_uevent(&GMU_PDEV_DEV(device)->kobj, KOBJ_ADD);
+
+	return ret;
 }
 
 int a6xx_hwsched_add_to_minidump(struct adreno_device *adreno_dev)

@@ -62,7 +62,7 @@ struct kgsl_snapshot_section_header {
 #define KGSL_SNAPSHOT_SECTION_TRACE_BUFFER 0x1901
 #define KGSL_SNAPSHOT_SECTION_EVENTLOG     0x1A01
 #define KGSL_SNAPSHOT_SECTION_FAULTLOG     0x1B01
-
+#define KGSL_SNAPSHOT_SECTION_QECP         0xEC00
 #define KGSL_SNAPSHOT_SECTION_END          0xFFFF
 
 /* OS sub-section header */
@@ -221,12 +221,39 @@ struct kgsl_snapshot_mvc_regs_v3 {
 #define SNAPSHOT_DEBUG_GMU_PWR_DEV_VERSION 18
 #define SNAPSHOT_DEBUG_GMU_HFI_VERSION 19
 #define SNAPSHOT_DEBUG_AQE_VERSION 20
+#define SNAPSHOT_DEBUG_KERNEL_ERR_CODE 21
 
 /* RBBM status info */
 #define SNAPSHOT_DEBUG_RBBM_STATUS 32
 
 /* Slice mask info */
 #define SNAPSHOT_DEBUG_SLICE_MASK 8192
+
+/* Malu GDSC on/off */
+#define SNAPSHOT_DEBUG_MALU_STATUS 8194
+
+enum kgsl_snapshot_error_code {
+	SNAPSHOT_ERROR_HW_HANG_DETECTED = 1,
+	SNAPSHOT_ERROR_SW_TIMEOUT = 2,
+	SNAPSHOT_ERROR_GPU_PAGE_FAULT = 3,
+	SNAPSHOT_ERROR_GMU_PAGE_FAULT = 4,
+	SNAPSHOT_ERROR_PREEMPTION_FAULT = 5,
+	SNAPSHOT_ERROR_AHB_ERROR = 6,
+	SNAPSHOT_ERROR_ATB_ASYNC_OVERFLOW = 7,
+	SNAPSHOT_ERROR_GPC_ERROR = 8,
+	SNAPSHOT_ERROR_CP_HW_ERROR = 9,
+	SNAPSHOT_ERROR_OUT_OF_BOUND_ACCESS = 10,
+	SNAPSHOT_ERROR_UCHE_TRAP = 11,
+	SNAPSHOT_ERROR_TSB_WRITE_ERROR = 12,
+	SNAPSHOT_ERROR_SW_FUSE_VIOLATION = 13,
+	SNAPSHOT_ERROR_IFPC_EXIT_FAILURE = 14,
+	SNAPSHOT_ERROR_GMU_BOOT_FAILURE = 15,
+	SNAPSHOT_ERROR_GMU_WATCHDOG_TIMEOUT = 16,
+	SNAPSHOT_ERROR_GMU_OTHER = 17,
+};
+
+/* QECP debugbus status */
+#define SNAPSHOT_DEBUG_QECP 160
 
 struct kgsl_snapshot_debug {
 	int type;    /* Type identifier for the attached tata */
@@ -349,4 +376,13 @@ struct kgsl_process_private;
 void kgsl_snapshot_push_object(struct kgsl_device *device,
 		struct kgsl_process_private *process,
 		uint64_t gpuaddr, uint64_t dwords);
+
+static inline u64 snapshot_phy_addr(struct kgsl_device *device)
+{
+	return device->snapshot_memory.dma_handle ?
+		device->snapshot_memory.dma_handle : __pa(device->snapshot_memory.ptr);
+}
+
+void kgsl_free_snapshot(struct kgsl_snapshot *snapshot);
+void kgsl_free_context_snapshot(struct kgsl_device *device, struct kgsl_context *context);
 #endif

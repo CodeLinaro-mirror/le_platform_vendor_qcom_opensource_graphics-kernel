@@ -10,7 +10,7 @@
 
 #define HW_FENCE_QUEUE_SIZE		SZ_4K
 #define HFI_QUEUE_SIZE			SZ_4K /* bytes, must be base 4dw */
-#define MAX_RCVD_PAYLOAD_SIZE		16 /* dwords */
+#define MAX_RCVD_PAYLOAD_SIZE		32 /* dwords */
 #define MAX_RCVD_SIZE			(MAX_RCVD_PAYLOAD_SIZE + 3) /* dwords */
 #define HFI_MAX_MSG_SIZE		(SZ_1K)
 
@@ -82,9 +82,12 @@
 #define HFI_FEATURE_TDCVS		30
 #define HFI_FEATURE_DCE		31
 #define HFI_FEATURE_IFF_PCLX		32
+#define HFI_FEATURE_THINMEM_CFG		38
+
 #define HFI_FEATURE_SOFT_RESET		0x10000001
 #define HFI_FEATURE_DCVS_PROFILE	0x10000002
 #define HFI_FEATURE_FAST_CONTEXT_DESTROY	0x10000003
+#define HFI_FEATURE_HW_SYNX		0x10000004
 
 /*
  * MINBW_HYST_MASK = 0xffff
@@ -110,6 +113,7 @@ enum hfi_table_type {
 	HFI_TABLE_SYS_TIME_DATA	= 8,
 	HFI_TABLE_GMU_SCALING_DATA	= 9,
 	HFI_TABLE_LIMITS_MITIGATION	= 10,
+	HFI_TABLE_ACD_AVG	= 11,
 	HFI_TABLE_MAX,
 };
 
@@ -176,113 +180,115 @@ enum hfi_mem_kind {
 	/** @HFI_MEMKIND_GENERIC: Used for requesting generic memory */
 	HFI_MEMKIND_GENERIC = 0,
 	/** @HFI_MEMKIND_RB: Used for requesting ringbuffer memory */
-	HFI_MEMKIND_RB,
+	HFI_MEMKIND_RB = 1,
 	/** @HFI_MEMKIND_SCRATCH: Used for requesting scratch memory */
-	HFI_MEMKIND_SCRATCH,
+	HFI_MEMKIND_SCRATCH = 2,
 	/**
 	 * @HFI_MEMKIND_CSW_SMMU_INFO: Used for requesting SMMU record for
 	 * preemption context switching
 	 */
-	HFI_MEMKIND_CSW_SMMU_INFO,
+	HFI_MEMKIND_CSW_SMMU_INFO = 3,
 	/**
 	 * @HFI_MEMKIND_CSW_PRIV_NON_SECURE: Used for requesting privileged non
 	 * secure preemption records
 	 */
-	HFI_MEMKIND_CSW_PRIV_NON_SECURE,
+	HFI_MEMKIND_CSW_PRIV_NON_SECURE = 4,
 	/**
 	 * @HFI_MEMKIND_CSW_PRIV_SECURE: Used for requesting privileged secure
 	 * preemption records
 	 */
-	HFI_MEMKIND_CSW_PRIV_SECURE,
+	HFI_MEMKIND_CSW_PRIV_SECURE = 5,
 	/**
 	 * @HFI_MEMKIND_CSW_NON_PRIV: Used for requesting non privileged per
 	 * context preemption buffer
 	 */
-	HFI_MEMKIND_CSW_NON_PRIV,
+	HFI_MEMKIND_CSW_NON_PRIV = 6,
 	/**
 	 * @HFI_MEMKIND_CSW_COUNTER: Used for requesting preemption performance
 	 * counter save/restore buffer
 	 */
-	HFI_MEMKIND_CSW_COUNTER,
+	HFI_MEMKIND_CSW_COUNTER = 7,
 	/**
 	 * @HFI_MEMKIND_CTXTREC_PREEMPT_CNTR: Used for requesting preemption
 	 * counter buffer
 	 */
-	HFI_MEMKIND_CTXTREC_PREEMPT_CNTR,
+	HFI_MEMKIND_CTXTREC_PREEMPT_CNTR = 8,
 	/** @HFI_MEMKIND_SYSLOG: Used for requesting system log memory */
-	HFI_MEMKIND_SYS_LOG,
+	HFI_MEMKIND_SYS_LOG = 9,
 	/** @HFI_MEMKIND_CRASH_DUMP: Used for requesting carsh dumper memory */
-	HFI_MEMKIND_CRASH_DUMP,
+	HFI_MEMKIND_CRASH_DUMP = 10,
 	/**
 	 * @HFI_MEMKIND_MMIO_DPU: Used for requesting Display processing unit's
 	 * register space
 	 */
-	HFI_MEMKIND_MMIO_DPU,
+	HFI_MEMKIND_MMIO_DPU = 11,
 	/**
 	 * @HFI_MEMKIND_MMIO_TCSR: Used for requesting Top CSR(contains SoC
 	 * doorbells) register space
 	 */
-	HFI_MEMKIND_MMIO_TCSR,
+	HFI_MEMKIND_MMIO_TCSR = 12,
 	/**
 	 * @HFI_MEMKIND_MMIO_QDSS_STM: Used for requesting QDSS STM register
 	 * space
 	 */
-	HFI_MEMKIND_MMIO_QDSS_STM,
+	HFI_MEMKIND_MMIO_QDSS_STM = 13,
 	/** @HFI_MEMKIND_PROFILE: Used for kernel profiling */
-	HFI_MEMKIND_PROFILE,
+	HFI_MEMKIND_PROFILE = 14,
 	/** @HFI_MEMKIND_USER_PROFILING_IBS: Used for user profiling */
-	HFI_MEMKIND_USER_PROFILE_IBS,
+	HFI_MEMKIND_USER_PROFILE_IBS = 15,
 	/** @MEMKIND_CMD_BUFFER: Used for composing ringbuffer content */
-	HFI_MEMKIND_CMD_BUFFER,
+	HFI_MEMKIND_CMD_BUFFER = 16,
 	/**
 	 * @HFI_MEMKIND_GPU_BUSY_DATA_BUFFER: Used for GPU busy buffer for
 	 * all the contexts
 	 */
-	HFI_MEMKIND_GPU_BUSY_DATA_BUFFER,
+	HFI_MEMKIND_GPU_BUSY_DATA_BUFFER = 17,
 	/** @HFI_MEMKIND_GPU_BUSY_CMD_BUFFER: Used for GPU busy cmd buffer
 	 * (Only readable to GPU)
 	 */
-	HFI_MEMKIND_GPU_BUSY_CMD_BUFFER,
+	HFI_MEMKIND_GPU_BUSY_CMD_BUFFER = 18,
 	/**
 	 *@MEMKIND_MMIO_IPC_CORE: Used for IPC_core region mapping to GMU space
 	 * for EVA to GPU communication.
 	 */
-	HFI_MEMKIND_MMIO_IPC_CORE,
+	HFI_MEMKIND_MMIO_IPC_CORE = 19,
 	/** @HFIMEMKIND_MMIO_IPCC_AOSS: Used for IPCC AOSS, second memory region */
-	HFI_MEMKIND_MMIO_IPCC_AOSS,
+	HFI_MEMKIND_MMIO_IPCC_AOSS = 20,
 	/**
 	 * @MEMKIND_CSW_LPAC_PRIV_NON_SECURE: Used for privileged nonsecure
 	 * memory for LPAC context record
 	 */
-	HFI_MEMKIND_CSW_LPAC_PRIV_NON_SECURE,
+	HFI_MEMKIND_CSW_LPAC_PRIV_NON_SECURE = 21,
 	/** @HFI_MEMKIND_MEMSTORE: Buffer used to query a context's GPU sop/eop timestamps */
-	HFI_MEMKIND_MEMSTORE,
+	HFI_MEMKIND_MEMSTORE = 22,
 	/** @HFI_MEMKIND_HW_FENCE:  Hardware fence Tx/Rx headers and queues */
-	HFI_MEMKIND_HW_FENCE,
+	HFI_MEMKIND_HW_FENCE = 23,
 	/** @HFI_MEMKIND_PREEMPT_SCRATCH: Used for Preemption scratch memory */
-	HFI_MEMKIND_PREEMPT_SCRATCH,
+	HFI_MEMKIND_PREEMPT_SCRATCH = 24,
 	/**
 	 * @HFI_MEMKIND_AQE_BUFFER: Sandbox memory used by AQE to switch
 	 * between LPAC and GC
 	 */
-	HFI_MEMKIND_AQE_BUFFER,
+	HFI_MEMKIND_AQE_BUFFER = 25,
 	/** @HFI_MEMKIND_HW_FENCE_SHADOW: Shadow memory used for caching external input fences */
-	HFI_MEMKIND_HW_FENCE_SHADOW,
+	HFI_MEMKIND_HW_FENCE_SHADOW = 26,
 	/**
 	 * @HFI_MEMKIND_FREQMGR_SCRATCH: Scratch memory for FreqMgr task to retain information
 	 * related to GMU based DCVS.
 	 */
-	HFI_MEMKIND_FREQMGR_SCRATCH,
+	HFI_MEMKIND_FREQMGR_SCRATCH = 27,
+	/** @HFI_MEMKIND_HW_SYNX:  synx global shared memory */
 	/**
 	 * @HFI_MEMKIND_DUMMY_CSW_PRIV_NON_SECURE: Used for requesting privileged non
 	 * secure preemption records for the internal dummy buffer
 	 */
-	HFI_MEMKIND_DUMMY_CSW_PRIV_NON_SECURE,
+	HFI_MEMKIND_DUMMY_CSW_PRIV_NON_SECURE = 28,
 	/**
 	 * @HFI_MEMKIND_DUMMY_CSW_COUNTER: Used for requesting preemption performance
 	 * counter save/restore buffer for the internal dummy buffer
 	 */
-	HFI_MEMKIND_DUMMY_CSW_COUNTER,
+	HFI_MEMKIND_DUMMY_CSW_COUNTER = 29,
+	HFI_MEMKIND_HW_SYNX = 30,
 	HFI_MEMKIND_MAX,
 };
 
@@ -536,6 +542,8 @@ enum hfi_msg_type {
 	F2H_MSG_SYNCOBJ_QUERY		= 153,
 	H2F_MSG_WARMBOOT_CMD		= 154,
 	F2H_MSG_PROCESS_TRACE		= 155,
+	H2F_MSG_CONTEXT_PRI_UPDATE	= 156,
+	F2H_MSG_CONTEXT_PRI_UPDATE_DONE	= 157,
 	F2H_MSG_PLATFORM_LA		= 200,
 	H2F_MSG_PLATFORM_LA		= 201,
 	F2H_MSG_PLATFORM_WIN		= 202, /* Reserved */
@@ -638,6 +646,9 @@ struct hfi_table_entry {
 	u32 data[];
 } __packed;
 
+#define HFI_TABLE_ENTRY_SIZE_DWORDS(count, stride) \
+	((sizeof(struct hfi_table_entry) / sizeof(u32)) + (count * stride))
+
 struct hfi_table_cmd {
 	u32 hdr;
 	u32 version;
@@ -657,6 +668,23 @@ struct hfi_acd_table_cmd {
 	u32 num_levels;
 	u32 data[MAX_ACD_NUM_LEVELS * MAX_ACD_STRIDE];
 } __packed;
+
+/*
+ * HFI_TABLE_ACD_AVG - Table for ACD AVG configuration data
+ * Data format:
+ *   entry[0] = Globals
+ *     .count = 1
+ *     .stride = 2
+ *     .data[] = <enable_by_level reserved>
+ *   entry[1] = Config
+ *     .count = num_lvl
+ *     .stride = dwords per DCVS level = KGSL_MAX_ACD_AVG_STRIDE
+ *     .data[] = data[num_lvl]
+ */
+#define MAX_ACD_AVG_CMD_DWORDS \
+	((sizeof(struct hfi_table_cmd) / sizeof(u32))\
+	+ HFI_TABLE_ENTRY_SIZE_DWORDS(1, 2)\
+	+ HFI_TABLE_ENTRY_SIZE_DWORDS(KGSL_MAX_PWRLEVELS, KGSL_MAX_ACD_AVG_STRIDE))
 
 #define CLX_DOMAINS_V2 2
 struct clx_domain_v2 {
@@ -923,6 +951,15 @@ struct hfi_unregister_ctxt_cmd {
 	u32 ts;
 } __packed;
 
+/* H2F */
+struct hfi_context_priority_update_cmd {
+	u32 hdr;
+	u32 version;
+	u32 ctxt_id;
+	u32 new_ctx_pri;
+	u64 flags;
+} __packed;
+
 struct hfi_issue_ib {
 	u64 addr;
 	u32 size;
@@ -973,13 +1010,16 @@ struct hfi_ts_notify_cmd {
 #define GMU_SYNCOBJ_FLAG_SW_STATUS_SIGNALED_BIT	3
 /* This indicates that the SYNCOBJ's software status is pending */
 #define GMU_SYNCOBJ_FLAG_SW_STATUS_PENDING_BIT	4
+/* This indicates that the SYNCOBJ is a synx handle */
+#define GMU_SYNCOBJ_FLAG_SYNX_HANDLE_BIT	5
 
 #define GMU_SYNCOBJ_FLAGS  \
 	{ BIT(GMU_SYNCOBJ_FLAG_KGSL_FENCE_BIT), "KGSL"}, \
 	{ BIT(GMU_SYNCOBJ_FLAG_SIGNALED_BIT), "SIGNALED"}, \
 	{ BIT(GMU_SYNCOBJ_FLAG_QUERY_SW_STATUS_BIT), "QUERIED"}, \
 	{ BIT(GMU_SYNCOBJ_FLAG_SW_STATUS_SIGNALED_BIT), "SW_SIGNALED"}, \
-	{ BIT(GMU_SYNCOBJ_FLAG_SW_STATUS_PENDING_BIT), "SW_PENDING"}
+	{ BIT(GMU_SYNCOBJ_FLAG_SW_STATUS_PENDING_BIT), "SW_PENDING"}, \
+	{ BIT(GMU_SYNCOBJ_FLAG_SYNX_HANDLE_BIT), "SYNX"}
 
 /* F2H */
 struct hfi_ts_retire_cmd {
@@ -994,6 +1034,14 @@ struct hfi_ts_retire_cmd {
 	u64 active;
 	u32 version;
 	u32 flags;
+} __packed;
+
+/* F2H */
+struct hfi_context_priority_update_done_cmd {
+	u32 hdr;
+	u32 ctxt_id;
+	u32 cur_ctx_pri;
+	u32 new_ctx_pri;
 } __packed;
 
 /* H2F */
@@ -1130,7 +1178,9 @@ struct hfi_warmboot_scratch_cmd {
 } __packed;
 
 /* Request GMU to add this fence to TxQueue without checking whether this is retired or not */
-#define HW_FENCE_FLAG_SKIP_MEMSTORE 0x1
+#define HW_FENCE_FLAG_SKIP_MEMSTORE BIT(0)
+/* This is a synx handle and not a hardware fence handle */
+#define HW_FENCE_FLAG_SYNX_HANDLE   BIT(1)
 
 struct hfi_hw_fence_info {
 	/** @hdr: Header for the fence info packet */
@@ -1215,7 +1265,17 @@ struct hfi_scale_gmu_cmd {
 enum h2f_platform_action {
 	H2F_ST_MSG_PROFILE_REGISTER,
 	H2F_ST_MSG_PWR_BUDGET,
+	H2F_ST_MSG_DEADLINE_BOOST,
 };
+
+struct hfi_msg_deadline_boost {
+	/** @header: Header for deadline boost message packet */
+	struct hfi_msg_platform header;
+	/** @version: Version of the message packet */
+	u32 version;
+	/** @ctx_id: Context id of the context owning the dma fence that expred */
+	u32 ctx_id;
+} __packed;
 
 /* H2F */
 struct hfi_profile_register {
@@ -1263,16 +1323,31 @@ struct hfi_profile_register {
  *       [6:0] DES_PWR_ALPHA             - Alpha, out of 127, to be used for desired power EWMA
  *                                         calculations. If 0, assume 50% alpha
  * DATA[2]
- *     [31:27] RESERVED_2                - Reserved field
+ *     [31:27] NUM_SAMPLES_2             - Number of samples in the running sum buffer 2 (sustained
+ *                                         perf)
  *     [26:15] CDYN_ACCUM_CONFIG_0       - Value for GMUCX_CDYN_ACCUM_CONFIG_0 for Cdyn histogram.
  *                                         If 0, 10 will be used as default value
  *      [14:8] CDYN_HIST_ALPHA           - Alpha, out of 127, to be used for cdyn histogram EWMA
  *                                         calculations. If 0, assume 50% alpha
  *       [7:7] CDYN_SCALE_FACTOR_EN      - Scale the boot table Cdyn by a factor before making DCVS
  *                                         decisions
- *       [6:0] NUM_SAMPLES               - Number of samples in the running sum buffer
+ *       [6:0] NUM_SAMPLES               - Number of samples in the running sum buffer (battery
+ *                                         limits)
  * DATA[3]
- *      [31:0] RESERVED_3                - Reserved field
+ *     [31:15] RESERVED_3                - Reserved field
+ *     [14:14] USE_STATIC_CDYN_BP        - For battery limits, use static cdyn instead of histogram
+ *                                         cdyn value
+ *     [13:13] SYS_FW_VOTE_ENFORCE       - Switching to new vote managed by power limits or SysFW
+ *                                         0: Power limits enforces DCVS switching
+ *                                         1: Power limits suggests vote to KMD and KMD should
+ *                                            enforce it
+ *     [12:12] SKIP_DELAYED_GX_VOTE      - Process incoming GX vote immediately instead of at the
+ *                                         sample period boundary
+ *     [11:11] PWR_LIMITS_MODE_VAL       - Battery limits or sustained perf
+ *     [10:10] PWR_LIMITS_MODE_EN        - Use HFI to determine whether battery limits or sustained
+ *                                         perf window should be applied
+ *       [9:3] FORCED_TIME_CONST_MUL_2   - Multiplier for second long window (typically 26)
+ *       [2:0] FORCED_TIME_CONST_MUL_1   - Multiplier for first long window
  * DATA[4]
  *      [31:0] FORCED_LONG_BUDGET        - Forced long power budget in mW. If non-zero, use only
  *                                         the forced value
@@ -1302,12 +1377,19 @@ struct hfi_profile_register {
 #define GMU_PWR_BUDGET_MAX_BUDGET_CDYN_GFX_SHORT	GENMASK(19, 13)
 #define GMU_PWR_BUDGET_MAX_BUDGET_CDYN_GFX		GENMASK(12, 7)
 #define GMU_PWR_BUDGET_DES_PWR_ALPHA			GENMASK(6, 0)
-#define GMU_PWR_BUDGET_RESERVED_2			GENMASK(31, 27)
+#define GMU_PWR_BUDGET_NUM_SAMPLES_2			GENMASK(31, 27)
 #define GMU_PWR_BUDGET_CDYN_ACCUM_CONFIG_0		GENMASK(26, 15)
 #define GMU_PWR_BUDGET_CDYN_HIST_ALPHA			GENMASK(14, 8)
 #define GMU_PWR_BUDGET_CDYN_SCALE_FACTOR_EN		GENMASK(7, 7)
 #define GMU_PWR_BUDGET_NUM_SAMPLES			GENMASK(6, 0)
-#define GMU_PWR_BUDGET_RESERVED_3			GENMASK(31, 0)
+#define GMU_PWR_BUDGET_RESERVED_3			GENMASK(31, 15)
+#define GMU_PWR_BUDGET_USE_STATIC_CDYN_BP		GENMASK(14, 14)
+#define GMU_PWR_BUDGET_SYS_FW_VOTE_ENFORCE		GENMASK(13, 13)
+#define GMU_PWR_BUDGET_SKIP_DELAYED_GX_VOTE		GENMASK(12, 12)
+#define GMU_PWR_BUDGET_PWR_LIMITS_MODE_VAL		GENMASK(11, 11)
+#define GMU_PWR_BUDGET_PWR_LIMITS_MODE_EN		GENMASK(10, 10)
+#define GMU_PWR_BUDGET_FORCED_TIME_CONST_MUL_2		GENMASK(9, 3)
+#define GMU_PWR_BUDGET_FORCED_TIME_CONST_MUL_1		GENMASK(2, 0)
 #define GMU_PWR_BUDGET_FORCED_LONG_BUDGET		GENMASK(31, 0)
 #define GMU_PWR_BUDGET_FORCED_LONG_TIME_CONST		GENMASK(31, 0)
 #define GMU_PWR_BUDGET_FORCED_SHORT_BUDGET		GENMASK(31, 0)
@@ -1535,6 +1617,9 @@ enum gpu_tuning_attr {
 	GPU_TUNING_KEY_BUS_MAX_FREQUENCY = 14,
 	GPU_TUNING_KEY_MIN_AB_MBPS = 15,
 	GPU_TUNING_KEY_MAX_AB_MBPS = 16,
+	GPU_TUNING_KEY_DEADLINE_BOOST_PWRLEVEL_BASE = 17,
+	GPU_TUNING_KEY_DEADLINE_BOOST_STRIDE_PERCENTAGE = 18,
+	GPU_TUNING_KEY_DEADLINE_BOOST_RELEASE_NUM_FRAMES = 19,
 	GPU_TUNING_KEY_MAX,
 };
 
@@ -1737,4 +1822,26 @@ static inline int hfi_get_minidump_string(u32 mem_kind, char *hfi_minidump_str,
  * If the feature is unknown, the function returns "unknown".
  */
 const char *hfi_feature_to_string(u32 feature);
+
+static inline bool adreno_hfi_is_queue_empty(struct adreno_device *adreno_dev,
+	struct kgsl_memdesc *hfi_mem, u32 queue_idx)
+{
+	struct hfi_queue_table *tbl = hfi_mem->hostptr;
+	struct hfi_queue_header *hdr = &tbl->qhdr[queue_idx];
+
+	if (hdr->status == HFI_QUEUE_STATUS_DISABLED)
+		return true;
+
+	if (hdr->read_index == hdr->write_index)
+		return true;
+
+	/*
+	 * This is to ensure that the queue is not read speculatively before the queue empty
+	 * condition is evaluated
+	 */
+	rmb();
+
+	return false;
+}
+
 #endif

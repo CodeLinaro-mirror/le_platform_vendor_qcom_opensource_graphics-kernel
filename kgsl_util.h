@@ -9,6 +9,10 @@
 
 #include <linux/version.h>
 
+#ifndef __CHAR_BIT__
+#define __CHAR_BIT__ 8
+#endif
+
 #define KGSL_DRIVER "kgsl_driver"
 #define KGSL_ADRENO_DEVICE "kgsl_adreno_device"
 #define KGSL_A6XX_DEVICE "kgsl_a6xx_device"
@@ -65,6 +69,10 @@
  * Request TZ to program tsense measurement to a large period
  */
 #define GPU_TSENSE_MEASURE_DEFAULT_DISABLE BIT(4)
+/**
+ * Request TZ to set up GPU registers at probe time
+ */
+#define GPU_PROBE BIT(5)
 
 struct regulator;
 struct clk_bulk_data;
@@ -158,17 +166,6 @@ int kgsl_clk_set_rate(struct clk_bulk_data *clks, int num_clks,
 		const char *id, unsigned long rate);
 
 /**
- * kgsl_clk_get_rate - Get current clock rate in Hz of given clock
- * @clks: Pointer to an array of bulk clk data
- * @count: Number of entries in the array
- * @id: Name of the clock to search for
- *
- * Return: clock rate of the given clock
- */
-unsigned long kgsl_clk_get_rate(struct clk_bulk_data *clks, int num_clks,
-		const char *id);
-
-/**
  * kgsl_scm_gpu_init_regs - Load secure registers through tz
  * @dev: Pointer to the GPU platform device
  * @gpu_req: Bit mask of requests to enable
@@ -205,6 +202,19 @@ int kgsl_zap_shader_load(struct device *dev, const char *name);
  * Return: 0 on success or negative on failure
  */
 int kgsl_zap_shader_unload(struct device *dev);
+
+/**
+ * kgsl_get_resource_address_size - Get a resource's address and size
+ * @device: Pointer to the kgsl device
+ * @pdev: Pointer to the platform device
+ * #resource: Resource name
+ * address: Pointer to store resource address in
+ * @size: Pointer to store resource size in
+ *
+ * Return: 0 on success or negative error on failure
+ */
+int kgsl_get_resource_address_size(struct kgsl_device *device, struct platform_device *pdev,
+	const char *resource, uint64_t *address, uint64_t *size);
 
 #if IS_ENABLED(CONFIG_QCOM_VA_MINIDUMP)
 /**
@@ -299,6 +309,18 @@ void isdb_write(void __iomem *base, u32 offset);
 #define kgsl_nth_page(page, n) ((page) + (n))
 #else
 #define kgsl_nth_page(page, n) nth_page((page), (n))
+#endif
+
+/*
+ * Create and wake a kthread worker. On kernel versions below 6.14, kthread_create_worker
+ * created a kthread worker and immediately woke it up. This was changed on kernel version 6.14
+ * to only create the kthread worker. Use kthread_run_worker to restore the kthread worker
+ * behavior.
+ */
+#if (KERNEL_VERSION(6, 14, 0) <= LINUX_VERSION_CODE)
+#define kgsl_kthread_run_worker kthread_run_worker
+#else
+#define kgsl_kthread_run_worker kthread_create_worker
 #endif
 
 #endif

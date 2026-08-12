@@ -19,7 +19,7 @@
 
 static ssize_t _gpu_model_show(struct kgsl_device *device, char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, adreno_get_gpu_model(device));
+	return scnprintf(buf, PAGE_SIZE, "%s", adreno_get_gpu_model(device));
 }
 
 static ssize_t gpu_model_show(struct device *dev,
@@ -657,6 +657,83 @@ static bool _dcvs_profile_enabled_show(struct adreno_device *adreno_dev)
 	return adreno_dev->dcvs_profile_enabled;
 }
 
+static ssize_t bcl_percentage_drops_store(struct device *dev,
+					 struct device_attribute *attr,
+					 const char *buf, size_t count)
+{
+	struct kgsl_device *device = dev_get_drvdata(dev);
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	const struct gmu_dev_ops *ops = GMU_DEVICE_OPS(device);
+	ssize_t size;
+	u32 sid0_pwr_drop, sid1_pwr_drop, sid2_pwr_drop;
+	u32 sid0_clk_throttle, sid1_clk_throttle, sid2_clk_throttle;
+	u32 bcl_data = adreno_dev->bcl_data;
+
+	/* If feature is not enabled or firmware response is not enabled, return */
+	if (!ADRENO_FEATURE(adreno_dev, ADRENO_BCL) ||
+		!FIELD_GET(BCL_RESP_TYPE_MASK, adreno_dev->bcl_data))
+		return -EINVAL;
+
+	if (!(ops && ops->bcl_query_data))
+		return -EINVAL;
+
+	size = sscanf(buf, "%u %u %u", &sid0_pwr_drop, &sid1_pwr_drop, &sid2_pwr_drop);
+	if (size != 3)
+		return -EINVAL;
+
+	/* Drop percentages should be within 1 - 100 */
+	if ((sid0_pwr_drop == 0 || sid0_pwr_drop > 100) ||
+			(sid1_pwr_drop == 0 || sid1_pwr_drop > 100) ||
+			(sid2_pwr_drop == 0 || sid2_pwr_drop > 100))
+		return -EINVAL;
+
+	bcl_data &= ~BCL_SID0_MASK;
+	sid0_clk_throttle = ops->bcl_query_data(device, sid0_pwr_drop, 0);
+	bcl_data |= FIELD_PREP(BCL_SID0_MASK, sid0_clk_throttle);
+
+	bcl_data &= ~BCL_SID1_MASK;
+	sid1_clk_throttle = ops->bcl_query_data(device, sid1_pwr_drop, 0);
+	bcl_data |= FIELD_PREP(BCL_SID1_MASK, sid1_clk_throttle);
+
+	bcl_data &= ~BCL_SID2_MASK;
+	sid2_clk_throttle = ops->bcl_query_data(device, sid2_pwr_drop, 0);
+	bcl_data |= FIELD_PREP(BCL_SID2_MASK, sid2_clk_throttle);
+
+	adreno_power_cycle_u32(adreno_dev, &adreno_dev->bcl_data, bcl_data);
+
+	return count;
+}
+
+static ssize_t bcl_percentage_drops_show(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	struct kgsl_device *device = dev_get_drvdata(dev);
+	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
+	const struct gmu_dev_ops *ops = GMU_DEVICE_OPS(device);
+	u32 sid0_pwr_drop, sid1_pwr_drop, sid2_pwr_drop;
+	u32 sid0_clk_throttle, sid1_clk_throttle, sid2_clk_throttle;
+
+	if (!ADRENO_FEATURE(adreno_dev, ADRENO_BCL) ||
+		!FIELD_GET(BCL_RESP_TYPE_MASK, adreno_dev->bcl_data))
+		return scnprintf(buf, PAGE_SIZE, "\n");
+
+	if (!(ops && ops->bcl_query_data))
+		return scnprintf(buf, PAGE_SIZE, "\n");
+
+	sid0_clk_throttle = FIELD_GET(BCL_SID0_MASK, adreno_dev->bcl_data);
+	sid0_pwr_drop = ops->bcl_query_data(device, sid0_clk_throttle, 1);
+
+	sid1_clk_throttle = FIELD_GET(BCL_SID1_MASK, adreno_dev->bcl_data);
+	sid1_pwr_drop = ops->bcl_query_data(device, sid1_clk_throttle, 1);
+
+	sid2_clk_throttle = FIELD_GET(BCL_SID2_MASK, adreno_dev->bcl_data);
+	sid2_pwr_drop = ops->bcl_query_data(device, sid2_clk_throttle, 1);
+
+	return scnprintf(buf, PAGE_SIZE, "%u %u %u\n",
+			sid0_pwr_drop, sid1_pwr_drop, sid2_pwr_drop);
+}
+
 static ADRENO_SYSFS_U32(ft_policy);
 static ADRENO_SYSFS_U32(ft_pagefault_policy);
 static ADRENO_SYSFS_U32(rt_bus_hint);
@@ -696,6 +773,8 @@ static ADRENO_SYSFS_U32(dcvs_tuning_penalty);
 static ADRENO_SYSFS_U32(dcvs_tuning_numbusy);
 static ADRENO_SYSFS_RO_U32(dcvs_mode);
 
+static DEVICE_ATTR_RW(bcl_percentage_drops);
+
 static const struct attribute *_attr_list[] = {
 	&adreno_attr_ft_policy.attr.attr,
 	&adreno_attr_ft_pagefault_policy.attr.attr,
@@ -731,6 +810,7 @@ static const struct attribute *_attr_list[] = {
 	&adreno_attr_dcvs_tuning_numbusy.attr.attr,
 	&adreno_attr_dcvs_mode.attr.attr,
 	&adreno_attr_dcvs_profile_enabled.attr.attr,
+	&dev_attr_bcl_percentage_drops.attr,
 	NULL,
 };
 

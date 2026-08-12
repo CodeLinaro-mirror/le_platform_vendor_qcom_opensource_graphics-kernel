@@ -329,6 +329,53 @@ TRACE_EVENT(kgsl_pwrlevel,
 	)
 );
 
+TRACE_EVENT(kgsl_missed_deadline,
+	TP_PROTO(unsigned int ctx, unsigned int ts, u64 deadline),
+	TP_ARGS(ctx, ts, deadline),
+	TP_STRUCT__entry(
+		__field(unsigned int, ctx)
+		__field(unsigned int, ts)
+		__field(u64, deadline)
+	),
+	TP_fast_assign(
+		__entry->ctx = ctx;
+		__entry->ts = ts;
+		__entry->deadline = deadline;
+	),
+
+	TP_printk("ctx=%u ts=%u deadline=%llu",
+		__entry->ctx,
+		__entry->ts,
+		__entry->deadline)
+);
+
+TRACE_EVENT(kgsl_fence_deadline_info,
+	TP_PROTO(unsigned int ctx, unsigned int ts, u64 deadline_ktime, s64 expiry_us,
+		u64 signaled_ktime),
+	TP_ARGS(ctx, ts, deadline_ktime, expiry_us, signaled_ktime),
+	TP_STRUCT__entry(
+		__field(unsigned int, ctx)
+		__field(unsigned int, ts)
+		__field(u64, deadline_ktime)
+		__field(s64, expiry_us)
+		__field(u64, signaled_ktime)
+	),
+	TP_fast_assign(
+		__entry->ctx = ctx;
+		__entry->ts = ts;
+		__entry->deadline_ktime = deadline_ktime;
+		__entry->expiry_us = expiry_us;
+		__entry->signaled_ktime = signaled_ktime;
+	),
+
+	TP_printk("ctx=%u ts=%u deadline_ktime=%llu expiry_us=%lld signaled_ktime=%llu",
+		__entry->ctx,
+		__entry->ts,
+		__entry->deadline_ktime,
+		__entry->expiry_us,
+		__entry->signaled_ktime)
+);
+
 /*
  * Tracepoint for kgsl gpu_frequency
  */
@@ -932,9 +979,9 @@ TRACE_EVENT(kgsl_user_pwrlevel_constraint,
 TRACE_EVENT(kgsl_constraint,
 
 	TP_PROTO(struct kgsl_device *device, unsigned int type,
-		unsigned int value, unsigned int on, u64 ticks),
+		unsigned int value, unsigned int on, u64 ticks, unsigned int owner_ctx_id),
 
-	TP_ARGS(device, type, value, on, ticks),
+	TP_ARGS(device, type, value, on, ticks, owner_ctx_id),
 
 	TP_STRUCT__entry(
 		__string(device_name, device->name)
@@ -942,6 +989,7 @@ TRACE_EVENT(kgsl_constraint,
 		__field(unsigned int, value)
 		__field(unsigned int, on)
 		__field(u64, ticks)
+		__field(unsigned int, owner_ctx_id)
 	),
 
 	TP_fast_assign(
@@ -950,15 +998,17 @@ TRACE_EVENT(kgsl_constraint,
 		__entry->value = value;
 		__entry->on = on;
 		__entry->ticks = ticks;
+		__entry->owner_ctx_id = owner_ctx_id;
 	),
 
 	TP_printk(
-		"d_name=%s constraint_type=%s constraint_value=%u status=%s ticks=%llu",
+		"d_name=%s constraint_type=%s constraint_value=%u status=%s ticks=%llu ctx=%u",
 		__get_str(device_name),
 		show_constraint(__entry->type),
 		__entry->value,
 		__entry->on ? "ON" : "OFF",
-		__entry->ticks
+		__entry->ticks,
+		__entry->owner_ctx_id
 	)
 );
 

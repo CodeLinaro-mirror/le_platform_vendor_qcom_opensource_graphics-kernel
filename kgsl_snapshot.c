@@ -36,12 +36,6 @@ struct snapshot_obj_itr {
 	size_t write;   /* Bytes written so far */
 };
 
-static inline u64 snapshot_phy_addr(struct kgsl_device *device)
-{
-	return device->snapshot_memory.dma_handle ?
-		device->snapshot_memory.dma_handle : __pa(device->snapshot_memory.ptr);
-}
-
 static inline u64 atomic_snapshot_phy_addr(struct kgsl_device *device)
 {
 	if (device->snapshot_memory_atomic.ptr == device->snapshot_memory.ptr)
@@ -179,6 +173,19 @@ int kgsl_snapshot_get_object(struct kgsl_snapshot *snapshot,
 
 	if (!gpuaddr)
 		return 0;
+
+	/**
+	 * secondary snapshot is owned by the context, responsible
+	 * for the fault and copied to the context's fault report.
+	 * Hence we avoid copying ib object from other process
+	 */
+	if (snapshot->is_fault_snapshot) {
+		if (!snapshot->owner)
+			return 0;
+
+		if (snapshot->owner->proc_priv != process)
+			return 0;
+	}
 
 	entry = kgsl_sharedmem_find(process, gpuaddr);
 
@@ -458,6 +465,12 @@ void kgsl_snapshot_add_section(struct kgsl_device *device, u16 id,
 	u8 *data = snapshot->ptr + sizeof(*header);
 	size_t ret = 0;
 
+	if (snapshot->is_fault_snapshot)
+		if (id == KGSL_SNAPSHOT_SECTION_DEBUGBUS ||
+				id == KGSL_SNAPSHOT_SECTION_DEBUGBUS_ENCRYPTED ||
+				id == KGSL_SNAPSHOT_SECTION_SIDE_DEBUGBUS)
+			return;
+
 	/*
 	 * Sanity check to make sure there is enough for the header.  The
 	 * callback will check to make sure there is enough for the rest
@@ -491,7 +504,7 @@ void kgsl_snapshot_add_section(struct kgsl_device *device, u16 id,
 	snapshot->size += header->size;
 }
 
-static void kgsl_free_snapshot(struct kgsl_snapshot *snapshot)
+void kgsl_free_snapshot(struct kgsl_snapshot *snapshot)
 {
 	struct kgsl_snapshot_object *obj, *tmp;
 	struct kgsl_device *device = snapshot->device;
@@ -507,6 +520,17 @@ static void kgsl_free_snapshot(struct kgsl_snapshot *snapshot)
 
 	kfree(snapshot);
 	dev_err(device->dev, "snapshot: objects released\n");
+}
+
+void kgsl_free_context_snapshot(struct kgsl_device *device, struct kgsl_context *context)
+{
+	mutex_lock(&device->fault_report_mutex);
+	if (device->secondary_snapshot &&
+		device->secondary_snapshot->owner == context) {
+		kgsl_free_snapshot(device->secondary_snapshot);
+		device->secondary_snapshot = NULL;
+	}
+	mutex_unlock(&device->fault_report_mutex);
 }
 
 #define SP0_ISDB_ISDB_BRKPT_CFG 0x40014
@@ -644,6 +668,220 @@ static size_t kgsl_snapshot_faultlog_buffer(struct kgsl_device *device,
 
 	return (hdr->size + sizeof(*hdr));
 }
+
+static bool kgsl_context_use_secondary_snapshot(struct kgsl_context *context)
+{
+	struct kgsl_device *device;
+
+	if (!context || !(context->flags & KGSL_CONTEXT_FAULT_SNAPSHOT))
+		return false;
+
+	device = context->device;
+
+	mutex_lock(&device->fault_report_mutex);
+	/* Check if secondary snapshot already occupied */
+	if (device->secondary_snapshot) {
+		mutex_unlock(&device->fault_report_mutex);
+		return false;
+	}
+
+	if (!device->secondary_snapshot_memory.ptr) {
+		device->secondary_snapshot_memory.ptr =
+			kvzalloc(device->secondary_snapshot_memory.size, GFP_KERNEL);
+		if (!device->secondary_snapshot_memory.ptr) {
+			mutex_unlock(&device->fault_report_mutex);
+			return false;
+		}
+	}
+
+	mutex_unlock(&device->fault_report_mutex);
+	return true;
+}
+
+static void kgsl_device_snapshot_secondary_copy(struct kgsl_device *device,
+		struct kgsl_snapshot *primary)
+{
+	struct kgsl_snapshot *snapshot = device->secondary_snapshot;
+	struct kgsl_snapshot_header *header = (struct kgsl_snapshot_header *)
+		primary->start;
+	size_t primary_size = primary->size;
+	size_t primary_mempool_size = primary->mempool_size;
+	u8 *primary_ptr = primary->start;
+	u8 *mempool_ptr = primary->mempool;
+	size_t mempool_size = 0;
+	u8 *dest_ptr;
+	u64 pt_base = 0;
+
+	if (!snapshot)
+		return;
+
+	if (!snapshot->owner)
+		return;
+
+	pt_base = kgsl_mmu_pagetable_get_ttbr0(
+		snapshot->owner->proc_priv->pagetable);
+
+	memcpy(snapshot->ptr, header, sizeof(*header));
+	snapshot->ptr += sizeof(*header);
+	snapshot->remain -= sizeof(*header);
+	snapshot->size += sizeof(*header);
+	primary_ptr += sizeof(*header);
+	primary_size -= sizeof(*header);
+
+	while (snapshot->remain && primary_size) {
+		struct kgsl_snapshot_section_header *sect =
+			(struct kgsl_snapshot_section_header *) primary_ptr;
+
+		if (sect->size == 0)
+			break;
+
+		if (sect->size > snapshot->remain)
+			break;
+
+		if (sect->size > primary_size)
+			break;
+
+		if (sect->id != KGSL_SNAPSHOT_SECTION_DEBUGBUS &&
+			sect->id != KGSL_SNAPSHOT_SECTION_DEBUGBUS_ENCRYPTED &&
+			sect->id != KGSL_SNAPSHOT_SECTION_SIDE_DEBUGBUS) {
+			memcpy(snapshot->ptr, primary_ptr, sect->size);
+			snapshot->ptr += sect->size;
+			snapshot->remain -= sect->size;
+			snapshot->size += sect->size;
+		}
+
+		primary_ptr += sect->size;
+		primary_size -= sect->size;
+	}
+
+	if (!primary_mempool_size)
+		goto done;
+
+	/**
+	 * The primary snapshot mempool shall contain ib dump across
+	 * all processes. However in secondary snapshot we keep ib dump
+	 * only for the process which is responsible for the fault.
+	 * So filter out sections from mempool as per process
+	 */
+	while (primary_mempool_size > 0) {
+		struct kgsl_snapshot_section_header *section =
+			(struct kgsl_snapshot_section_header *)(mempool_ptr);
+		struct kgsl_snapshot_gpu_object_v2 *header =
+			(struct kgsl_snapshot_gpu_object_v2 *)(mempool_ptr +
+			sizeof(*section));
+		if (section->size > primary_mempool_size)
+			break;
+
+		if (header->ptbase == pt_base)
+			mempool_size += section->size;
+
+		primary_mempool_size -= section->size;
+		mempool_ptr += section->size;
+	}
+
+	if (!mempool_size)
+		goto done;
+
+	snapshot->mempool = vmalloc(mempool_size);
+	snapshot->mempool_size = mempool_size;
+	if (!snapshot->mempool)
+		goto done;
+
+	primary_mempool_size = primary->mempool_size;
+	mempool_ptr = primary->mempool;
+	dest_ptr = snapshot->mempool;
+	while (primary_mempool_size > 0 && mempool_size > 0) {
+		struct kgsl_snapshot_section_header *section =
+			(struct kgsl_snapshot_section_header *)(mempool_ptr);
+		struct kgsl_snapshot_gpu_object_v2 *header =
+			(struct kgsl_snapshot_gpu_object_v2 *)(mempool_ptr +
+			sizeof(*section));
+		if (section->size > primary_mempool_size)
+			break;
+
+		if (header->ptbase == pt_base) {
+			if (section->size > mempool_size)
+				break;
+
+			memcpy(dest_ptr, mempool_ptr, section->size);
+			dest_ptr += section->size;
+			mempool_size -= section->size;
+		}
+
+		mempool_ptr += section->size;
+		primary_mempool_size -= section->size;
+	}
+
+done:
+	kgsl_context_put(snapshot->owner);
+	complete_all(&snapshot->dump_gate);
+}
+
+static void kgsl_device_snapshot_secondary(struct kgsl_device *device,
+		struct kgsl_context *context, struct kgsl_context *context_lpac)
+{
+	struct kgsl_snapshot *snapshot;
+
+	snapshot = kzalloc(sizeof(*snapshot), GFP_KERNEL);
+	if (snapshot == NULL)
+		return;
+
+	snapshot->owner = kgsl_context_get(device, context->id);
+	if (snapshot->owner == NULL) {
+		kfree(snapshot);
+		return;
+	}
+
+	init_completion(&snapshot->dump_gate);
+	INIT_LIST_HEAD(&snapshot->obj_list);
+	INIT_LIST_HEAD(&snapshot->cp_list);
+	INIT_WORK(&snapshot->work, kgsl_snapshot_save_frozen_objs);
+	snapshot->start = device->secondary_snapshot_memory.ptr;
+	snapshot->ptr = snapshot->start;
+	snapshot->remain = device->secondary_snapshot_memory.size;
+	snapshot->is_fault_snapshot = true;
+
+	if (device->ftbl->snapshot)
+		device->ftbl->snapshot(device, snapshot, context, context_lpac);
+	kgsl_snapshot_add_section(device, KGSL_SNAPSHOT_SECTION_EVENTLOG,
+		snapshot, kgsl_snapshot_eventlog_buffer, NULL);
+	kgsl_snapshot_add_section(device, KGSL_SNAPSHOT_SECTION_FAULTLOG,
+		snapshot, kgsl_snapshot_faultlog_buffer, NULL);
+
+	mutex_lock(&device->fault_report_mutex);
+	device->secondary_snapshot = snapshot;
+	snapshot->device = device;
+	mutex_unlock(&device->fault_report_mutex);
+	kgsl_schedule_work(&snapshot->work);
+}
+
+static void kgsl_secondary_snapshot_init(struct kgsl_device *device,
+		struct kgsl_context *context)
+{
+	struct kgsl_snapshot *snapshot;
+
+	snapshot = kzalloc(sizeof(*snapshot), GFP_KERNEL);
+	if (!snapshot)
+		return;
+
+	snapshot->owner = kgsl_context_get(device, context->id);
+	if (snapshot->owner == NULL) {
+		kfree(snapshot);
+		return;
+	}
+
+	init_completion(&snapshot->dump_gate);
+	INIT_LIST_HEAD(&snapshot->obj_list);
+	snapshot->start = device->secondary_snapshot_memory.ptr;
+	snapshot->ptr = device->secondary_snapshot_memory.ptr;
+	snapshot->remain = device->secondary_snapshot_memory.size;
+	snapshot->device = device;
+	snapshot->is_fault_snapshot = true;
+	mutex_lock(&device->fault_report_mutex);
+	device->secondary_snapshot = snapshot;
+	mutex_unlock(&device->fault_report_mutex);
+}
+
 /**
  * kgsl_device_snapshot() - construct a device snapshot
  * @device: device to snapshot
@@ -660,13 +898,17 @@ void kgsl_device_snapshot(struct kgsl_device *device,
 {
 	struct kgsl_snapshot *snapshot;
 	struct timespec64 boot;
+	bool use_secondary_snapshot = kgsl_context_use_secondary_snapshot(context);
 
 	if (device->ftbl->set_isdb_breakpoint_registers)
 		device->ftbl->set_isdb_breakpoint_registers(device);
 
 	if (device->snapshot_memory.ptr == NULL) {
 		dev_err(device->dev,
-			     "snapshot: no snapshot memory available\n");
+				"snapshot: no snapshot memory available\n");
+		if (use_secondary_snapshot)
+			return kgsl_device_snapshot_secondary(device, context, context_lpac);
+
 		return;
 	}
 
@@ -679,7 +921,6 @@ void kgsl_device_snapshot(struct kgsl_device *device,
 	device->gmu_fault = gmu_fault;
 
 	if (device->snapshot != NULL) {
-
 		/*
 		 * Snapshot over-write policy:
 		 * 1. By default, don't over-write the very first snapshot,
@@ -691,8 +932,13 @@ void kgsl_device_snapshot(struct kgsl_device *device,
 		 *    prioritize_recoverable to true.
 		 */
 		if (!device->prioritize_unrecoverable ||
-			!device->snapshot->recovered || !gmu_fault)
+			!device->snapshot->recovered || !gmu_fault) {
+			if (use_secondary_snapshot)
+				return kgsl_device_snapshot_secondary(device, context,
+						context_lpac);
+
 			return;
+		}
 
 		/*
 		 * If another thread is currently reading it, that thread
@@ -719,6 +965,8 @@ void kgsl_device_snapshot(struct kgsl_device *device,
 	snapshot->recovered = false;
 	snapshot->first_read = true;
 	snapshot->sysfs_read = 0;
+	snapshot->is_fault_snapshot = false;
+	snapshot->owner = use_secondary_snapshot ? kgsl_context_get(device, context->id) : NULL;
 
 	device->ftbl->snapshot(device, snapshot, context, context_lpac);
 
@@ -752,6 +1000,8 @@ void kgsl_device_snapshot(struct kgsl_device *device,
 
 	sysfs_notify(&device->snapshot_kobj, NULL, "timestamp");
 
+	if (use_secondary_snapshot)
+		kgsl_secondary_snapshot_init(device, context);
 	/*
 	 * Queue a work item that will save the IB data in snapshot into
 	 * static memory to prevent loss of data due to overwriting of
@@ -1179,6 +1429,9 @@ static void kgsl_devcoredump(struct kgsl_device *device)
 void kgsl_device_snapshot_probe(struct kgsl_device *device, u32 size)
 {
 	device->snapshot_memory.size = size;
+	device->secondary_snapshot_memory.size = size;
+	device->secondary_snapshot_memory.ptr = NULL;
+	device->secondary_snapshot = NULL;
 
 	device->snapshot_memory.ptr = dma_alloc_coherent(&device->pdev->dev,
 		device->snapshot_memory.size, &device->snapshot_memory.dma_handle,
@@ -1267,6 +1520,19 @@ void kgsl_device_snapshot_close(struct kgsl_device *device)
 		dma_free_coherent(&device->pdev->dev, device->snapshot_memory_atomic.size,
 			device->snapshot_memory_atomic.ptr,
 			device->snapshot_memory_atomic.dma_handle);
+
+	mutex_lock(&device->fault_report_mutex);
+	if (device->secondary_snapshot) {
+		kgsl_free_snapshot(device->secondary_snapshot);
+		device->secondary_snapshot = NULL;
+	}
+
+	if (device->secondary_snapshot_memory.ptr) {
+		kvfree(device->secondary_snapshot_memory.ptr);
+		device->secondary_snapshot_memory.ptr = NULL;
+		device->secondary_snapshot_memory.size = 0;
+	}
+	mutex_unlock(&device->fault_report_mutex);
 }
 
 /**
@@ -1403,6 +1669,16 @@ done:
 gmu_only:
 	BUG_ON(!snapshot->device->skip_ib_capture &&
 				snapshot->device->force_panic);
+	if (!snapshot->is_fault_snapshot && snapshot->owner) {
+		kgsl_device_snapshot_secondary_copy(snapshot->device, snapshot);
+		kgsl_context_put(snapshot->owner);
+		snapshot->owner = NULL;
+	}
+
+	if (snapshot->owner)
+		kgsl_context_put(snapshot->owner);
+
 	complete_all(&snapshot->dump_gate);
-	kgsl_devcoredump(snapshot->device);
+	if (!snapshot->is_fault_snapshot)
+		kgsl_devcoredump(snapshot->device);
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include "adreno.h"
@@ -30,8 +30,7 @@ int adreno_getproperty_compat(struct kgsl_device *device,
 			devinfo.mmu_enabled =
 				kgsl_mmu_has_feature(device, KGSL_MMU_PAGED);
 			devinfo.gmem_gpubaseaddr = 0;
-			devinfo.gmem_sizebytes =
-					adreno_dev->gpucore->gmem_size;
+			devinfo.gmem_sizebytes = adreno_gmem_size(adreno_dev);
 
 			if (copy_to_user(param->value, &devinfo,
 				sizeof(devinfo))) {

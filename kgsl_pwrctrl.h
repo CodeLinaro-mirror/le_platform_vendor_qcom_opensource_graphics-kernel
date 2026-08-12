@@ -15,6 +15,7 @@
 #define KGSL_MAX_CLKS 20
 
 #define KGSL_MAX_PWRLEVELS 32
+#define KGSL_MAX_ACD_AVG_STRIDE 3
 
 #define KGSL_PWRFLAGS_POWER_ON 0
 #define KGSL_PWRFLAGS_CLK_ON   1
@@ -68,7 +69,12 @@ struct kgsl_pwrlevel {
 	unsigned int bus_freq;
 	unsigned int bus_min;
 	unsigned int bus_max;
+	/** @acd_level: Register setting for ACD power feature */
 	unsigned int acd_level;
+	/** @acd_avg_level_enable: True if ACD AVG is enabled for this level */
+	bool acd_avg_level_enable;
+	/** @acd_avg_data: Register settings for ACD AVG power feature */
+	u32 acd_avg_data[KGSL_MAX_ACD_AVG_STRIDE];
 	/** @cx_level: CX vote */
 	u32 cx_level;
 	/** @voltage_level: Voltage level used by the GMU to vote RPMh */
@@ -168,6 +174,10 @@ struct kgsl_pwrctrl {
 	unsigned int min_pwrlevel;
 	unsigned int min_render_pwrlevel;
 	unsigned int num_pwrlevels;
+	/** @acd_avg_global_override: True if ACD AVG should be enabled for all power levels */
+	bool acd_avg_global_override;
+	/** @acd_avg_global_data: ACD AVG register settings to apply to each power level */
+	u32 acd_avg_global_data[KGSL_MAX_ACD_AVG_STRIDE];
 	unsigned int throttle_mask;
 	atomic64_t interval_timeout;
 	u64 clock_times[KGSL_MAX_PWRLEVELS];

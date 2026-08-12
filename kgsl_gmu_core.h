@@ -51,6 +51,10 @@ enum gmu_platform_capabilities {
 	FAC_FORCE_RETIRE_COMMAND = 5,
 	FAC_SOFT_RESET = 6,
 	FAC_FAST_CONTEXT_DESTROY = 7,
+	FAC_POWER_CONTROL_WA = 8,
+	FAC_SYNX = 9,
+	FAC_DYNAMIC_CTX_PRI_UPDATE = 10,
+	FAC_HYBRID_FENCE = 12,
 };
 
 /*
@@ -80,6 +84,8 @@ enum gmu_core_flags {
 	GMU_NON_BUFFERABLE_CARVEOUT,
 	/* Hardware fences are enabled */
 	GMU_HWSCHED_HW_FENCE,
+	/* SYNX is enabled */
+	GMU_HWSCHED_SYNX,
 };
 
 /*
@@ -244,6 +250,20 @@ enum gmu_vrb_idx {
 	VRB_NON_BUFFERABLE_CARVEOUT_BASE = 19,
 	/* Contains the size (bytes) of noncached region non bufferable carveout */
 	VRB_NON_BUFFERABLE_CARVEOUT_SIZE = 20,
+	/* Contains the size (bytes) of synx memory */
+	VRB_SYNX_SIZE_BYTES = 21,
+	/*
+	 * Contains the size (bytes) of hw fence memory. This needs to be communicated to GMU so
+	 * that GMU doesn't hardcode it.
+	 */
+	VRB_HW_FENCE_SIZE_BYTES = 22,
+	/*
+	 * Contains the size (bytes) of ipcc register space. This needs to be communicated to GMU so
+	 * that GMU doesn't hardcode it.
+	 */
+	VRB_IPCC_SIZE_BYTES = 23,
+	/* Contains the address of SPEL trace buffer */
+	VRB_SPEL_TRACE_BUFFER_ADDR_IDX = 24,
 };
 
 /* For GMU Trace */
@@ -260,7 +280,7 @@ enum gmu_vrb_idx {
  * readindex, If it's not moved since last timer fired, GMU will send the f2h message to
  * drain trace packets. GMU Trace Timer will be restarted if the readindex is moving.
  */
-#define TRACE_TIMEOUT_MSEC	5
+#define TRACE_TIMEOUT_MSEC	20
 
 /* Trace metadata defines */
 /* Trace drop mode hint for GMU to drop trace packets when trace buffer is full */
@@ -345,6 +365,11 @@ enum gmu_trace_id {
 	GMU_TRACE_DCVS_PWRSTATS = 7,
 	GMU_TRACE_PWR_CONSTRAINT = 8,
 	GMU_TRACE_DCVS_PROFILE = 9,
+	GMU_TRACE_PREEMPT_INFO = 10,
+	GMU_TRACE_CTX_PRI_UPDATE_REQ      = 11,
+	GMU_TRACE_CTX_PRI_UPDATE_DONE     = 12,
+	GMU_TRACE_CTX_PRI_REQ_DEFERRED    = 13,
+	GMU_TRACE_SPEL_CAP_PWRLEVEL       = 14,
 	GMU_TRACE_MAX,
 };
 
@@ -369,6 +394,10 @@ struct trace_ext_hw_fence_signal {
 struct trace_syncobj_retire {
 	u32 gmu_ctxt_id;
 	u32 timestamp;
+} __packed;
+
+struct trace_spel_cap_pwrlevel {
+	u32 pwrlevel;
 } __packed;
 
 #define TRACE_FLAG_BIT_DCVS_VOTE	0
@@ -413,12 +442,47 @@ struct trace_pwr_constraint {
 	u32 type;
 	u32 value;
 	u32 status;
+	u32 owner_ctx_id;
 } __packed;
 
 struct trace_dcvs_profile {
 	u32 action;
 	u32 profile;
 	struct kgsl_dcvs_attrs attrs;
+} __packed;
+
+struct trace_preempt_info {
+	u32 level_info;
+	u32 reason;
+} __packed;
+
+#define TRACE_CUR_CTX_PRI(prio)        FIELD_GET(GENMASK(7,  0), (prio))
+#define TRACE_NEW_CTX_PRI(prio)        FIELD_GET(GENMASK(15, 8), (prio))
+#define KGSL_CTX_PRI_TO_RB_LEVEL(pri) \
+	((u32)(pri) * KGSL_PRIORITY_MAX_RB_LEVELS / KGSL_CONTEXT_PRIORITY_NUM)
+
+/* Payload for GMU_TRACE_CTX_PRI_UPDATE_REQ */
+struct trace_ctx_pri_update_req {
+	u16 ctx_id;
+	/* bits[15:8] = new_ctx_pri, bits[7:0] = cur_ctx_pri */
+	u16 prio;
+	u32 flags;
+	u32 last_submitted_ts;
+} __packed;
+
+/* Payload for GMU_TRACE_CTX_PRI_UPDATE_DONE */
+struct trace_ctx_pri_update_done {
+	u16 ctx_id;
+	/* bits[15:8] = new_ctx_pri, bits[7:0] = cur_ctx_pri */
+	u16 prio;
+} __packed;
+
+/* Payload for GMU_TRACE_CTX_PRI_REQ_DEFERRED */
+struct trace_ctx_pri_req_deferred {
+	u16 ctx_id;
+	/* bits[15:8] = new_ctx_pri, bits[7:0] = cur_ctx_pri */
+	u16 prio;
+	u32 last_ts;
 } __packed;
 
 /**
@@ -439,7 +503,9 @@ struct kgsl_gmu_trace {
  * struct kgsl_gmu_spel - Struct for SPEL status / configuration details
  */
 struct kgsl_gmu_spel {
-	/** @enabled: True if SPEL is enabled */
+	/** @handshake_done: True if the SPEL handshake succeeded */
+	bool handshake_done;
+	/** @enabled: True if SPEL is enabled (controllable via debugfs) */
 	bool enabled;
 	/** @config: Power budget configuration */
 	u32 config[GMU_PWR_BUDGET_DWORDS];
@@ -566,6 +632,7 @@ struct gmu_dev_ops {
 	void (*minbw_idle_level_set)(struct kgsl_device *device, u32 val);
 	u32 (*gmu_pwr_trace_trigger_set)(struct kgsl_device *device, u32 val);
 	u32 (*gmu_pwr_trace_trigger_get)(struct kgsl_device *device);
+	u32 (*bcl_query_data)(struct kgsl_device *device, u32 percent_drop, u32 mode);
 };
 
 struct firmware_capabilities {
@@ -668,6 +735,18 @@ struct gmu_core_device {
 	u32 gmu_pwr_limits_trace_buf_size;
 	/** @spel: Container for SPEL related data */
 	struct kgsl_gmu_spel spel;
+	/* @spel_trace: gmu trace container for power level clamp events */
+	struct kgsl_gmu_trace spel_trace;
+	/**
+	 * @output_fence_type: This is to track whether to create a synx fence or hw fence for
+	 * backing output fences
+	 */
+	u32 output_fence_type;
+	/**
+	 * @input_fence_type: This is to track whether to import external fences using synx session
+	 * or hw fence session
+	 */
+	u32 input_fence_type;
 };
 
 extern struct platform_driver a6xx_gmu_driver;
@@ -816,11 +895,13 @@ int gmu_core_get_attrs(u32 flags);
  * gmu_core_import_buffer - Import a gmu buffer
  * @device: Pointer to KGSL device
  * @entry: GMU memory entry
+ * @vma_id: GMU VMA where this buffer should be mapped
  * This function imports and maps a buffer to a gmu vma
  *
  * Return: 0 on success or error code on failure
  */
-int gmu_core_import_buffer(struct kgsl_device *device, struct hfi_mem_alloc_entry *entry);
+int gmu_core_import_buffer(struct kgsl_device *device, struct hfi_mem_alloc_entry *entry,
+		u32 vma_id);
 
 /**
  * gmu_core_reserve_kernel_block - Allocate a gmu buffer
@@ -1119,11 +1200,25 @@ int gmu_core_set_max_pwrlevel(struct kgsl_device *device, u64 val);
 int gmu_core_list_frequencies(struct kgsl_device *device, struct seq_file *s);
 
 /**
- * gmu_core_is_hw_fencing_enabled() - Check if hw fences is enabled
+ * gmu_core_is_hw_fencing_enabled() - Check if hardware fences are enabled
  * @device: Pointer to the kgsl device
 
- * Return: Boolean to indicate if hw fences are enabled or not
+ * Return: Boolean to indicate if hw fences are enabled
  */
 bool gmu_core_is_hw_fencing_enabled(struct kgsl_device *device);
+
+/**
+ * gmu_core_is_gmu_fencing_enabled() - Check if either hardware fences or synx is enabled
+ * @device: Pointer to the kgsl device
+
+ * Return: Boolean to indicate if hw fences or synx is enabled or not
+ */
+bool gmu_core_is_gmu_fencing_enabled(struct kgsl_device *device);
+
+/**
+ * gmu_core_set_fence_type() - Set the input and output fence type
+ * @device: Pointer to the kgsl device
+ */
+void gmu_core_set_fence_type(struct kgsl_device *device);
 
 #endif /* __KGSL_GMU_CORE_H */

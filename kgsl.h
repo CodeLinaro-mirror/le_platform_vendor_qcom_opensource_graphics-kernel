@@ -56,6 +56,8 @@
 #define KGSL_MEMSTORE_SIZE	((int)(SZ_32K))
 #define KGSL_MEMSTORE_GLOBAL	(0)
 #define KGSL_PRIORITY_MAX_RB_LEVELS 4
+/* Total number of context priority levels (4 per RB) */
+#define KGSL_CONTEXT_PRIORITY_NUM	16
 #define KGSL_LPAC_RB_ID		KGSL_PRIORITY_MAX_RB_LEVELS
 /* Subtract one for LPAC */
 #define KGSL_MEMSTORE_MAX	(KGSL_MEMSTORE_SIZE / \

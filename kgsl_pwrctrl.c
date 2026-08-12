@@ -17,6 +17,11 @@
 #include <linux/units.h>
 #include <soc/qcom/dcvs.h>
 #include <linux/version.h>
+#if (KERNEL_VERSION(6, 3, 0) <= LINUX_VERSION_CODE)
+#include <linux/firmware/qcom/qcom_scm.h>
+#else
+#include <linux/qcom_scm.h>
+#endif
 
 #include "kgsl_device.h"
 #include "kgsl_bus.h"
@@ -26,12 +31,16 @@
 #include "kgsl_sysfs.h"
 #include "kgsl_trace.h"
 #include "kgsl_util.h"
+#include "gen8_reg.h"
 
 #define UPDATE_BUSY_VAL		1000000
 
 #define KGSL_MAX_BUSLEVELS	20
 
 #define GX_GDSC_TIMEOUT_MS	200
+
+#define SECURE_REGREAD(GEN8_GCC_BASE, offset) \
+	(GEN8_GCC_BASE + ((offset) << 2))
 
 /* Order deeply matters here because reasons. New entries go on the end */
 static const char * const clocks[KGSL_MAX_CLKS] = {
@@ -181,7 +190,7 @@ done:
 	if (reset) {
 		/* Trace the constraint being un-set by the driver */
 		trace_kgsl_constraint(device, pwr->constraint.type,
-						old_level, 0, 0);
+			old_level, 0, 0, pwr->constraint.owner_id);
 		/*Invalidate the constraint set */
 		pwr->constraint.expires = 0;
 		pwr->constraint.type = KGSL_CONSTRAINT_NONE;
@@ -320,12 +329,13 @@ void kgsl_pwrctrl_set_constraint(struct kgsl_device *device,
 		pwrc_old->owner_timestamp = ts;
 		kgsl_pwrctrl_pwrlevel_change(device, constraint);
 		/* Trace the constraint being set by the driver */
-		trace_kgsl_constraint(device, pwrc_old->type, constraint, 1, 0);
+		trace_kgsl_constraint(device, pwrc_old->type, constraint, 1, 0, pwrc_old->owner_id);
 	} else if ((pwrc_old->type == pwrc->type) && (pwrc_old->sub_type == pwrc->sub_type)) {
 		pwrc_old->owner_id = id;
 		pwrc_old->owner_timestamp = ts;
 		pwrc_old->expires = jiffies +
 			msecs_to_jiffies(atomic64_read(&device->pwrctrl.interval_timeout));
+		trace_kgsl_constraint(device, pwrc_old->type, constraint, 1, 0, pwrc_old->owner_id);
 	}
 }
 
@@ -585,6 +595,18 @@ static ssize_t idle_timer_store(struct device *dev, struct device_attribute *att
 	ret = kstrtou32(buf, 0, &val);
 	if (ret)
 		return ret;
+
+	/*
+	 * Clamp values below the configured default. Sub-default timeouts cause
+	 * frequent slumber transitions, which hurts performance due to repeated
+	 * GPU/GMU wake sequences and can destabilize the power state machine.
+	 */
+	if (val < CONFIG_QCOM_KGSL_IDLE_TIMEOUT) {
+		dev_warn(device->dev,
+			"idle_timer %u below minimum, clamping to %u\n",
+			val, CONFIG_QCOM_KGSL_IDLE_TIMEOUT);
+		val = CONFIG_QCOM_KGSL_IDLE_TIMEOUT;
+	}
 
 	/*
 	 * We don't quite accept a maximum of 0xFFFFFFFF due to internal jiffy
@@ -1598,6 +1620,85 @@ int kgsl_pwrctrl_enable_mx_gdsc(struct kgsl_device *device)
 	return ret;
 }
 
+struct reg_pairs {
+	u32 address;
+	const char *str;
+};
+
+static const struct reg_pairs gpucc_reg_pairs[] = {
+	{ GEN8_GPUCC_GPU_CC_CX_GDSCR, "GPUCC_GPU_CC_CX_GDSCR" },
+	{ GEN8_GPUCC_GPU_CC_CX_CFG_GDSCR, "GPUCC_GPU_CC_CX_CFG_GDSCR" },
+	{ GEN8_GPUCC_GPU_CC_CX_HW_CTRL_CFG1_GDSR, "GPUCC_GPU_CC_CX_HW_CTRL_CFG1_GDSR" },
+	{ GEN8_GPUCC_GPU_CC_CX_HW_CTRL_CFG2_GDSR, "GPUCC_GPU_CC_CX_HW_CTRL_CFG2_GDSR" },
+	{ GEN8_GPUCC_GPU_CC_CX_HW_CTRL_DVM_STATUS_GDSR, "GPUCC_GPU_CC_CX_HW_CTRL_DVM_STATUS_GDSR" },
+	{ GEN8_GPUCC_GPU_CC_CX_HW_CTRL_HALT1_STATUS_GDSR,
+		"GPUCC_GPU_CC_CX_HW_CTRL_HALT1_STATUS_GDSR" },
+	{ GEN8_GPUCC_GPU_CC_CX_HW_CTRL_HALT2_STATUS_GDSR,
+		"GPUCC_GPU_CC_CX_HW_CTRL_HALT2_STATUS_GDSR" },
+	{ GEN8_GPUCC_GPU_CC_CX_HW_CTRL_REQ_SW_GDSR, "GPUCC_GPU_CC_CX_HW_CTRL_REQ_SW_GDSR" },
+	{ GEN8_GPUCC_GPU_CC_CX_HW_CTRL_IRQ_STATUS_GDSR, "GPUCC_GPU_CC_CX_HW_CTRL_IRQ_STATUS_GDSR" },
+	{ GEN8_GPUCC_GPU_CC_CX_GDS_HW_CTL_SMMU_HALT_STATUS,
+		"GPUCC_GPU_CC_CX_GDS_HW_CTL_SMMU_HALT_STATUS" },
+	{ GEN8_GPUCC_GPU_CC_TZ_VOTE_GPU_SMMU_GDS, "GPUCC_GPU_CC_TZ_VOTE_GPU_SMMU_GDS" },
+	{ GEN8_GPUCC_GPU_CC_HYP_VOTE_GPU_SMMU_GDS, "GPUCC_GPU_CC_HYP_VOTE_GPU_SMMU_GDS" },
+	{ GEN8_GPUCC_GPU_CC_HLOS1_VOTE_GPU_SMMU_GDS, "GPUCC_GPU_CC_HLOS1_VOTE_GPU_SMMU_GDS" },
+	{ GEN8_GPUCC_GPU_CC_SPARE_VOTE_GPU_SMMU_GDS, "GPUCC_GPU_CC_SPARE_VOTE_GPU_SMMU_GDS" },
+	{ GEN8_GPUCC_GPU_CC_CX_CFG2_GDSCR, "GPUCC_GPU_CC_CX_CFG2_GDSCR" },
+	{ GEN8_GPUCC_GPU_CC_CX_CFG3_GDSCR, "GPUCC_GPU_CC_CX_CFG3_GDSCR" },
+	{ GEN8_GPUCC_GPU_CC_CX_CFG4_GDSCR, "GPUCC_GPU_CC_CX_CFG4_GDSCR" },
+	{ GEN8_GPUCC_GPU_CC_MEMNOC_GFX_CBCR, "GPUCC_GPU_CC_MEMNOC_GFX_CBCR" },
+	{ GEN8_GPUCC_GPU_CC_MEMNOC_GFX_SREGR, "GPUCC_GPU_CC_MEMNOC_GFX_SREGR" },
+	{ GEN8_GPUCC_GPU_CC_MEMNOC_GFX_CFG_SREGR, "GPUCC_GPU_CC_MEMNOC_GFX_CFG_SREGR" },
+	{ GEN8_GPUCC_GPU_CC_MEMNOC_GFX_CFG2_SREGR, "GPUCC_GPU_CC_MEMNOC_GFX_CFG2_SREGR" },
+	{ GEN8_GPUCC_GPU_CC_MEMNOC_GFX_SW_CLK_DIS, "GPUCC_GPU_CC_MEMNOC_GFX_SW_CLK_DIS" },
+	{ GEN8_GPUCC_GPU_CC_HLOS1_VOTE_GPU_SMMU_CLK, "GPUCC_GPU_CC_HLOS1_VOTE_GPU_SMMU_CLK" },
+	{ GEN8_GPUCC_GPU_CC_HYP_VOTE_GPU_SMMU_CLK, "GPUCC_GPU_CC_HYP_VOTE_GPU_SMMU_CLK" },
+};
+
+static const struct reg_pairs gcc_reg_pairs[] = {
+	{ GEN8_GCC_TURING_DSP_VOTE_GPU_SMMU_GDS, "GCC_TURING_DSP_VOTE_GPU_SMMU_GDS" },
+	{ GEN8_GCC_TURING_DSP_VOTE_ALL_SMMU_MMU_GDS, "GCC_TURING_DSP_VOTE_ALL_SMMU_MMU_GDS" },
+	{ GEN8_GCC_TZ_VOTE_GPU_SMMU_GDS, "GCC_TZ_VOTE_GPU_SMMU_GDS" },
+	{ GEN8_GCC_TZ_VOTE_ALL_SMMU_MMU_GDS, "GCC_TZ_VOTE_ALL_SMMU_MMU_GDS" },
+	{ GEN8_GCC_HYP_VOTE_GPU_SMMU_GDS, "GCC_HYP_VOTE_GPU_SMMU_GDS" },
+	{ GEN8_GCC_HYP_VOTE_ALL_SMMU_MMU_GDS, "GCC_HYP_VOTE_ALL_SMMU_MMU_GDS" },
+	{ GEN8_GCC_HLOS1_VOTE_GPU_SMMU_GDS, "GCC_HLOS1_VOTE_GPU_SMMU_GDS" },
+	{ GEN8_GCC_HLOS1_VOTE_ALL_SMMU_MMU_GDS, "GCC_HLOS1_VOTE_ALL_SMMU_MMU_GDS" },
+	{ GEN8_GCC_HLOS2_VOTE_GPU_SMMU_GDS, "GCC_HLOS2_VOTE_GPU_SMMU_GDS" },
+	{ GEN8_GCC_HLOS2_VOTE_ALL_SMMU_MMU_GDS, "GCC_HLOS2_VOTE_ALL_SMMU_MMU_GDS" },
+	{ GEN8_GCC_SP_VOTE_GPU_SMMU_GDS, "GCC_SP_VOTE_GPU_SMMU_GDS" },
+	{ GEN8_GCC_SP_VOTE_ALL_SMMU_MMU_GDS, "GCC_SP_VOTE_ALL_SMMU_MMU_GDS" },
+	{ GEN8_GCC_MSS_VOTE_GPU_SMMU_GDS, "GCC_MSS_VOTE_GPU_SMMU_GDS" },
+	{ GEN8_GCC_MSS_VOTE_ALL_SMMU_MMU_GDS, "GCC_MSS_VOTE_ALL_SMMU_MMU_GDS" },
+	{ GEN8_GCC_GPU_GEMNOC_GFX_CBCR, "GCC_GPU_GEMNOC_GFX_CBCR" },
+};
+
+static void dump_cx_gdsc_timeout_reg(struct kgsl_device *device)
+{
+	int i;
+	u32 val;
+	phys_addr_t phys;
+
+	for (i = 0; i < ARRAY_SIZE(gpucc_reg_pairs); i++) {
+		kgsl_regread(device, gpucc_reg_pairs[i].address, &val);
+
+		dev_err(device->dev, "GPUCC: register: %s, value: 0x%x\n",
+			gpucc_reg_pairs[i].str, val);
+	}
+
+	for (i = 0; i < ARRAY_SIZE(gcc_reg_pairs); i++) {
+		phys = SECURE_REGREAD(GEN8_GCC_BASE, gcc_reg_pairs[i].address);
+
+		if (qcom_scm_io_readl(phys, &val) == 0) {
+			dev_err(device->dev, "GCC: register: %s, value: 0x%x\n",
+				gcc_reg_pairs[i].str, val);
+		} else {
+			dev_err(device->dev, "Failed to read %s value\n",
+				gcc_reg_pairs[i].str);
+		}
+	}
+}
+
 int kgsl_pwrctrl_enable_cx_gdsc(struct kgsl_device *device)
 {
 	struct kgsl_pwrctrl *pwr = &device->pwrctrl;
@@ -1615,9 +1716,10 @@ int kgsl_pwrctrl_enable_cx_gdsc(struct kgsl_device *device)
 			qcom_clk_dump(NULL, pwr->cx_regulator, false);
 		} else {
 			dev_err(device->dev, "GPU CX wait timeout\n");
-#if (KERNEL_VERSION(6, 18, 0) <= LINUX_VERSION_CODE)
+#ifdef CONFIG_QCOM_KGSL_GENPD_DUMP
 			qcom_gdsc_genpd_dump(pwr->cx_pd);
 #endif
+			dump_cx_gdsc_timeout_reg(device);
 		}
 		KGSL_GMU_CORE_FORCE_PANIC(device->gmu_core.gf_panic,
 			GMU_PDEV(device), 0ULL, GMU_FAULT_CX_WAIT_TIMEOUT);
@@ -1854,10 +1956,8 @@ static int kgsl_cx_gdsc_event(struct notifier_block *nb,
 		if (kgsl_regmap_read_poll_timeout(&device->regmap, pwr->cx_cfg_gdsc_offset,
 			val, (val & BIT(15)), 100, 100 * 1000)) {
 			dev_err(device->dev, "GPU CX GDSC power down timed out\n");
-#if (KERNEL_VERSION(6, 18, 0) <= LINUX_VERSION_CODE)
-			qcom_gdsc_genpd_dump(pwr->cx_pd);
-#endif
 			log_kgsl_cx_wait_timeout_event(NONHLOS_CX_WAIT_TIMEOUT);
+			dump_cx_gdsc_timeout_reg(device);
 			KGSL_GMU_CORE_FORCE_PANIC(device->gmu_core.gf_panic,
 				GMU_PDEV(device), 0ULL, GMU_FAULT_WAIT_FOR_CX);
 		}
@@ -2307,7 +2407,7 @@ int kgsl_pwrctrl_init(struct kgsl_device *device)
 		dev_err(device->dev, "Unable to register notifier call for PMQOS updates: %d\n",
 				result);
 
-	pwr->cooling_worker = kthread_create_worker(0, "kgsl_cooling_worker");
+	pwr->cooling_worker = kgsl_kthread_run_worker(0, "kgsl_cooling_worker");
 	if (IS_ERR(pwr->cooling_worker)) {
 		result = PTR_ERR(pwr->cooling_worker);
 		dev_err(device->dev, "Failed to create cooling worker: %d\n", result);

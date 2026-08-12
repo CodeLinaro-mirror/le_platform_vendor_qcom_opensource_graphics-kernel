@@ -6,9 +6,11 @@
 
 #include <linux/debugfs.h>
 #include <linux/io.h>
+#include <linux/net.h>
 #include <linux/of.h>
 #include <linux/of_fdt.h>
 #include <linux/of_device.h>
+#include <net/sock.h>
 #include <soc/qcom/of_common.h>
 
 #include "adreno.h"
@@ -16,6 +18,7 @@
 #include "adreno_gen8_hwsched.h"
 #include "adreno_pm4types.h"
 #include "adreno_trace.h"
+#include "adreno_qmi.h"
 #include "kgsl_pwrscale.h"
 #include "kgsl_trace.h"
 #include "kgsl_util.h"
@@ -534,12 +537,14 @@ static const u32 gen8_11_0_ifpc_pwrup_reglist[] = {
 	GEN8_RBBM_NC_MODE_CNTL,
 	GEN8_RBBM_SLICE_INTERFACE_HANG_INT_CNTL,
 	GEN8_RBBM_SLICE_NC_MODE_CNTL,
+	GEN8_RBBM_SLICE_PERFCTR_CNTL,
 	GEN8_SP_CHICKEN_BITS,
 	GEN8_SP_CHICKEN_BITS_2,
 	GEN8_SP_CHICKEN_BITS_3,
 	GEN8_SP_CHICKEN_BITS_5,
 	GEN8_SP_HLSQ_DBG_ECO_CNTL,
 	GEN8_SP_HLSQ_DBG_ECO_CNTL_1,
+	GEN8_SP_HLSQ_DBG_ECO_CNTL_3,
 	GEN8_SP_HLSQ_LPAC_GMEM_RANGE_MIN_LO,
 	GEN8_SP_HLSQ_LPAC_GMEM_RANGE_MIN_HI,
 	GEN8_SP_NC_MODE_CNTL,
@@ -798,6 +803,7 @@ struct gen8_nonctxt_overrides gen8_nc_overrides[] = {
 	{ GEN8_SP_HLSQ_DBG_ECO_CNTL, BIT(PIPE_NONE), 0, 0, 1, },
 	{ GEN8_SP_HLSQ_DBG_ECO_CNTL_2, BIT(PIPE_NONE), 0, 0, 0, },
 	{ GEN8_SP_HLSQ_DBG_ECO_CNTL_3, BIT(PIPE_NONE), 0, 0, 1, },
+	{ GEN8_SP_L0_HW_DEBUG, BIT(PIPE_NONE), 0, 0, 1, },
 	{ GEN8_SP_L0_PERF_TUNE, BIT(PIPE_NONE), 0, 0, 1, },
 	{ GEN8_SP_DBG_CNTL, BIT(PIPE_NONE), 0, 0, 1, },
 	{ GEN8_TPL1_NC_MODE_CNTL, BIT(PIPE_NONE), 0, 0, 0, },
@@ -1206,6 +1212,8 @@ int gen8_init(struct adreno_device *adreno_dev)
 	adreno_dev->ahb_timeout_val = adreno_get_ahb_timeout_val(adreno_dev,
 			gen8_core->noc_timeout_us);
 	adreno_dev->bcl_data = gen8_core->bcl_data;
+	adreno_dev->tdcvs_enable = gen8_core->tdcvs_enable;
+	adreno_dev->tdcvs_data = gen8_core->tdcvs_data;
 
 	adreno_dev->cooperative_reset = ADRENO_FEATURE(adreno_dev,
 			ADRENO_COOP_RESET);
@@ -1213,6 +1221,8 @@ int gen8_init(struct adreno_device *adreno_dev)
 	/* If the memory type is DDR 4, override the existing configuration */
 	if (of_fdt_get_ddrtype() == 0x7)
 		adreno_dev->highest_bank_bit = 14;
+
+	adreno_qmi_setup_service(adreno_dev);
 
 	gen8_crashdump_init(adreno_dev);
 
@@ -1286,6 +1296,7 @@ void gen8_cx_timer_init(struct adreno_device *adreno_dev)
 void gen8_get_gpu_feature_info(struct adreno_device *adreno_dev)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
 	u32 feature_fuse = 0;
 
 	/* Get HW feature soft fuse value */
@@ -1297,6 +1308,9 @@ void gen8_get_gpu_feature_info(struct adreno_device *adreno_dev)
 	/* If software enables LPAC without HW support, disable it */
 	if (ADRENO_FEATURE(adreno_dev, ADRENO_LPAC))
 		adreno_dev->lpac_enabled = feature_fuse & BIT(GEN8_LPAC_SW_FUSE);
+
+	if (gen8_core->malu)
+		adreno_dev->malu_enabled = feature_fuse & BIT(GEN8_MALU_SW_FUSE);
 
 	adreno_dev->feature_fuse = feature_fuse;
 }
@@ -1985,6 +1999,80 @@ void gen8_enable_ahb_timeout_detection(struct adreno_device *adreno_dev)
 	kgsl_regwrite(device, GEN8_GPU_CX_MISC_CX_AHB_HOST_CNTL, host_cntl_val);
 }
 
+static void _gen8_setup_qecp_debugbus(struct adreno_device *adreno_dev, bool log_err)
+{
+	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
+	const struct gen8_snapshot_block_list *gen8_snapshot_block_list =
+						gen8_core->gen8_snapshot_block_list;
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	int ret = 0;
+
+	ret = adreno_qmi_debugbus_blocks_set(adreno_dev,
+			gen8_snapshot_block_list->sized_cx_debugbus_blocks,
+			gen8_snapshot_block_list->sized_cx_debugbus_blocks_len,
+			QDCP_GPUDBG_BLOCK_CX_V01);
+	if (ret) {
+		if (log_err)
+			dev_err_ratelimited(device->dev, "Failed QMI set req for CX ret=%d\n", ret);
+		return;
+	}
+
+	ret = adreno_qmi_debugbus_blocks_get(adreno_dev, QDCP_GPUDBG_BLOCK_CX_V01);
+	if (ret != gen8_snapshot_block_list->sized_cx_debugbus_blocks_len) {
+		if (log_err)
+			dev_err_ratelimited(device->dev,
+				"Failed QMI get req for CX ret=%d requested=%zu\n",
+				ret, gen8_snapshot_block_list->sized_cx_debugbus_blocks_len);
+		return;
+	}
+
+	ret = adreno_qmi_debugbus_blocks_set(adreno_dev,
+			gen8_snapshot_block_list->sized_gx_debugbus_blocks,
+			gen8_snapshot_block_list->sized_gx_debugbus_blocks_len,
+			QDCP_GPUDB_BLOCK_GX_V01);
+	if (ret) {
+		if (log_err)
+			dev_err_ratelimited(device->dev, "Failed QMI set req for GX ret=%d\n", ret);
+		return;
+	}
+
+	ret = adreno_qmi_debugbus_blocks_get(adreno_dev, QDCP_GPUDB_BLOCK_GX_V01);
+	if (ret != gen8_snapshot_block_list->sized_gx_debugbus_blocks_len) {
+		if (log_err)
+			dev_err_ratelimited(device->dev,
+				"Failed QMI get req for GX ret=%d requested=%zu\n",
+				ret, gen8_snapshot_block_list->sized_gx_debugbus_blocks_len);
+		return;
+	}
+
+	adreno_dev->qecp_data_sent = true;
+}
+
+void gen8_setup_qecp_debugbus(struct adreno_device *adreno_dev)
+{
+	if (!adreno_dev->qecp_debugbus_enabled ||
+		!adreno_dev->qmi_service_connected || adreno_dev->qecp_data_sent)
+		return;
+
+	_gen8_setup_qecp_debugbus(adreno_dev, true);
+}
+
+void gen8_try_setup_qecp_debugbus(struct adreno_device *adreno_dev)
+{
+	if (!adreno_dev->qecp_debugbus_enabled ||
+		!adreno_dev->qmi_service_connected || adreno_dev->qecp_data_sent)
+		return;
+
+	/* Return early if we hit the retry limit */
+	if (!adreno_dev->qecp_retry_count)
+		return;
+
+	adreno_dev->qecp_retry_count--;
+
+	/* Try to setup the QECP debugbus without excessive logs */
+	_gen8_setup_qecp_debugbus(adreno_dev, !adreno_dev->qecp_retry_count);
+}
+
 #define MIN_HBB 13
 int gen8_start(struct adreno_device *adreno_dev)
 {
@@ -2562,6 +2650,7 @@ static void gen8_get_cp_hwfault_status(struct adreno_device *adreno_dev, u32 sta
 			[CP_HW_RBFAULT] = "RBFAULT",
 			[CP_HW_IB1FAULT] = "IB1FAULT",
 			[CP_HW_IB2FAULT] = "IB2FAULT",
+			[CP_HW_IB3FAULT] = "IB3FAULT",
 			[CP_HW_SDSFAULT] = "SDSFAULT",
 			[CP_HW_MRBFAULT] = "MRGFAULT",
 			[CP_HW_VSDFAULT] = "VSDFAULT",
@@ -2600,7 +2689,8 @@ static void gen8_get_cp_hwfault_status(struct adreno_device *adreno_dev, u32 sta
 	gen8_host_aperture_clear(adreno_dev);
 
 	dev_crit_ratelimited(device->dev, "CP HW Fault pipe_id:%u %s\n", pipe_id,
-			hw_status < ARRAY_SIZE(table) ? table[hw_status] : "UNKNOWN");
+			(hw_status < ARRAY_SIZE(table) && table[hw_status]) ?
+			table[hw_status] : "UNKNOWN");
 }
 
 static void gen8_get_cp_swfault_status(struct adreno_device *adreno_dev, u32 status)
@@ -2660,7 +2750,8 @@ static void gen8_get_cp_swfault_status(struct adreno_device *adreno_dev, u32 sta
 			      pipe_id, first_slice, 0);
 
 	dev_crit_ratelimited(device->dev, "CP SW Fault pipe_id: %u %s\n", pipe_id,
-			sw_status < ARRAY_SIZE(table) ? table[sw_status] : "UNKNOWN");
+			(sw_status < ARRAY_SIZE(table) && table[sw_status]) ?
+			table[sw_status] : "UNKNOWN");
 
 	if (sw_status & BIT(CP_SW_OPCODEERROR)) {
 		gen8_regwrite_aperture(device, GEN8_CP_SQE_STAT_ADDR_PIPE, 1,
@@ -2894,7 +2985,7 @@ static void gen8_gpc_err_int_callback(struct adreno_device *adreno_dev, int bit)
 static void gen8_swfuse_violation_callback(struct adreno_device *adreno_dev, int bit)
 {
 	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
-	u32 status;
+	u32 status, mask = GENMASK(GEN8_RAYTRACING_SW_FUSE, GEN8_LPAC_SW_FUSE);
 
 	/*
 	 * SWFUSEVIOLATION error is typically the result of enabling software
@@ -2904,6 +2995,7 @@ static void gen8_swfuse_violation_callback(struct adreno_device *adreno_dev, int
 	 * blender HW pipeline.
 	 * 2) LPAC (BIT:1): Fault
 	 * 3) RAYTRACING (BIT:2): Fault
+	 * 4) mALU (BIT:3): Fault
 	 */
 	kgsl_regread(device, GEN8_RBBM_SW_FUSE_INT_STATUS, &status);
 
@@ -2916,8 +3008,11 @@ static void gen8_swfuse_violation_callback(struct adreno_device *adreno_dev, int
 	dev_crit_ratelimited(device->dev,
 		"RBBM: SW Feature Fuse violation status=0x%8.8x\n", status);
 
-	/* Trigger a fault in the dispatcher for LPAC and RAYTRACING violation */
-	if (status & GENMASK(GEN8_RAYTRACING_SW_FUSE, GEN8_LPAC_SW_FUSE)) {
+	if (adreno_dev->malu_enabled)
+		mask |= BIT(GEN8_MALU_SW_FUSE);
+
+	/* Trigger a fault in the dispatcher for LPAC, RAYTRACING and mALU violation */
+	if (status & mask) {
 		adreno_irqctrl(adreno_dev, 0);
 		adreno_scheduler_fault(adreno_dev, ADRENO_HARD_FAULT);
 	}
@@ -3224,6 +3319,8 @@ int gen8_probe_common(struct platform_device *pdev,
 	ret = adreno_device_probe(pdev, adreno_dev);
 	if (ret)
 		return ret;
+
+	adreno_qmi_init(adreno_dev);
 
 	if (adreno_preemption_feature_set(adreno_dev)) {
 		adreno_dev->total_ctxt_record_sz = gen8_core->ctxt_record_size ?
@@ -3734,8 +3831,14 @@ err:
 
 static void gen8_swfuse_irqctrl(struct adreno_device *adreno_dev, bool state)
 {
-		kgsl_regwrite(KGSL_DEVICE(adreno_dev), GEN8_RBBM_SW_FUSE_INT_MASK,
-			state ? GEN8_SW_FUSE_INT_MASK : 0);
+	const struct adreno_gen8_core *gen8_core = to_gen8_core(adreno_dev);
+	u32 mask = GEN8_SW_FUSE_INT_MASK;
+
+	if (gen8_core->malu)
+		mask |= BIT(GEN8_MALU_SW_FUSE);
+
+	kgsl_regwrite(KGSL_DEVICE(adreno_dev), GEN8_RBBM_SW_FUSE_INT_MASK,
+			state ? mask : 0);
 }
 
 static void gen8_lpac_fault_header(struct adreno_device *adreno_dev,
@@ -3885,6 +3988,29 @@ u32 gen8_get_gmem_size(struct adreno_device *adreno_dev)
 	return adreno_dev->gpucore->gmem_size;
 }
 
+static int gen8_get_speed_bin(struct adreno_device *adreno_dev)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	int status;
+	u32 val;
+
+	if (!adreno_is_gen8_11_x(adreno_dev))
+		return -EOPNOTSUPP;
+
+	status = kgsl_scm_gpu_init_regs(&device->pdev->dev, GPU_PROBE);
+	if (status)
+		return status;
+
+	kgsl_regread(device, GEN8_GPU_CX_MISC_SW_FUSE_FREQ_LIMIT_STATUS, &val);
+	status = FIELD_GET(GENMASK(8, 0), val);
+
+	/* Check if val is valid as a speed_bin */
+	if (status <= GEN8_GPU_CX_MISC_SW_FUSE_FREQ_LIMIT_STATUS_MIN)
+		return -EINVAL;
+
+	return status;
+}
+
 const struct gen8_gpudev adreno_gen8_hwsched_gpudev = {
 	.base = {
 		.reg_offsets = gen8_register_offsets,
@@ -3913,6 +4039,7 @@ const struct gen8_gpudev adreno_gen8_hwsched_gpudev = {
 		.acquire_cp_semaphore = gen8_acquire_cp_semaphore,
 		.release_cp_semaphore = gen8_release_cp_semaphore,
 		.get_gmem_size = gen8_get_gmem_size,
+		.get_speed_bin = gen8_get_speed_bin,
 		.remove = gen8_hwsched_remove,
 	},
 	.hfi_probe = gen8_hwsched_hfi_probe,
@@ -3947,6 +4074,7 @@ const struct gen8_gpudev adreno_gen8_gmu_gpudev = {
 		.acquire_cp_semaphore = gen8_acquire_cp_semaphore,
 		.release_cp_semaphore = gen8_release_cp_semaphore,
 		.get_gmem_size = gen8_get_gmem_size,
+		.get_speed_bin = gen8_get_speed_bin,
 	},
 	.hfi_probe = gen8_gmu_hfi_probe,
 	.handle_watchdog = gen8_gmu_handle_watchdog,

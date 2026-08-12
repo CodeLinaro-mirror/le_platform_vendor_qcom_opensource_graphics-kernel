@@ -33,6 +33,15 @@ config QCOM_KGSL_CORESIGHT
 	  data. On a6xx targets there are two sources available for the GX and
 	  CX domains respectively. Debug kernels should say 'Y' here.
 
+config QCOM_KGSL_CORESIGHT_QMI_TRACE
+	bool "Enable CoreSight QMI trace path configuration"
+	depends on QCOM_KGSL_CORESIGHT
+	help
+	  When enabled, allows configuration of QMI trace paths for GPU DBGC
+	  to enable/disable connection from GPU source to TMC sink. This feature
+	  requires kernel 6.18 or later where coresight_qmi_trace_path_set() is
+	  available.
+
 config QCOM_KGSL_IOCOHERENCY_DEFAULT
 	bool "Enable I/O coherency on cached GPU memory by default"
 	default y if ARCH_LAHAINA
@@ -82,6 +91,16 @@ config QCOM_KGSL_USE_SHMEM
 	  there will be no support for the memory pools and higher order pages.
 	  But using shmem will help in making kgsl pages available for
 	  reclaiming.
+
+config QCOM_KGSL_USE_SHMEM_MTHP
+	bool "Enable shmem mTHP support for memory allocations"
+	depends on QCOM_KGSL_USE_SHMEM
+	depends on TRANSPARENT_HUGEPAGE
+	help
+	  Enable multi-size Transparent Huge Page (mTHP) support for KGSL driver.
+	  This allows the kernel to back KGSL shmem buffers with larger folios
+	  instead of only base pages. This reduces allocation overhead, improves
+	  TLB efficiency, and minimizes page management cost.
 
 config QCOM_KGSL_PROCESS_RECLAIM
 	bool "Make driver pages available for reclaim"
@@ -142,3 +161,26 @@ config QCOM_KGSL_DEVCOREDUMP
 	  instead of the custom sysfs interface. Snapshot data will be
 	  accessible through /sys/class/devcoredump/ interface. If enabled,
 	  the snapshot/dump sysfs node will not be set up.
+
+config QCOM_KGSL_RESTRICT_CONTEXT_PRIORITY
+	bool "Limit priority context creation based on CAP_SYS_NICE"
+	help
+	  Say 'Y' to restrict KGSL context priority levels that map to ringbuffer 0
+	  to processes only with the CAP_SYS_NICE capability. Unprivileged
+	  processes requesting these levels will be clamped to the minimum
+	  non-RB0 level, limiting those to lower priority levels. This reserves
+	  the highest priority levels for critical system tasks such as
+	  compositors like SurfaceFlinger.
+
+config QCOM_KGSL_GENPD_DUMP
+	bool "Use genpd clk dump interface"
+	depends on PM_GENERIC_DOMAINS
+	help
+	  Say 'Y' to enable support for dumping the state of GENPD
+	  and GDSC regulators used by the Qualcomm KGSL driver.
+	  When enabled, this option allows the driver to call
+	  qcom_gdsc_genpd_dump() to print clock and power domain state
+	  information for debugging and diagnostics purposes.
+	  This feature depends on the generic power domain (GENPD)
+	  framework and requires additional downstream debug support
+	  for GENPD to provide meaningful output.

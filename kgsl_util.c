@@ -66,18 +66,6 @@ int kgsl_regulator_set_voltage(struct device *dev,
 	return ret;
 }
 
-unsigned long kgsl_clk_get_rate(struct clk_bulk_data *clks, int num_clks,
-		const char *id)
-{
-	struct clk *clk;
-
-	clk = kgsl_of_clk_by_name(clks, num_clks, id);
-	if (!clk)
-		return 0;
-
-	return clk_get_rate(clk);
-}
-
 int kgsl_clk_set_rate(struct clk_bulk_data *clks, int num_clks,
 		const char *id, unsigned long rate)
 {
@@ -235,6 +223,30 @@ void kgsl_hwunlock(struct cpu_gpu_lock *lock)
 	/* Make sure all writes are done before releasing the lock */
 	wmb();
 	lock->cpu_req = 0;
+}
+
+int kgsl_get_resource_address_size(struct kgsl_device *device, struct platform_device *pdev,
+	const char *resource, uint64_t *address, uint64_t *size)
+{
+	const __be32 *prop;
+	int len;
+	int addr_cells = of_n_addr_cells(pdev->dev.of_node);
+	int size_cells = of_n_size_cells(pdev->dev.of_node);
+
+	prop = of_get_property(pdev->dev.of_node, resource, &len);
+	if (!prop)
+		return -ENODEV;
+
+	if (len != ((addr_cells + size_cells) * sizeof(__be32))) {
+		dev_err_ratelimited(device->dev, "of property %s has len %d expected %lu\n",
+		resource, len, (addr_cells + size_cells) * sizeof(__be32));
+		return -E2BIG;
+	}
+
+	*address =  of_read_number(prop, addr_cells);
+	*size = of_read_number(prop + addr_cells, size_cells);
+
+	return 0;
 }
 
 #if IS_ENABLED(CONFIG_QCOM_VA_MINIDUMP)

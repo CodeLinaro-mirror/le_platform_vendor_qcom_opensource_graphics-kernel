@@ -51,17 +51,24 @@ static void kgsl_memdesc_clear_unevictable(struct kgsl_process_private *process,
 	 */
 	mapping_clear_unevictable(memdesc->shmem_filp->f_mapping);
 	folio_batch_init(&fbatch);
-	for (i = 0; i < memdesc->page_count; i++) {
-		set_page_dirty_lock(memdesc->pages[i]);
+	for (i = 0; i < memdesc->page_count; ) {
+		struct page *p = memdesc->pages[i];
+		int count = 1 << compound_order(p);
+		int j;
+
+		set_page_dirty_lock(p);
 		mutex_lock(&memdesc->lock);
-		folio_batch_add(&fbatch, page_folio(memdesc->pages[i]));
-		memdesc->pages[i] = NULL;
-		atomic_inc(&process->unpinned_page_count);
+		folio_batch_add(&fbatch, page_folio(p));
+		for (j = 0; j < count; j++) {
+			memdesc->pages[i + j] = NULL;
+			atomic_inc(&process->unpinned_page_count);
+		}
 		mutex_unlock(&memdesc->lock);
 		if (folio_batch_count(&fbatch) == PAGEVEC_SIZE) {
 			check_move_unevictable_folios(&fbatch);
 			__folio_batch_release(&fbatch);
 		}
+		i += count;
 	}
 
 	if (folio_batch_count(&fbatch)) {
@@ -273,7 +280,7 @@ static u32 kgsl_shmem_mem_entry_migrate(struct mm_struct *mm, struct kgsl_mem_en
 	u32 page_count = 0;
 	struct page **pages = NULL;
 	struct file *shmem_filp = NULL;
-	int i = 0;
+	int i = 0, j, count;
 	int ret = 1;
 	int page_size = PAGE_SIZE;
 	struct page **old_pages;
@@ -296,7 +303,7 @@ static u32 kgsl_shmem_mem_entry_migrate(struct mm_struct *mm, struct kgsl_mem_en
 		goto cleanup_pages;
 
 	/* Allocate replacement shmem pages */
-	for (i = 0; i < memdesc->page_count; i++) {
+	for (i = 0; i < memdesc->page_count; i += ret) {
 		ret = kgsl_alloc_shmem_page(memdesc, shmem_filp, &page_size, &pages[i], NULL, i);
 		if (ret <= 0) {
 			pr_err_ratelimited(
@@ -327,7 +334,6 @@ static u32 kgsl_shmem_mem_entry_migrate(struct mm_struct *mm, struct kgsl_mem_en
 	for (i = 0; i < memdesc->page_count; ) {
 		struct page *p;
 		int n;
-		int count;
 
 		p = memdesc->pages[i];
 		count = 1 << compound_order(p);
@@ -372,8 +378,10 @@ static u32 kgsl_shmem_mem_entry_migrate(struct mm_struct *mm, struct kgsl_mem_en
 	return page_count;
 
 cleanup_shmem:
-	for (i--; i >= 0; i--)
-		put_page(pages[i]);
+	for (j = 0; j < i; j += count) {
+		count = 1 << compound_order(pages[j]);
+		put_page(pages[j]);
+	}
 
 	kgsl_memdesc_pagelist_cleanup(shmem_filp, memdesc);
 	SHMEM_I(shmem_filp->f_mapping->host)->android_vendor_data1 = 0;

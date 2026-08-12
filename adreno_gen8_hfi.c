@@ -46,11 +46,7 @@ int gen8_hfi_queue_read(struct gen8_gmu_device *gmu, u32 queue_idx,
 	u32 size;
 	int result = 0;
 
-	if (hdr->status == HFI_QUEUE_STATUS_DISABLED)
-		return -EINVAL;
-
-	if (hdr->read_index == hdr->write_index)
-		return -ENODATA;
+	WARN_RATELIMIT(hdr->read_index == hdr->write_index, "Reading an empty queue\n");
 
 	/* Clear the output data before populating */
 	memset(output, 0, max_size);
@@ -245,18 +241,15 @@ int gen8_receive_ack_cmd(struct gen8_gmu_device *gmu, void *rcvd,
 	u32 hdr = ack[0];
 	u32 req_hdr = ack[1];
 
-	if (ret_cmd == NULL)
-		return -EINVAL;
-
-	if (CMP_HFI_ACK_HDR(ret_cmd->sent_hdr, req_hdr)) {
+	if (ret_cmd && CMP_HFI_ACK_HDR(ret_cmd->sent_hdr, req_hdr)) {
 		memcpy(&ret_cmd->results, ack, MSG_HDR_GET_SIZE(hdr) << 2);
 		return 0;
 	}
 
 	/* Didn't find the sender, list the waiter */
 	dev_err_ratelimited(GMU_PDEV_DEV(device),
-		"HFI ACK: Cannot find sender for 0x%8.8x Waiter: 0x%8.8x\n",
-		req_hdr, ret_cmd->sent_hdr);
+		"HFI ACK: 0x%8.8x Cannot find sender for 0x%8.8x Waiter: 0x%8.8x\n",
+		hdr, req_hdr, ret_cmd ? ret_cmd->sent_hdr : 0);
 	gmu_core_fault_snapshot(device, GMU_FAULT_HFI_RECIVE_ACK);
 
 	return -ENODEV;
@@ -531,10 +524,14 @@ int gen8_hfi_process_queue(struct gen8_gmu_device *gmu,
 	u32 rcvd[MAX_RCVD_SIZE];
 	bool retry_for_ack = true;
 
-	while (gen8_hfi_queue_read(gmu, queue_idx, rcvd, sizeof(rcvd)) > 0) {
+	while (!adreno_hfi_is_queue_empty(adreno_dev, gmu->hfi.hfi_mem, queue_idx)) {
+
+		if  (gen8_hfi_queue_read(gmu, queue_idx, rcvd, sizeof(rcvd)) < 0)
+			break;
+
 		/* ACK Handler */
 		if (MSG_HDR_GET_TYPE(rcvd[0]) == HFI_MSG_ACK) {
-			int ret = gen8_receive_ack_cmd(gmu, rcvd, ret_cmd);
+			int ret = gen8_receive_ack_cmd(gmu, rcvd, retry_for_ack ? ret_cmd : NULL);
 
 			if (ret)
 				return ret;
@@ -717,6 +714,15 @@ int gen8_hfi_send_ifpc_feature_ctrl(struct adreno_device *adreno_dev)
 	return 0;
 }
 
+static int gen8_hfi_send_tdcvs_feature_ctrl(struct adreno_device *adreno_dev)
+{
+	if (!ADRENO_FEATURE(adreno_dev, ADRENO_TDCVS))
+		return 0;
+
+	return gen8_hfi_send_feature_ctrl(adreno_dev, HFI_FEATURE_TDCVS, adreno_dev->tdcvs_enable,
+		adreno_dev->tdcvs_data);
+}
+
 static void reset_hfi_queues(struct adreno_device *adreno_dev)
 {
 	struct gen8_gmu_device *gmu = to_gen8_gmu(adreno_dev);
@@ -823,6 +829,10 @@ int gen8_hfi_start(struct adreno_device *adreno_dev)
 		goto err;
 
 	result = gen8_hfi_send_ifpc_feature_ctrl(adreno_dev);
+	if (result)
+		goto err;
+
+	result = gen8_hfi_send_tdcvs_feature_ctrl(adreno_dev);
 	if (result)
 		goto err;
 

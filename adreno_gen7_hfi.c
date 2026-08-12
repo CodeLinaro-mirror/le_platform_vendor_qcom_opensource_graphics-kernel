@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/delay.h>
@@ -45,11 +45,7 @@ int gen7_hfi_queue_read(struct gen7_gmu_device *gmu, u32 queue_idx,
 	u32 size;
 	int result = 0;
 
-	if (hdr->status == HFI_QUEUE_STATUS_DISABLED)
-		return -EINVAL;
-
-	if (hdr->read_index == hdr->write_index)
-		return -ENODATA;
+	WARN_RATELIMIT(hdr->read_index == hdr->write_index, "Reading an empty queue\n");
 
 	/* Clear the output data before populating */
 	memset(output, 0, max_size);
@@ -244,18 +240,15 @@ int gen7_receive_ack_cmd(struct gen7_gmu_device *gmu, void *rcvd,
 	u32 hdr = ack[0];
 	u32 req_hdr = ack[1];
 
-	if (ret_cmd == NULL)
-		return -EINVAL;
-
-	if (CMP_HFI_ACK_HDR(ret_cmd->sent_hdr, req_hdr)) {
+	if (ret_cmd && CMP_HFI_ACK_HDR(ret_cmd->sent_hdr, req_hdr)) {
 		memcpy(&ret_cmd->results, ack, MSG_HDR_GET_SIZE(hdr) << 2);
 		return 0;
 	}
 
 	/* Didn't find the sender, list the waiter */
 	dev_err_ratelimited(GMU_PDEV_DEV(device),
-		"HFI ACK: Cannot find sender for 0x%8.8x Waiter: 0x%8.8x\n",
-		req_hdr, ret_cmd->sent_hdr);
+		"HFI ACK: 0x%8.8x Cannot find sender for 0x%8.8x Waiter: 0x%8.8x\n",
+		hdr, req_hdr, ret_cmd ? ret_cmd->sent_hdr : 0);
 
 	gmu_core_fault_snapshot(device, GMU_FAULT_HFI_RECIVE_ACK);
 
@@ -520,14 +513,21 @@ int gen7_hfi_process_queue(struct gen7_gmu_device *gmu,
 {
 	struct kgsl_device *device = KGSL_DEVICE(gen7_gmu_to_adreno(gmu));
 	u32 rcvd[MAX_RCVD_SIZE];
+	bool retry_for_ack = true;
 
-	while (gen7_hfi_queue_read(gmu, queue_idx, rcvd, sizeof(rcvd)) > 0) {
+	while (!adreno_hfi_is_queue_empty(ADRENO_DEVICE(device), gmu->hfi.hfi_mem, queue_idx)) {
+
+		if (gen7_hfi_queue_read(gmu, queue_idx, rcvd, sizeof(rcvd)) < 0)
+			break;
+
 		/* ACK Handler */
 		if (MSG_HDR_GET_TYPE(rcvd[0]) == HFI_MSG_ACK) {
-			int ret = gen7_receive_ack_cmd(gmu, rcvd, ret_cmd);
+			int ret = gen7_receive_ack_cmd(gmu, rcvd, retry_for_ack ? ret_cmd : NULL);
 
 			if (ret)
 				return ret;
+
+			retry_for_ack = false;
 			continue;
 		}
 

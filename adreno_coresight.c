@@ -8,6 +8,9 @@
 #include <linux/of_platform.h>
 
 #include "adreno.h"
+#ifdef CONFIG_QCOM_KGSL_CORESIGHT_QMI_TRACE
+#include <coresight-qmi.h>
+#endif
 
 #define ADRENO_RBBM_INT_DEBUG_BUS_INTERRUPT0_MASK	BIT(26)
 #define ADRENO_RBBM_INT_DEBUG_BUS_INTERRUPT1_MASK	BIT(27)
@@ -75,6 +78,41 @@ ssize_t adreno_coresight_store_register(struct device *dev,
 	return size;
 }
 
+#ifdef CONFIG_QCOM_KGSL_CORESIGHT_QMI_TRACE
+/**
+ * adreno_setup_qmi_gpu_trace - Configure QMI trace paths for GPU
+ * @adreno_dev: An Adreno GPU device handle
+ * @adreno_csdev: Container for a coresight instance
+ * @enable: Enable or disable the trace path between GPU trace sources and the TMC sink
+ *
+ * Setup QMI trace paths for both GX and CX DBGC to enable/disable connection from
+ * GPU source to TMC sink.
+ */
+static void adreno_setup_qmi_gpu_trace(struct adreno_device *adreno_dev,
+		struct adreno_coresight_device *adreno_csdev, bool enable)
+{
+	struct kgsl_device *device = KGSL_DEVICE(adreno_dev);
+	u32 instance;
+	int ret;
+
+	/* Select GX (instance 0) or CX (instance 1) */
+	instance = (adreno_csdev == &adreno_dev->cx_coresight) ? 1 : 0;
+	ret = coresight_qmi_trace_path_set(CORESIGHT_QDCP_TRACE_SOURCE_GPU_V01,
+			instance, enable);
+
+	if (ret) {
+		dev_err(device->dev, "Failed to %s %s DBGC QMI trace path: %d\n",
+			enable ? "enable" : "disable",
+			instance ? "CX" : "GX", ret);
+	}
+}
+#else
+static inline void adreno_setup_qmi_gpu_trace(struct adreno_device *adreno_dev,
+		struct adreno_coresight_device *adreno_csdev, u32 state)
+{
+}
+#endif
+
 /*
  * This is a generic function to disable coresight debug bus on Adreno
  * devices. This function in turn calls the device specific function
@@ -117,6 +155,7 @@ static void adreno_coresight_disable(struct coresight_device *csdev,
 	adreno_csdev->enabled = false;
 
 	kgsl_mutex_unlock(&device->mutex);
+	adreno_setup_qmi_gpu_trace(adreno_dev, adreno_csdev, 0);
 }
 
 static void _adreno_coresight_get_and_clear(struct adreno_device *adreno_dev,
@@ -182,6 +221,7 @@ static int _adreno_coresight_enable(struct coresight_device *csdev,
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	int ret = 0;
 
+	adreno_setup_qmi_gpu_trace(adreno_dev, adreno_csdev, 1);
 	kgsl_mutex_lock(&device->mutex);
 	if (!adreno_csdev->enabled) {
 		int i;

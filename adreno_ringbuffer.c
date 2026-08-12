@@ -225,7 +225,8 @@ void adreno_drawobj_set_constraint(struct kgsl_device *device,
 				DCVS_SLOW_PATH);
 			if (!ret) {
 				trace_kgsl_constraint(device,
-					KGSL_CONSTRAINT_L3_PWRLEVEL, new_l3, 1, 0);
+					KGSL_CONSTRAINT_L3_PWRLEVEL, new_l3, 1, 0,
+					context->id);
 				device->cur_l3_pwrlevel = new_l3;
 			} else {
 				dev_err_ratelimited(device->dev,

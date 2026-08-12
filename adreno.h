@@ -6,9 +6,11 @@
 #ifndef __ADRENO_H
 #define __ADRENO_H
 
+#include <linux/capability.h>
 #include <linux/iopoll.h>
 #include <linux/of.h>
 #include <linux/soc/qcom/llcc-qcom.h>
+#include <linux/soc/qcom/qmi.h>
 #include "adreno_coresight.h"
 #include "adreno_dispatch.h"
 #include "adreno_drawctxt.h"
@@ -194,6 +196,20 @@
 #define ADRENO_AHB_TIMEOUT_RECOVERY BIT(30)
 /* Enable SPEL (System Power and Energy Limits) */
 #define ADRENO_GMU_SPEL BIT(31)
+/* Enable ACD AVG (Adaptive Voltage Guardband) */
+#define ADRENO_ACD_AVG BIT_ULL(32)
+/* GMU and kernel supports synx */
+#define ADRENO_SYNX BIT_ULL(33)
+/* Enable tracking and handling of fence deadlines */
+#define ADRENO_FENCE_DEADLINE_BOOST BIT_ULL(34)
+/* GMU supports thinmem_cfg feature */
+#define ADRENO_GMU_THINMEM_CFG BIT_ULL(35)
+/* Enable dynamic context priority (RB migration) */
+#define ADRENO_GMU_DYNAMIC_CTX_PRIORITY BIT_ULL(36)
+/* Enable TDCVS via GMU */
+#define ADRENO_TDCVS BIT_ULL(37)
+/* Enable QECP (Qualcomm Enclave Control Processor) debugbus capture */
+#define ADRENO_QECP_DEBUGBUS BIT_ULL(38)
 
 /*
  * Adreno GPU quirks - control bits for various workarounds
@@ -371,6 +387,11 @@ struct adreno_gpudev;
 
 #define PREEMPT_SCRATCH_ADDR(dev, id) \
 	((dev)->preempt.scratch->gpuaddr + PREEMPT_SCRATCH_OFFSET(id))
+
+#define BCL_RESP_TYPE_MASK   BIT(0)
+#define BCL_SID0_MASK        GENMASK(7, 1)
+#define BCL_SID1_MASK        GENMASK(14, 8)
+#define BCL_SID2_MASK        GENMASK(21, 15)
 
 /**
  * enum adreno_preempt_states
@@ -585,7 +606,7 @@ struct adreno_gpu_core {
 	 * device
 	 */
 	const char *compatible;
-	unsigned long features;
+	u64 features;
 	const struct adreno_gpudev *gpudev;
 	const struct adreno_perfcounters *perfcounters;
 	u32 uche_gmem_alignment;
@@ -612,8 +633,10 @@ struct adreno_dispatch_ops {
 			struct adreno_context *drawctxt);
 	int (*setup_context)(struct adreno_device *adreno_dev,
 			struct adreno_context *drawctxt);
-	/* @create_hw_fence: Create a hardware fence */
-	void (*create_hw_fence)(struct adreno_device *adreno_dev, struct kgsl_sync_fence *kfence);
+	/* @setup_fence: Setup a fence */
+	void (*setup_fence)(struct adreno_device *adreno_dev, struct kgsl_sync_fence *kfence);
+	/* @context_is_guilty: Check if the context is guilty for the fault */
+	bool (*context_is_guilty)(struct adreno_context *drawctxt);
 };
 
 /**
@@ -728,6 +751,10 @@ struct adreno_device {
 	bool lm_enabled;
 	/** @acd_enabled: True if acd is enabled for this target */
 	bool acd_enabled;
+	/** @acd_avg_debugfs_dir: Debugfs directory node for ACD AVG related nodes */
+	struct dentry *acd_avg_debugfs_dir;
+	/** @acd_avg_enabled: True if ACD AVG is enabled for this target */
+	bool acd_avg_enabled;
 	/** @hwcg_enabled: True if hardware clock gating is enabled */
 	bool hwcg_enabled;
 	/** @throttling_enabled: True if LM throttling is enabled on a5xx */
@@ -746,6 +773,8 @@ struct adreno_device {
 	bool dms_enabled;
 	/** @minbw_enabled: True if minbw vote is enabled */
 	bool minbw_enabled;
+	/** @malu_enabled: True if mALU is enabled */
+	bool malu_enabled;
 	/** @preempt_override: True if command line param enables preemption */
 	bool preempt_override;
 	struct kgsl_memdesc *profile_buffer;
@@ -906,6 +935,24 @@ struct adreno_device {
 	u32 viz_flush_draw_count;
 	/** @viz_flush_prim_count: Prim count to flush visibility stream **/
 	u32 viz_flush_prim_count;
+	/** @adreno_err_code: Error code to be dumped on snapshot */
+	u32 adreno_err_code;
+	/** @tdcvs_enable: Value of TDCVS enable from debugfs */
+	u32 tdcvs_enable;
+	/** @tdcvs_data: Value of TDCVS data from debugfs */
+	u32 tdcvs_data;
+	/** @qmi: QMI driver client handle */
+	struct qmi_handle qmi;
+	/** @sq: QMI socket address used to verify the address present in the qmi handle */
+	struct sockaddr_qrtr sq;
+	/** @qmi_service_connected: Bool to detect if QMI connection is established */
+	bool qmi_service_connected;
+	/** @qecp_data_sent: Bool to denote if debugbus data is sent to QECP */
+	bool qecp_data_sent;
+	/** @qecp_debugbus_enabled: Bool to denote if encrypted debugbus is enabled */
+	bool qecp_debugbus_enabled;
+	/** @qecp_retry_count: Number of retries remaining to set up qecp debugbus */
+	u32 qecp_retry_count;
 };
 
 /* Time to wait for suspend recovery gate to complete */
@@ -954,8 +1001,6 @@ enum adreno_device_flags {
 	ADRENO_DEVICE_FIRST_BOOT_DONE = 19,
 	/** @ADRENO_DEVICE_FAST_CONTEXT_DESTROY: Set if fast context destroy is enabled on GMU */
 	ADRENO_DEVICE_FAST_CONTEXT_DESTROY = 20,
-	/** @ADRENO_DEVICE_ALLOW_MALU_WORKLOAD: mALU workload is supported by GMU and GPU */
-	ADRENO_DEVICE_ALLOW_MALU_WORKLOAD = 21,
 };
 
 /**
@@ -1158,6 +1203,8 @@ struct adreno_gpudev {
 	void (*release_cp_semaphore)(struct adreno_device *adreno_dev);
 	/** @get_gmem_size: Return the GMEM size */
 	u32 (*get_gmem_size)(struct adreno_device *adreno_dev);
+	/** @get_speed_bin: Return the GPU speed bin */
+	int (*get_speed_bin)(struct adreno_device *adreno_dev);
 };
 
 /**
@@ -1844,6 +1891,30 @@ static inline bool adreno_is_preemption_enabled(
 	return test_bit(ADRENO_DEVICE_PREEMPTION, &adreno_dev->priv);
 }
 
+/* Return the minimum context priority allowed for a user process */
+static inline u32 adreno_context_min_priority(struct adreno_device *adreno_dev)
+{
+	u32 max_priority_levels = (KGSL_CONTEXT_PRIORITY_MASK >>
+			KGSL_CONTEXT_PRIORITY_SHIFT) + 1;
+
+	/*
+	 * Restrictions apply only for unprivileged callers when preemption
+	 * is enabled and more than one ringbuffer is available.
+	 */
+	if (!IS_ENABLED(CONFIG_QCOM_KGSL_RESTRICT_CONTEXT_PRIORITY) ||
+			capable(CAP_SYS_NICE) ||
+			!adreno_is_preemption_enabled(adreno_dev) ||
+			(adreno_dev->num_ringbuffers <= 1)) {
+		return 0;
+	}
+
+	/*
+	 * Unprivileged processes are restricted from using RB 0.
+	 * Return the lowest numerical priority level that maps to RB 1.
+	 */
+	return (max_priority_levels / adreno_dev->num_ringbuffers);
+}
+
 /**
  * adreno_is_fast_context_destroy_enabled() - Check whether the GMU fast context
  * destroy optimization is statically enabled and if the GMU supports the
@@ -1865,6 +1936,21 @@ static inline bool adreno_is_fast_context_destroy_enabled(
 static inline bool adreno_preemption_feature_set(struct adreno_device *adreno_dev)
 {
 	return ADRENO_FEATURE(adreno_dev, ADRENO_PREEMPTION) || adreno_dev->preempt_override;
+}
+
+/**
+ * adreno_is_acd_avg_feature_set - Check whether the ACD AVG feature is statically enabled
+ * @adreno_dev: Pointer to the adreno device
+ *
+ * The ACD feature must be enabled for ACD AVG to be enabled. Check that both of these feature
+ * flags are present for the target.
+ *
+ * Return: True if ACD AVG is statically enabled; false otherwise
+ */
+static inline bool adreno_is_acd_avg_feature_set(struct adreno_device *adreno_dev)
+{
+	return ADRENO_FEATURE(adreno_dev, ADRENO_ACD) &&
+		ADRENO_FEATURE(adreno_dev, ADRENO_ACD_AVG);
 }
 
 /*

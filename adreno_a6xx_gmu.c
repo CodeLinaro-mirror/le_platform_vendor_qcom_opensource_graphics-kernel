@@ -3468,6 +3468,10 @@ int a6xx_gmu_device_probe(struct platform_device *pdev,
 
 	timer_setup(&device->idle_timer, gmu_idle_timer, 0);
 
+	/* Notify userspace to explicitly apply correct policies */
+	if (gmu_core_isenabled(device))
+		kobject_uevent(&GMU_PDEV_DEV(device)->kobj, KOBJ_ADD);
+
 	return 0;
 }
 

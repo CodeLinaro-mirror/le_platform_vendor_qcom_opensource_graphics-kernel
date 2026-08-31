@@ -191,7 +191,11 @@
 #define ADRENO_TSENSE_DYNAMIC_PERIOD BIT(27)
 /* Enable GMU Based AB voting */
 #define ADRENO_GMU_AB BIT(28)
-
+/*
+ * The target uses the GPU_CX_MISC_SW_FUSE_FREQ_LIMIT_STATUS register to
+ * get combined (HW + SW) speedbin when no nvmem speed_bin cell exists.
+ */
+#define ADRENO_SOFTFUSE BIT_ULL(32)
 /*
  * Adreno GPU quirks - control bits for various workarounds
  */
@@ -285,6 +289,7 @@ enum adreno_gpurev {
 	ADRENO_REV_A663 = 663,
 	ADRENO_REV_A680 = 680,
 	ADRENO_REV_A702 = 702,
+	ADRENO_REV_A704 = 704,
 	/*
 	 * Version numbers may exceed 1 digit
 	 * Bits 16-23: Major
@@ -308,6 +313,7 @@ enum adreno_gpurev {
 	ADRENO_REV_GEN7_17_0 = ADRENO_GPUREV_VALUE(7, 17, 0),
 	ADRENO_REV_GEN8_0_0 = ADRENO_GPUREV_VALUE(8, 0, 0),
 	ADRENO_REV_GEN8_0_1 = ADRENO_GPUREV_VALUE(8, 0, 1),
+	ADRENO_REV_GEN8_1_0 = ADRENO_GPUREV_VALUE(8, 1, 0),
 	ADRENO_REV_GEN8_2_0 = ADRENO_GPUREV_VALUE(8, 2, 0),
 	ADRENO_REV_GEN8_2_1 = ADRENO_GPUREV_VALUE(8, 2, 1),
 	ADRENO_REV_GEN8_3_0 = ADRENO_GPUREV_VALUE(8, 3, 0),
@@ -571,7 +577,7 @@ struct adreno_gpu_core {
 	 * device
 	 */
 	const char *compatible;
-	unsigned long features;
+	u64 features;
 	const struct adreno_gpudev *gpudev;
 	const struct adreno_perfcounters *perfcounters;
 	u32 uche_gmem_alignment;
@@ -1154,6 +1160,11 @@ struct adreno_gpudev {
 	void (*release_cp_semaphore)(struct adreno_device *adreno_dev);
 	/** @get_gmem_size: Return the GMEM size */
 	u32 (*get_gmem_size)(struct adreno_device *adreno_dev);
+	/**
+	 * @read_speedbin: Read speedbin from a target-specific register.
+	 * Only implemented by targets that set ADRENO_SOFTFUSE.
+	 */
+	void (*read_speedbin)(struct adreno_device *adreno_dev, u32 *speedbin);
 };
 
 /**
@@ -1352,6 +1363,7 @@ ADRENO_TARGET(a663, ADRENO_REV_A663)
 ADRENO_TARGET(a680, ADRENO_REV_A680)
 ADRENO_TARGET(gen6_3_26_0, ADRENO_REV_GEN6_3_26_0)
 ADRENO_TARGET(a702, ADRENO_REV_A702)
+ADRENO_TARGET(a704, ADRENO_REV_A704)
 
 /* A642L and A643 is derived from A660 and shares same logic */
 static inline int adreno_is_a660(struct adreno_device *adreno_dev)
@@ -1432,6 +1444,17 @@ static inline int adreno_is_a612_family(struct adreno_device *adreno_dev)
 	return (rev == ADRENO_REV_A612 || rev == ADRENO_REV_GEN6_3_26_0);
 }
 
+/*
+ * A704 is derived from A702 and shares the same register specs.
+ * Derived GPUs from A702 need to be added to this list.
+ */
+static inline int adreno_is_a702_family(struct adreno_device *adreno_dev)
+{
+	u32 rev = ADRENO_GPUREV(adreno_dev);
+
+	return (rev == ADRENO_REV_A702 || rev == ADRENO_REV_A704);
+}
+
 static inline int adreno_is_a640v2(struct adreno_device *adreno_dev)
 {
 	return (ADRENO_GPUREV(adreno_dev) == ADRENO_REV_A640) &&
@@ -1466,6 +1489,7 @@ ADRENO_TARGET(gen7_15_0, ADRENO_REV_GEN7_15_0)
 ADRENO_TARGET(gen7_17_0, ADRENO_REV_GEN7_17_0)
 ADRENO_TARGET(gen8_0_0, ADRENO_REV_GEN8_0_0)
 ADRENO_TARGET(gen8_0_1, ADRENO_REV_GEN8_0_1)
+ADRENO_TARGET(gen8_1_0, ADRENO_REV_GEN8_1_0)
 ADRENO_TARGET(gen8_2_0, ADRENO_REV_GEN8_2_0)
 ADRENO_TARGET(gen8_2_1, ADRENO_REV_GEN8_2_1)
 ADRENO_TARGET(gen8_3_0, ADRENO_REV_GEN8_3_0)
